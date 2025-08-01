@@ -1,0 +1,164 @@
+# KAIROS-1 프로젝트 .gitignore
+
+# 민감한 설정 파일
+config/config.yaml
+config/.encryption_key
+.env
+
+# API 키 및 민감한 데이터
+*.key
+*.pem
+*.p12
+secrets.json
+
+# 로그 파일
+logs/
+*.log
+
+# 데이터베이스 파일
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 백업 파일
+backups/
+*.backup
+
+# 보고서 파일
+reports/
+*.json
+*.csv
+*.xlsx
+
+# Python 관련
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# 가상환경
+venv/
+env/
+ENV/
+kairos_env/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# 환경 변수
+.env
+.venv
+.ENV
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# 임시 파일
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 테스트 관련
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# 프로파일링
+.prof
+
+# 모니터링 및 메트릭
+metrics/
+monitoring/
+
+# 캐시 파일
+.cache/
+cache/
+
+# 설정 백업
+config/*.bak
+config/*.backup 

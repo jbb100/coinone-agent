@@ -1,0 +1,227 @@
+# KAIROS-1 시스템 설정 파일
+# config.example.yaml을 config.yaml로 복사하여 사용하세요
+
+# =============================================================================
+# API 설정
+# =============================================================================
+api:
+  coinone:
+    # 코인원 API 키 (필수)
+    api_key: "YOUR_COINONE_API_KEY"
+    secret_key: "YOUR_COINONE_SECRET_KEY"
+    
+    # 샌드박스 모드 (테스트용)
+    sandbox: true
+    
+    # API 호출 제한 (분당 호출 수)
+    rate_limit: 100
+    
+    # 요청 타임아웃 (초)
+    timeout: 30
+    
+    # IP 화이트리스트 (보안 강화)
+    whitelist_ip: ["YOUR_SERVER_IP"]
+
+# =============================================================================
+# 투자 전략 설정
+# =============================================================================
+strategy:
+  # 시장 계절 필터 설정
+  market_season:
+    # 완충 밴드 비율 (기본: 5%)
+    buffer_band: 0.05
+    
+    # 200주 이동평균 계산 최소 데이터 수
+    min_data_weeks: 200
+    
+    # 시장 상황별 암호화폐 비중
+    allocations:
+      risk_on: 0.70    # 강세장: 암호화폐 70%
+      risk_off: 0.30   # 약세장: 암호화폐 30%
+      neutral: 0.50    # 중립: 암호화폐 50%
+  
+  # 포트폴리오 구성
+  portfolio:
+    # Core Assets (70% of crypto allocation)
+    core:
+      BTC: 0.40  # 40%
+      ETH: 0.30  # 30%
+    
+    # Satellite Assets (30% of crypto allocation)  
+    satellite:
+      XRP: 0.15  # 15%
+      SOL: 0.15  # 15%
+    
+    # 리밸런싱 설정
+    rebalancing:
+      # 리밸런싱 임계값 (1% 이상 차이)
+      threshold: 0.01
+      
+      # 최소 거래 금액 (KRW)
+      min_trade_amount: 10000
+      
+      # 최대 슬리피지 허용 (%)
+      max_slippage: 0.5
+
+# =============================================================================
+# 스케줄링 설정
+# =============================================================================
+scheduler:
+  # 주간 시장 분석 (매주 월요일 09:00)
+  weekly_analysis:
+    enabled: true
+    cron: "0 9 * * 1"
+    timezone: "Asia/Seoul"
+  
+  # 분기별 리밸런싱 (분기 첫째주 월요일 09:00)
+  quarterly_rebalance:
+    enabled: true
+    cron: "0 9 1-7 1,4,7,10 1"
+    timezone: "Asia/Seoul"
+  
+  # 일일 모니터링 (매일 09:00, 18:00)
+  daily_monitoring:
+    enabled: true
+    cron: "0 9,18 * * *"
+    timezone: "Asia/Seoul"
+
+# =============================================================================
+# 리스크 관리 설정
+# =============================================================================
+risk_management:
+  # 거래 제한
+  trading_limits:
+    # 단일 거래 최대 금액 (KRW)
+    max_single_trade: 10000000  # 1천만원
+    
+    # 일일 최대 거래 금액 (KRW)
+    max_daily_volume: 50000000  # 5천만원
+    
+    # 최대 포지션 크기 (전체 포트폴리오 대비 %)
+    max_position_size: 0.50     # 50%
+  
+  # 손실 제한
+  loss_limits:
+    # 일일 최대 손실률 (%)
+    max_daily_loss: 0.05        # 5%
+    
+    # 월간 최대 손실률 (%)
+    max_monthly_loss: 0.15      # 15%
+    
+    # 드로우다운 임계값 (%)
+    drawdown_threshold: 0.20    # 20%
+  
+  # 3-라인 체크 시스템
+  three_line_check:
+    # 성과 추적 기간 (일)
+    performance_period: 30
+    
+    # 추적오차 임계값 (%)
+    tracking_error_threshold: 0.02  # 2%
+    
+    # 벤치마크 (BTC 기준)
+    benchmark: "BTC"
+
+# =============================================================================
+# 알림 설정
+# =============================================================================
+notifications:
+  # 이메일 알림
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    username: "your_email@gmail.com"
+    password: "your_app_password"
+    recipients: ["admin@yourcompany.com"]
+  
+  # 슬랙 알림
+  slack:
+    enabled: false
+    webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    channel: "#trading-alerts"
+    username: "KAIROS-1"
+  
+  # 알림 레벨
+  alert_levels:
+    # 시스템 오류
+    error: ["email", "slack"]
+    
+    # 경고 (리스크 임계값 초과 등)
+    warning: ["slack"]
+    
+    # 정보 (거래 완료, 분석 결과 등)
+    info: ["slack"]
+
+# =============================================================================
+# 로깅 설정
+# =============================================================================
+logging:
+  # 로그 레벨 (DEBUG, INFO, WARNING, ERROR)
+  level: "INFO"
+  
+  # 로그 파일 경로
+  file_path: "./logs/kairos1.log"
+  
+  # 로그 파일 로테이션
+  rotation: "100 MB"
+  retention: "30 days"
+  
+  # 로그 형식
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}"
+
+# =============================================================================
+# 데이터베이스 설정
+# =============================================================================
+database:
+  # SQLite 데이터베이스 경로
+  sqlite_path: "./data/kairos1.db"
+  
+  # 백업 설정
+  backup:
+    enabled: true
+    interval_hours: 24
+    backup_path: "./backups/"
+    retention_days: 30
+
+# =============================================================================
+# 보안 설정
+# =============================================================================
+security:
+  # API 키 암호화
+  encryption:
+    enabled: true
+    key_file: "./config/.encryption_key"
+  
+  # 접근 제어
+  access_control:
+    # 허용된 IP 주소
+    allowed_ips: ["127.0.0.1", "YOUR_SERVER_IP"]
+    
+    # 관리자 권한이 필요한 기능
+    admin_required: ["manual_trade", "config_change", "system_shutdown"]
+  
+  # 감사 로그
+  audit:
+    enabled: true
+    log_file: "./logs/audit.log"
+    track_events: ["api_call", "trade_execution", "config_change"]
+
+# =============================================================================
+# 개발 및 테스트 설정
+# =============================================================================
+development:
+  # 디버그 모드
+  debug: false
+  
+  # 백테스팅 모드
+  backtest:
+    enabled: false
+    start_date: "2020-01-01"
+    end_date: "2023-12-31"
+    initial_capital: 10000000  # 1천만원
+  
+  # 페이퍼 트레이딩 (실제 거래 없이 시뮬레이션)
+  paper_trading:
+    enabled: false
+    initial_balance: 10000000  # 1천만원 
