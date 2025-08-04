@@ -151,9 +151,10 @@ python scripts/performance_report.py
 # (1월, 4월, 7월, 10월의 첫 7일 중 월요일에만 실행)
 0 9 1-7 1,4,7,10 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --quarterly-rebalance-twap
 
-# 3. 대기 중인 TWAP 주문 처리 (30분마다 실행)
+# 3. 대기 중인 TWAP 주문 처리 (15분마다 실행)
 # 분할 매매가 시작된 주문을 지속적으로 처리합니다.
-*/30 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --process-twap
+# 15분 주기로 실행하여 TWAP 슬라이스 지연을 최소화합니다.
+*/15 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --process-twap
 
 # 4. 일일 시스템 모니터링 (매일 09:00, 18:00)
 # 시스템의 전반적인 상태를 점검하고 알림을 보냅니다.

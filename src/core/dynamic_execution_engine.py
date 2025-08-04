@@ -79,6 +79,9 @@ class DynamicExecutionEngine:
         self.atr_period = atr_period
         self.atr_threshold = atr_threshold
         
+        # crontab 실행 주기 (분) - 기본값: 15분
+        self.crontab_interval_minutes = 15
+        
         # 실행 중인 TWAP 주문들
         self.active_twap_orders: List[TWAPOrder] = []
         self.current_execution_id = None  # 현재 활성 실행 ID
@@ -214,7 +217,28 @@ class DynamicExecutionEngine:
             
             # 2. 실행 파라미터 결정
             execution_hours, slice_count = self.get_execution_parameters(volatility)
-            slice_interval_minutes = (execution_hours * 60) // slice_count
+            
+            # crontab 주기에 맞춰 슬라이스 간격 조정 (기본값: 15분)
+            crontab_interval_minutes = getattr(self, 'crontab_interval_minutes', 15)
+            total_minutes = execution_hours * 60
+            
+            # 기본 간격 계산
+            base_interval = total_minutes // slice_count
+            
+            # crontab 주기를 고려한 최적 간격 설정
+            if base_interval > crontab_interval_minutes:
+                # 간격이 crontab 주기보다 크면 슬라이스 수를 늘림
+                optimal_slice_count = total_minutes // crontab_interval_minutes
+                slice_count = max(slice_count, optimal_slice_count)
+                slice_interval_minutes = total_minutes // slice_count
+            else:
+                # crontab 주기에 맞춰 최적 간격 설정 (25분 - 5분 여유)
+                slice_interval_minutes = min(base_interval, crontab_interval_minutes - 5)
+                # 조정된 간격으로 슬라이스 수 재계산
+                optimal_slice_count = total_minutes // slice_interval_minutes
+                slice_count = max(slice_count, optimal_slice_count)
+            
+            logger.info(f"TWAP 실행 파라미터 최적화: {slice_count}개 슬라이스, {slice_interval_minutes}분 간격 (crontab 주기: {crontab_interval_minutes}분)")
             
             # 3. TWAP 주문 생성
             twap_orders = []
