@@ -560,7 +560,7 @@ class DynamicExecutionEngine:
                 else:
                     # 아직 실행 시간이 안된 경우 로그 출력
                     remaining_minutes = (next_execution_time - current_time).total_seconds() / 60
-                    logger.debug(f"{twap_order.asset}: 다음 실행까지 {remaining_minutes:.1f}분 남음")
+                    logger.info(f"{twap_order.asset}: 다음 실행까지 {remaining_minutes:.1f}분 남음 (예정: {next_execution_time.strftime('%H:%M:%S')})")
             
             # 완료된 주문들 제거
             for completed_order in completed_orders:
