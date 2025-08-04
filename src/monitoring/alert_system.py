@@ -169,7 +169,7 @@ class AlertSystem:
 {message}
         """.strip()
         
-        return self.send_alert(title, formatted_message, "info")
+        return self.send_alert(title, formatted_message, alert_type)
     
     def _send_email(self, title: str, message: str, alert_type: str) -> bool:
         """
@@ -255,6 +255,14 @@ class AlertSystem:
             color = color_map.get(alert_type, "#00aa00")
             emoji = emoji_map.get(alert_type, "ℹ️")
             
+            # 멘션 텍스트 생성
+            mention_text = self._generate_mention_text(alert_type)
+            
+            # 메시지에 멘션 추가 (메시지 시작 부분에)
+            final_message = message
+            if mention_text:
+                final_message = f"{mention_text}\n\n{message}"
+            
             # 슬랙 메시지 페이로드 생성
             payload = {
                 "channel": channel,
@@ -263,7 +271,7 @@ class AlertSystem:
                     {
                         "color": color,
                         "title": f"{emoji} {title}",
-                        "text": message,
+                        "text": final_message,
                         "footer": "KAIROS-1 Trading System",
                         "ts": int(datetime.now().timestamp())
                     }
@@ -288,6 +296,61 @@ class AlertSystem:
         except Exception as e:
             logger.error(f"슬랙 발송 실패: {e}")
             return False
+    
+    def _generate_mention_text(self, alert_type: str) -> str:
+        """
+        알림 유형에 따른 멘션 텍스트 생성
+        
+        Args:
+            alert_type: 알림 유형
+            
+        Returns:
+            멘션 텍스트
+        """
+        try:
+            mentions_config = self.slack_config.get("mentions", {})
+            logger.info(f"[멘션] 설정 확인 - alert_type: {alert_type}")
+            
+            # 특정 알림 유형별 멘션 확인
+            by_alert_type = mentions_config.get("by_alert_type", {})
+            mention_users = by_alert_type.get(alert_type, [])
+            logger.info(f"[멘션] 알림 유형별 사용자: {mention_users}")
+            
+            # 기본 멘션 사용자가 설정된 경우 (특정 유형별 설정이 없을 때만)
+            if not mention_users:
+                mention_users = mentions_config.get("default_users", [])
+                logger.info(f"[멘션] 기본 사용자 사용: {mention_users}")
+            
+            # 전체 채널 멘션이 필요한 유형인지 확인
+            channel_mention_types = mentions_config.get("channel_mention_types", [])
+            if alert_type in channel_mention_types:
+                mention_users.append("@channel")
+                logger.info(f"[멘션] 채널 멘션 추가됨: {mention_users}")
+            
+            if not mention_users:
+                logger.info("[멘션] 멘션할 사용자가 없음")
+                return ""
+            
+            # 멘션 텍스트 생성
+            mention_list = []
+            for user in mention_users:
+                if user.startswith("@"):
+                    # @channel, @here 등의 특수 멘션
+                    mention_list.append(user)
+                    logger.info(f"[멘션] 특수 멘션 추가: {user}")
+                else:
+                    # 일반 사용자 ID (U로 시작하는 슬랙 사용자 ID)
+                    mention_text = f"<@{user}>"
+                    mention_list.append(mention_text)
+                    logger.info(f"[멘션] 사용자 멘션 추가: {user} -> {mention_text}")
+            
+            final_mention_text = " ".join(mention_list)
+            logger.info(f"[멘션] 최종 생성된 텍스트: '{final_mention_text}'")
+            return final_mention_text
+            
+        except Exception as e:
+            logger.error(f"멘션 텍스트 생성 실패: {e}")
+            return ""
     
     def _format_message_for_email(self, message: str, alert_type: str) -> str:
         """
@@ -341,6 +404,9 @@ class AlertSystem:
         Returns:
             채널별 테스트 결과
         """
+        logger.info("알림 시스템 테스트 시작")
+        
+        # 1. 기본 알림 테스트
         test_title = "KAIROS-1 알림 시스템 테스트"
         test_message = f"""
 알림 시스템이 정상적으로 작동하고 있습니다.
@@ -349,8 +415,45 @@ class AlertSystem:
 시스템: KAIROS-1 Trading System
         """.strip()
         
-        logger.info("알림 시스템 테스트 시작")
         results = self.send_info_alert(test_title, test_message, "system_test")
+        
+        # 2. 리밸런싱 멘션 테스트 (설정이 있는 경우에만)
+        mentions_config = self.slack_config.get("mentions", {})
+        by_alert_type = mentions_config.get("by_alert_type", {})
+        
+        # 리밸런싱 관련 alert_type들
+        rebalance_types = {
+            "quarterly_rebalance": "분기별 리밸런싱",
+            "immediate_rebalance": "즉시 리밸런싱", 
+            "twap_start": "TWAP 시작"
+        }
+        
+        for alert_type, type_name in rebalance_types.items():
+            if by_alert_type.get(alert_type):  # 해당 타입에 멘션 설정이 있는 경우
+                mention_users = by_alert_type[alert_type]
+                mention_test_title = f"🔔 {type_name} 멘션 테스트"
+                mention_test_message = f"""
+{type_name} 알림에서 멘션이 정상적으로 작동하는지 테스트합니다.
+
+설정된 멘션 대상: {', '.join(mention_users)}
+테스트 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+이 메시지가 올바른 사용자를 멘션하여 전송되었다면 설정이 정상입니다.
+                """.strip()
+                
+                # 리밸런싱 타입별 알림 테스트
+                mention_results = self.send_info_alert(
+                    mention_test_title, 
+                    mention_test_message, 
+                    alert_type
+                )
+                
+                # 결과 병합
+                for channel, success in mention_results.items():
+                    if channel in results:
+                        results[channel] = results[channel] and success
+                    else:
+                        results[channel] = success
         
         # 결과 로깅
         for channel, success in results.items():

@@ -141,6 +141,27 @@ notifications:
     webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
     channel: "#trading-alerts"
     username: "KAIROS-1"
+    
+    # 멘션 설정
+    mentions:
+      # 기본 멘션 사용자들 (여러 사용자 ID 또는 그룹 지원)
+      default_users: []  # 예: ["U1234567890", "U0987654321"]
+      
+      # 특정 알림 유형별 멘션 설정
+      by_alert_type:
+        # 리밸런싱 관련 알림
+        quarterly_rebalance: []  # 예: ["U1234567890"]
+        immediate_rebalance: []  # 예: ["U1234567890", "U0987654321"]
+        twap_start: []
+        
+        # 시스템 오류
+        system_error: []  # 예: ["@channel"]  # @channel, @here도 지원
+        
+        # 위험 알림
+        risk_warning: []
+      
+      # 전체 채널 멘션이 필요한 알림 유형들
+      channel_mention_types: ["system_error", "critical_risk"]
   
   # 알림 레벨
   alert_levels:
