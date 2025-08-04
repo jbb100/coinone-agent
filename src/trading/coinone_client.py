@@ -229,6 +229,76 @@ class CoinoneClient:
             logger.error(f"전체 티커 조회 실패: {e}")
             raise
 
+    def get_recent_trades(self, currency: str = "BTC", size: int = 10) -> Dict:
+        """
+        최근 체결 주문 조회 (Public API v2)
+        실시간에 가까운 체결가 정보 제공
+        
+        Args:
+            currency: 조회할 코인 (기본값: BTC)
+            size: 조회할 목록 수 (10, 50, 100, 150, 200 허용)
+            
+        Returns:
+            최근 체결 주문 정보 딕셔너리
+        """
+        try:
+            # Public API v2: GET 방식, 경로 파라미터 사용
+            endpoint = f"/public/v2/trades/{self.quote_currency}/{currency}"
+            params = {"size": size}
+            
+            response = self._make_request("GET", endpoint, params, is_public=True)
+            logger.debug(f"{currency} 최근 체결 주문 조회 성공")
+            return response
+            
+        except Exception as e:
+            logger.error(f"{currency} 최근 체결 주문 조회 실패: {e}")
+            raise
+
+    def get_latest_price(self, currency: str = "BTC") -> float:
+        """
+        최신 체결가 조회 (더 정확한 현재가)
+        최근 체결 주문에서 가장 최신 가격 추출
+        
+        Args:
+            currency: 조회할 코인
+            
+        Returns:
+            최신 체결가 (float)
+        """
+        try:
+            # 먼저 최근 체결 주문으로 실시간 가격 조회 시도
+            trades_response = self.get_recent_trades(currency, size=10)
+            
+            if (trades_response.get("result") == "success" and 
+                trades_response.get("transactions")):
+                
+                # 가장 최근 체결가 사용 (첫 번째 항목이 최신)
+                latest_trade = trades_response["transactions"][0]
+                latest_price = float(latest_trade["price"])
+                
+                logger.debug(f"{currency} 최신 체결가: {latest_price:,.0f} KRW")
+                return latest_price
+            
+            # 체결 주문 정보가 없는 경우 ticker API 폴백
+            logger.debug(f"{currency} 최근 체결 정보 없음, ticker API 사용")
+            ticker = self.get_ticker(currency)
+            ticker_data = ticker.get("data", {})
+            price_krw = (
+                float(ticker_data.get("last", 0)) or
+                float(ticker_data.get("close_24h", 0)) or
+                float(ticker_data.get("close", 0))
+            )
+            
+            if price_krw <= 0:
+                raise ValueError(f"모든 가격 조회 방법 실패: {currency}")
+                
+            logger.debug(f"{currency} ticker 현재가: {price_krw:,.0f} KRW")
+            return price_krw
+            
+        except Exception as e:
+            logger.error(f"{currency} 최신 가격 조회 실패: {e}")
+            raise
+
     def _generate_nonce(self) -> str:
         """UUID nonce 생성"""
         return str(uuid.uuid4())
@@ -282,19 +352,17 @@ class CoinoneClient:
                         total_amount = amount
                         logger.info(f"시장가 매수: {total_amount:,.0f} KRW → {currency}")
                     else:
-                        # amount가 암호화폐 수량인 경우 (기존 로직)
+                        # amount가 암호화폐 수량인 경우 (최신 체결가 사용)
                         try:
-                            ticker = self.get_ticker(currency)
-                            # 코인원 API 응답 구조: data.close_24h에 현재가 포함
-                            current_price = float(ticker.get("data", {}).get("close_24h", 0))
+                            current_price = self.get_latest_price(currency)
                             if current_price <= 0:
                                 raise ValueError(f"잘못된 현재가: {current_price}")
                             total_amount = amount * current_price
-                            logger.info(f"현재가 조회 성공: {currency} = {current_price:,.0f} KRW")
+                            logger.info(f"최신 체결가 조회 성공: {currency} = {current_price:,.0f} KRW")
                             logger.info(f"시장가 매수: {amount} {currency} (총액: {total_amount:,.0f} KRW)")
                         except Exception as e:
-                            logger.error(f"시장가 매수 중 현재가 조회 실패: {e}")
-                            raise Exception(f"현재가 조회 실패로 시장가 매수 불가: {e}")
+                            logger.error(f"시장가 매수 중 최신 가격 조회 실패: {e}")
+                            raise Exception(f"최신 가격 조회 실패로 시장가 매수 불가: {e}")
                     
                     params = {
                         "access_token": self.api_key,
@@ -386,6 +454,7 @@ class CoinoneClient:
     def get_portfolio_value(self) -> Dict[str, float]:
         """
         포트폴리오 총 가치 계산 (KRW 기준)
+        최근 체결가 기반으로 더 정확한 가치 계산
         
         Returns:
             포트폴리오 가치 정보
@@ -399,23 +468,32 @@ class CoinoneClient:
             portfolio_value["assets"]["KRW"] = krw_balance
             portfolio_value["total_krw"] += krw_balance
             
-            # 암호화폐 잔고를 KRW로 환산
+            # 암호화폐 잔고를 KRW로 환산 (최신 체결가 사용)
             for coin in self.supported_coins:
                 coin_balance = balances.get(coin, 0)
                 if coin_balance > 0:
-                    ticker = self.get_ticker(coin)
-                    # 코인원 API 응답 구조에 맞게 수정: data.close_24h에서 현재가 추출
-                    price_krw = float(ticker.get("data", {}).get("close_24h", 0))
-                    value_krw = coin_balance * price_krw
-                    
-                    portfolio_value["assets"][coin] = {
-                        "balance": coin_balance,
-                        "price_krw": price_krw,
-                        "value_krw": value_krw
-                    }
-                    portfolio_value["total_krw"] += value_krw
-                    
-                    logger.debug(f"{coin} 가치 계산: {coin_balance} * {price_krw:,.0f} = {value_krw:,.0f} KRW")
+                    try:
+                        # 최신 체결가 기반 가격 조회 (더 정확)
+                        price_krw = self.get_latest_price(coin)
+                        
+                        if price_krw <= 0:
+                            logger.warning(f"{coin}: 유효하지 않은 가격 {price_krw}, 포트폴리오에서 제외")
+                            continue
+                        
+                        value_krw = coin_balance * price_krw
+                        
+                        portfolio_value["assets"][coin] = {
+                            "balance": coin_balance,
+                            "price_krw": price_krw,
+                            "value_krw": value_krw
+                        }
+                        portfolio_value["total_krw"] += value_krw
+                        
+                        logger.debug(f"{coin} 가치 계산: {coin_balance} * {price_krw:,.0f} = {value_krw:,.0f} KRW")
+                        
+                    except Exception as e:
+                        logger.warning(f"{coin} 가격 조회 실패, 포트폴리오에서 제외: {e}")
+                        continue
             
             logger.info(f"포트폴리오 총 가치: {portfolio_value['total_krw']:,.0f} KRW")
             return portfolio_value
