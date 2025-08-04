@@ -269,7 +269,8 @@ class CoinoneClient:
             # 먼저 최근 체결 주문으로 실시간 가격 조회 시도
             trades_response = self.get_recent_trades(currency, size=10)
             
-            if (trades_response.get("result") == "success" and 
+            if (isinstance(trades_response, dict) and 
+                trades_response.get("result") == "success" and 
                 trades_response.get("transactions")):
                 
                 # 가장 최근 체결가 사용 (첫 번째 항목이 최신)
@@ -282,7 +283,18 @@ class CoinoneClient:
             # 체결 주문 정보가 없는 경우 ticker API 폴백
             logger.debug(f"{currency} 최근 체결 정보 없음, ticker API 사용")
             ticker = self.get_ticker(currency)
+            logger.debug(f"{currency} ticker 응답 타입: {type(ticker)}, 내용: {ticker}")
+            
+            # ticker가 딕셔너리가 아닌 경우 처리
+            if not isinstance(ticker, dict):
+                logger.error(f"{currency} ticker 응답이 딕셔너리가 아님: {type(ticker)}")
+                raise ValueError(f"ticker 응답 형식 오류: {type(ticker)}")
+            
             ticker_data = ticker.get("data", {})
+            if not isinstance(ticker_data, dict):
+                logger.error(f"{currency} ticker data가 딕셔너리가 아님: {type(ticker_data)}")
+                raise ValueError(f"ticker data 형식 오류: {type(ticker_data)}")
+            
             price_krw = (
                 float(ticker_data.get("last", 0)) or
                 float(ticker_data.get("close_24h", 0)) or
@@ -290,7 +302,7 @@ class CoinoneClient:
             )
             
             if price_krw <= 0:
-                raise ValueError(f"모든 가격 조회 방법 실패: {currency}")
+                raise ValueError(f"모든 가격 조회 방법 실패: {currency}, ticker_data={ticker_data}")
                 
             logger.debug(f"{currency} ticker 현재가: {price_krw:,.0f} KRW")
             return price_krw
@@ -376,6 +388,22 @@ class CoinoneClient:
                     
                 else:
                     # 시장가 매도: qty 필드 사용 (주문 수량)
+                    if amount_in_krw:
+                        # amount가 KRW 금액인 경우, 현재가로 수량 계산
+                        try:
+                            current_price = self.get_latest_price(currency)
+                            if current_price <= 0:
+                                raise ValueError(f"잘못된 현재가: {current_price}")
+                            quantity = amount / current_price
+                            logger.info(f"시장가 매도: {amount:,.0f} KRW → {quantity:.6f} {currency} (현재가: {current_price:,.0f})")
+                        except Exception as e:
+                            logger.error(f"시장가 매도 중 현재가 조회 실패: {e}")
+                            raise Exception(f"현재가 조회 실패로 시장가 매도 불가: {e}")
+                    else:
+                        # amount가 암호화폐 수량인 경우
+                        quantity = amount
+                        logger.info(f"시장가 매도: {quantity:.6f} {currency}")
+                    
                     params = {
                         "access_token": self.api_key,
                         "nonce": self._generate_nonce(),
@@ -383,9 +411,8 @@ class CoinoneClient:
                         "quote_currency": "KRW",
                         "target_currency": currency.upper(),
                         "type": "MARKET",
-                        "qty": str(amount)
+                        "qty": str(quantity)
                     }
-                    logger.info(f"시장가 매도: {amount} {currency}")
             
             response = self._make_request("POST", endpoint, params, is_public=False)
             
@@ -442,7 +469,10 @@ class CoinoneClient:
             # 3. 주문 실행 및 재시도
             for attempt in range(max_retries):
                 try:
-                    logger.info(f"안전한 주문 실행 (시도 {attempt + 1}/{max_retries}): {side} {amount} {currency}")
+                    if amount_in_krw:
+                        logger.info(f"안전한 주문 실행 (시도 {attempt + 1}/{max_retries}): {side} {amount:,.0f} KRW → {currency}")
+                    else:
+                        logger.info(f"안전한 주문 실행 (시도 {attempt + 1}/{max_retries}): {side} {amount:.6f} {currency}")
                     
                     result = self.place_order(currency, side, amount, price, amount_in_krw)
                     

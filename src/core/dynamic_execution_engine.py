@@ -232,8 +232,19 @@ class DynamicExecutionEngine:
                 # 현재가 조회하여 수량 계산 (먼저 처리)
                 try:
                     ticker = self.coinone_client.get_ticker(asset)
+                    logger.debug(f"{asset} ticker 응답 타입: {type(ticker)}, 내용: {ticker}")
+                    
+                    # ticker가 딕셔너리가 아닌 경우 처리
+                    if not isinstance(ticker, dict):
+                        logger.error(f"{asset} ticker 응답이 딕셔너리가 아님: {type(ticker)}")
+                        continue
+                    
                     # 코인원 API 응답에서 현재가 추출 (여러 필드 시도)
                     ticker_data = ticker.get("data", {})
+                    if not isinstance(ticker_data, dict):
+                        logger.error(f"{asset} ticker data가 딕셔너리가 아님: {type(ticker_data)}")
+                        continue
+                    
                     current_price = (
                         float(ticker_data.get("last", 0)) or
                         float(ticker_data.get("close_24h", 0)) or
