@@ -81,9 +81,37 @@ class DynamicExecutionEngine:
         
         # 실행 중인 TWAP 주문들
         self.active_twap_orders: List[TWAPOrder] = []
+        self.current_execution_id = None  # 현재 활성 실행 ID
+        
+        # 데이터베이스에서 활성 TWAP 주문들 복원
+        self._load_active_twap_orders()
         
         logger.info("DynamicExecutionEngine 초기화 완료")
         logger.info(f"ATR 기간: {atr_period}일, 변동성 임계값: {atr_threshold:.1%}")
+        
+        if self.active_twap_orders:
+            logger.info(f"기존 활성 TWAP 주문 {len(self.active_twap_orders)}개 복원 완료")
+            for order in self.active_twap_orders:
+                logger.info(f"  - {order.asset}: {order.executed_slices}/{order.slice_count} 슬라이스 ({order.status})")
+    
+    def _load_active_twap_orders(self):
+        """데이터베이스에서 활성 TWAP 주문들을 로드"""
+        try:
+            self.current_execution_id, self.active_twap_orders = self.db_manager.load_active_twap_orders()
+            logger.info(f"활성 TWAP 주문 로드: {len(self.active_twap_orders)}개")
+        except Exception as e:
+            logger.error(f"활성 TWAP 주문 로드 실패: {e}")
+            self.active_twap_orders = []
+            self.current_execution_id = None
+    
+    def _save_twap_orders_to_db(self):
+        """현재 TWAP 주문들을 데이터베이스에 저장"""
+        try:
+            if self.current_execution_id and self.active_twap_orders:
+                self.db_manager.update_twap_orders_status(self.current_execution_id, self.active_twap_orders)
+                logger.debug("TWAP 주문 상태 데이터베이스 업데이트 완료")
+        except Exception as e:
+            logger.error(f"TWAP 주문 상태 저장 실패: {e}")
     
     def calculate_atr(self, price_data: pd.DataFrame) -> float:
         """
@@ -323,7 +351,7 @@ class DynamicExecutionEngine:
             )
             
             # 결과 처리
-            if order_result.get("result") == "success":
+            if order_result.get("success"):
                 twap_order.executed_slices += 1
                 twap_order.remaining_amount_krw -= amount_krw
                 twap_order.last_execution_time = datetime.now()  # 마지막 실행 시간 업데이트
@@ -332,6 +360,9 @@ class DynamicExecutionEngine:
                     twap_order.status = "completed"
                 else:
                     twap_order.status = "executing"
+                
+                # 데이터베이스에 상태 업데이트
+                self._save_twap_orders_to_db()
                 
                 logger.info(f"TWAP 슬라이스 실행 성공: {twap_order.asset} "
                           f"({twap_order.executed_slices}/{twap_order.slice_count})")
@@ -346,6 +377,9 @@ class DynamicExecutionEngine:
             else:
                 # 주문 실패 시에도 실행 시간은 업데이트 (재시도를 위해)
                 twap_order.last_execution_time = datetime.now()
+                # 실패 시에도 데이터베이스 업데이트
+                self._save_twap_orders_to_db()
+                
                 logger.error(f"TWAP 슬라이스 실행 실패: {order_result}")
                 return {
                     "success": False,
@@ -358,7 +392,7 @@ class DynamicExecutionEngine:
                 "success": False,
                 "error": str(e)
             }
-    
+
     def start_twap_execution(self, rebalance_orders: Dict[str, Dict]) -> Dict:
         """
         TWAP 실행 시작
@@ -404,7 +438,7 @@ class DynamicExecutionEngine:
                     "slice": f"1/{twap_order.slice_count}"
                 })
             
-            # 5. 실행 계획 저장
+            # 5. 실행 계획 생성 및 데이터베이스에 저장
             execution_plan = {
                 "start_time": datetime.now(),
                 "twap_orders": len(twap_orders),
@@ -413,8 +447,8 @@ class DynamicExecutionEngine:
                 "immediate_results": immediate_results
             }
             
-            # 데이터베이스에 저장
-            self.db_manager.save_twap_execution_plan(execution_plan)
+            # 데이터베이스에 TWAP 주문 정보와 함께 저장
+            self.current_execution_id = self.db_manager.save_twap_execution_plan(execution_plan, twap_orders)
             
             logger.info(f"TWAP 실행 시작: {len(twap_orders)}개 주문, "
                        f"{twap_orders[0].execution_hours if twap_orders else 0}시간 실행 계획")
@@ -502,6 +536,9 @@ class DynamicExecutionEngine:
                     self.active_twap_orders.remove(completed_order)
                     logger.info(f"TWAP 주문 완료: {completed_order.asset}")
             
+            # 데이터베이스에 활성 TWAP 주문 상태 업데이트
+            self._save_twap_orders_to_db()
+
             return {
                 "success": True,
                 "processed_orders": len(processed_orders),

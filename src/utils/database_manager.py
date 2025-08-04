@@ -557,16 +557,41 @@ class DatabaseManager:
             logger.error(f"데이터베이스 백업 실패: {e}")
             raise
     
-    def save_twap_execution_plan(self, execution_plan: dict):
+    def save_twap_execution_plan(self, execution_plan: dict, twap_orders: list = None):
         """
         TWAP 실행 계획 저장
         
         Args:
             execution_plan: TWAP 실행 계획 정보
+            twap_orders: 개별 TWAP 주문 리스트 (선택적)
         """
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                
+                # TWAP 주문 정보를 execution_plan에 포함
+                if twap_orders:
+                    execution_plan["twap_orders_detail"] = [
+                        {
+                            "asset": order.asset,
+                            "side": order.side,
+                            "total_amount_krw": order.total_amount_krw,
+                            "total_quantity": order.total_quantity,
+                            "execution_hours": order.execution_hours,
+                            "slice_count": order.slice_count,
+                            "slice_amount_krw": order.slice_amount_krw,
+                            "slice_quantity": order.slice_quantity,
+                            "start_time": order.start_time.isoformat(),
+                            "end_time": order.end_time.isoformat(),
+                            "slice_interval_minutes": order.slice_interval_minutes,
+                            "executed_slices": order.executed_slices,
+                            "remaining_amount_krw": order.remaining_amount_krw,
+                            "remaining_quantity": order.remaining_quantity,
+                            "status": order.status,
+                            "last_execution_time": order.last_execution_time.isoformat() if order.last_execution_time else None
+                        } for order in twap_orders
+                    ]
+                
                 cursor.execute("""
                     INSERT INTO twap_executions (
                         start_time, execution_plan, status, created_at
@@ -578,16 +603,149 @@ class DatabaseManager:
                     datetime.now().isoformat()
                 ))
                 
+                execution_id = cursor.lastrowid
                 conn.commit()
-                logger.info(f"TWAP 실행 계획 저장 완료: ID {cursor.lastrowid}")
+                logger.info(f"TWAP 실행 계획 저장 완료: ID {execution_id}")
+                return execution_id
             
         except Exception as e:
             logger.error(f"TWAP 실행 계획 저장 실패: {e}")
             raise
-    
+
+    def update_twap_orders_status(self, execution_id: int, twap_orders: list):
+        """
+        TWAP 주문들의 상태 업데이트
+        
+        Args:
+            execution_id: 실행 ID
+            twap_orders: 업데이트할 TWAP 주문 리스트
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 기존 execution_plan을 가져와서 업데이트
+                cursor.execute("""
+                    SELECT execution_plan FROM twap_executions WHERE id = ?
+                """, (execution_id,))
+                
+                result = cursor.fetchone()
+                if not result:
+                    logger.error(f"TWAP 실행 ID {execution_id}를 찾을 수 없습니다")
+                    return
+                
+                execution_plan = json.loads(result[0])
+                
+                # TWAP 주문 상태 업데이트
+                execution_plan["twap_orders_detail"] = [
+                    {
+                        "asset": order.asset,
+                        "side": order.side,
+                        "total_amount_krw": order.total_amount_krw,
+                        "total_quantity": order.total_quantity,
+                        "execution_hours": order.execution_hours,
+                        "slice_count": order.slice_count,
+                        "slice_amount_krw": order.slice_amount_krw,
+                        "slice_quantity": order.slice_quantity,
+                        "start_time": order.start_time.isoformat(),
+                        "end_time": order.end_time.isoformat(),
+                        "slice_interval_minutes": order.slice_interval_minutes,
+                        "executed_slices": order.executed_slices,
+                        "remaining_amount_krw": order.remaining_amount_krw,
+                        "remaining_quantity": order.remaining_quantity,
+                        "status": order.status,
+                        "last_execution_time": order.last_execution_time.isoformat() if order.last_execution_time else None
+                    } for order in twap_orders
+                ]
+                
+                # 모든 주문이 완료되었는지 확인
+                all_completed = all(order.status == "completed" for order in twap_orders)
+                execution_status = "completed" if all_completed else "active"
+                
+                cursor.execute("""
+                    UPDATE twap_executions 
+                    SET execution_plan = ?, status = ?, completed_at = ?
+                    WHERE id = ?
+                """, (
+                    json.dumps(serialize_for_json(execution_plan)),
+                    execution_status,
+                    datetime.now().isoformat() if all_completed else None,
+                    execution_id
+                ))
+                
+                conn.commit()
+                logger.info(f"TWAP 주문 상태 업데이트 완료: ID {execution_id}")
+            
+        except Exception as e:
+            logger.error(f"TWAP 주문 상태 업데이트 실패: {e}")
+
+    def load_active_twap_orders(self):
+        """
+        활성 TWAP 주문들을 데이터베이스에서 로드
+        
+        Returns:
+            (execution_id, twap_orders_list) 튜플
+        """
+        try:
+            from src.core.dynamic_execution_engine import TWAPOrder
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, execution_plan
+                    FROM twap_executions 
+                    WHERE status = 'active'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """)
+                
+                result = cursor.fetchone()
+                if not result:
+                    logger.info("활성 TWAP 실행이 없습니다")
+                    return None, []
+                
+                execution_id = result[0]
+                execution_plan = json.loads(result[1])
+                
+                # TWAP 주문 객체들로 복원
+                twap_orders = []
+                twap_orders_detail = execution_plan.get("twap_orders_detail", [])
+                
+                for order_data in twap_orders_detail:
+                    # 완료된 주문은 제외
+                    if order_data.get("status") == "completed":
+                        continue
+                        
+                    twap_order = TWAPOrder(
+                        asset=order_data["asset"],
+                        side=order_data["side"],
+                        total_amount_krw=order_data["total_amount_krw"],
+                        total_quantity=order_data["total_quantity"],
+                        execution_hours=order_data["execution_hours"],
+                        slice_count=order_data["slice_count"],
+                        slice_amount_krw=order_data["slice_amount_krw"],
+                        slice_quantity=order_data["slice_quantity"],
+                        start_time=datetime.fromisoformat(order_data["start_time"]),
+                        end_time=datetime.fromisoformat(order_data["end_time"]),
+                        slice_interval_minutes=order_data["slice_interval_minutes"],
+                        executed_slices=order_data["executed_slices"],
+                        remaining_amount_krw=order_data["remaining_amount_krw"],
+                        remaining_quantity=order_data["remaining_quantity"],
+                        status=order_data["status"],
+                        last_execution_time=datetime.fromisoformat(order_data["last_execution_time"]) if order_data["last_execution_time"] else None
+                    )
+                    twap_orders.append(twap_order)
+                
+                logger.info(f"활성 TWAP 주문 {len(twap_orders)}개 로드 완료 (실행 ID: {execution_id})")
+                return execution_id, twap_orders
+                
+        except Exception as e:
+            logger.error(f"활성 TWAP 주문 로드 실패: {e}")
+            return None, []
+
     def update_twap_execution_status(self, execution_id: int, status: str, result_data: dict = None):
         """
-        TWAP 실행 상태 업데이트
+        TWAP 실행 상태 업데이트 (호환성을 위한 메서드)
         
         Args:
             execution_id: 실행 ID
@@ -620,11 +778,10 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"TWAP 실행 상태 업데이트 실패: {e}")
-            raise
-    
+
     def get_active_twap_executions(self) -> List[dict]:
         """
-        활성 TWAP 실행 목록 조회
+        활성 TWAP 실행 목록 조회 (호환성을 위한 메서드)
         
         Returns:
             활성 TWAP 실행 리스트

@@ -319,6 +319,11 @@ class KairosSystem:
                     rebalance_result = self.run_quarterly_rebalance_twap(dry_run=dry_run)
                     analysis_result["rebalance_triggered"] = True
                     analysis_result["rebalance_result"] = rebalance_result
+                    
+                    # 리밸런싱 시작 후 추가 알림
+                    if rebalance_result.get("success"):
+                        self._send_immediate_rebalance_notification(analysis_result, rebalance_result)
+                    
                 else:
                     logger.info("시장 계절에 변화가 없습니다. 기존 전략을 유지합니다.")
                 
@@ -390,8 +395,20 @@ class KairosSystem:
             
             result = self.execution_engine.process_pending_twap_orders()
             
-            if result.get("success") and result.get("processed_orders", 0) > 0:
-                logger.info(f"TWAP 주문 처리 완료: {result.get('processed_orders')}개 처리")
+            if result.get("success"):
+                processed_count = result.get("processed_orders", 0)
+                completed_count = result.get("completed_orders", 0)
+                remaining_count = result.get("remaining_orders", 0)
+                details = result.get("details", [])
+                
+                # 처리된 주문이 있으면 상세 알림 발송
+                if processed_count > 0:
+                    self._send_twap_execution_notification(result)
+                    logger.info(f"TWAP 주문 처리 완료: {processed_count}개 처리, {completed_count}개 완료, {remaining_count}개 남음")
+                elif remaining_count > 0:
+                    logger.info(f"TWAP 주문 대기 중: {remaining_count}개 남음")
+                else:
+                    logger.info("처리할 TWAP 주문이 없습니다")
             
             return result
             
@@ -399,17 +416,124 @@ class KairosSystem:
             logger.error(f"TWAP 주문 처리 실패: {e}")
             return {"success": False, "error": str(e)}
     
+    def _send_twap_execution_notification(self, execution_result: dict):
+        """TWAP 실행 결과 알림"""
+        try:
+            processed_count = execution_result.get("processed_orders", 0)
+            completed_count = execution_result.get("completed_orders", 0)
+            remaining_count = execution_result.get("remaining_orders", 0)
+            details = execution_result.get("details", [])
+            
+            message = f"""
+🔄 **TWAP 주문 실행 완료**
+
+**실행 현황**:
+• 이번에 처리된 주문: {processed_count}개
+• 완료된 주문: {completed_count}개  
+• 남은 주문: {remaining_count}개
+
+**실행 내역**:
+            """.strip()
+            
+            # 실행된 주문들의 상세 내역 추가
+            for detail in details:
+                asset = detail.get("asset", "Unknown")
+                executed_slices = detail.get("executed_slices", 0)
+                total_slices = detail.get("total_slices", 0)
+                result = detail.get("result", {})
+                next_execution = detail.get("next_execution_time", "N/A")
+                
+                if result.get("success"):
+                    amount_krw = result.get("amount_krw", 0)
+                    order_id = result.get("order_id", "N/A")
+                    progress = f"{executed_slices}/{total_slices}"
+                    
+                    message += f"""
+• **{asset}**: {progress} 슬라이스 완료 ✅
+  - 실행 금액: {amount_krw:,.0f} KRW
+  - 주문 ID: {order_id}
+  - 다음 실행: {next_execution}"""
+                else:
+                    error = result.get("error", "Unknown error")
+                    message += f"""
+• **{asset}**: {executed_slices}/{total_slices} 슬라이스 실행 실패 ❌
+  - 오류: {error}
+  - 다음 실행: {next_execution}"""
+            
+            if remaining_count > 0:
+                message += f"\n\n⏳ {remaining_count}개 주문이 계속 실행 중입니다."
+            else:
+                message += "\n\n🎉 모든 TWAP 주문이 완료되었습니다!"
+            
+            self.alert_system.send_info_alert(
+                "TWAP 주문 실행 완료",
+                message,
+                "twap_execution"
+            )
+            
+        except Exception as e:
+            logger.error(f"TWAP 실행 알림 실패: {e}")
+    
     def get_twap_status(self) -> dict:
         """TWAP 실행 상태 조회"""
         try:
             logger.info("TWAP 상태 조회")
             
             status = self.execution_engine.get_twap_status()
+            
+            # TWAP 상태를 Slack으로도 전송
+            if "error" not in status and status.get("active_orders", 0) > 0:
+                self._send_twap_status_notification(status)
+            
             return status
             
         except Exception as e:
             logger.error(f"TWAP 상태 조회 실패: {e}")
             return {"error": str(e)}
+    
+    def _send_twap_status_notification(self, status: dict):
+        """TWAP 상태 알림"""
+        try:
+            active_orders = status.get("active_orders", 0)
+            orders = status.get("orders", [])
+            
+            message = f"""
+📊 **TWAP 실행 상태 현황**
+
+**활성 주문**: {active_orders}개
+
+**주문별 진행 상황**:
+            """.strip()
+            
+            for order in orders:
+                asset = order.get("asset", "Unknown")
+                progress = order.get("progress", "0%")
+                executed_slices = order.get("executed_slices", 0)
+                total_slices = order.get("total_slices", 0)
+                remaining_amount = order.get("remaining_amount_krw", 0)
+                remaining_time = order.get("remaining_time_hours", 0)
+                
+                # 진행률 바 생성 (간단한 텍스트 버전)
+                progress_percent = (executed_slices / total_slices * 100) if total_slices > 0 else 0
+                progress_bar = "█" * int(progress_percent / 10) + "░" * (10 - int(progress_percent / 10))
+                
+                message += f"""
+
+• **{asset}** [{progress_bar}] {progress}
+  - 진행: {executed_slices}/{total_slices} 슬라이스
+  - 남은 금액: {remaining_amount:,.0f} KRW
+  - 남은 시간: {remaining_time:.1f}시간"""
+            
+            message += "\n\n💡 TWAP 주문들이 계획대로 단계적으로 실행되고 있습니다."
+            
+            self.alert_system.send_info_alert(
+                "TWAP 실행 상태",
+                message,
+                "twap_status"
+            )
+            
+        except Exception as e:
+            logger.error(f"TWAP 상태 알림 실패: {e}")
     
     def generate_performance_report(self, period_days: int = 30) -> dict:
         """성과 보고서 생성"""
@@ -516,6 +640,45 @@ class KairosSystem:
             
         except Exception as e:
             logger.error(f"TWAP 시작 알림 실패: {e}")
+    
+    def _send_immediate_rebalance_notification(self, analysis_result: dict, rebalance_result: dict):
+        """즉시 리밸런싱 시작 알림"""
+        try:
+            market_season = analysis_result.get("market_season", "Unknown")
+            twap_orders = rebalance_result.get("twap_orders", [])
+            execution_plan = rebalance_result.get("execution_plan", {})
+            
+            message = f"""
+🚨 **시장 계절 변화로 즉시 리밸런싱 시작**
+
+**트리거 이벤트**: 주간 시장 분석에서 시장 계절 변화 감지
+**새로운 시장 계절**: {market_season.upper()}
+
+**즉시 시작된 TWAP 리밸런싱**:
+• 주문 개수: {len(twap_orders)}개
+• 예상 실행 시간: {execution_plan.get('total_execution_hours', 0)}시간
+• 분할 간격: {execution_plan.get('slice_interval_minutes', 0)}분
+
+**TWAP 주문 목록**:
+            """.strip()
+            
+            for order in twap_orders:
+                message += f"\n• {order['asset']}: {order['side']} {order['total_amount_krw']:,.0f} KRW ({order['slice_count']}회 분할)"
+            
+            message += """
+
+⚡ **자동 실행 중**: 시장 상황 변화에 따라 자동으로 리밸런싱이 시작되었습니다.
+🔄 **진행 상황**: `--process-twap` 명령으로 실시간 진행 상황을 확인할 수 있습니다.
+📊 **상태 확인**: `--twap-status` 명령으로 현재 상태를 조회할 수 있습니다."""
+            
+            self.alert_system.send_info_alert(
+                f"🚨 즉시 리밸런싱 시작 - {market_season.upper()}",
+                message,
+                "immediate_rebalance"
+            )
+            
+        except Exception as e:
+            logger.error(f"즉시 리밸런싱 알림 실패: {e}")
     
     def _signal_handler(self, signum, frame):
         """시그널 핸들러"""
