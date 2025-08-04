@@ -43,6 +43,7 @@ class TWAPOrder:
     remaining_amount_krw: float = 0
     remaining_quantity: float = 0
     status: str = "pending"  # pending, executing, completed, failed
+    last_execution_time: Optional[datetime] = None  # 마지막 실행 시간
     
     def __post_init__(self):
         if self.remaining_amount_krw == 0:
@@ -189,6 +190,7 @@ class DynamicExecutionEngine:
             
             # 3. TWAP 주문 생성
             twap_orders = []
+            immediate_orders = []  # 즉시 실행할 소액 주문들
             start_time = datetime.now()
             end_time = start_time + timedelta(hours=execution_hours)
             
@@ -197,10 +199,40 @@ class DynamicExecutionEngine:
                 if asset.upper() == "KRW":
                     continue
                 
-                # 너무 작은 주문은 즉시 실행
                 amount_krw = abs(order_info["amount_diff_krw"])
-                if amount_krw < 50000:  # 5만원 미만 (코인원 최소 주문 금액 고려)
-                    logger.info(f"{asset}: 소액 주문({amount_krw:,.0f} KRW)으로 즉시 실행")
+                
+                # 현재가 조회하여 수량 계산 (먼저 처리)
+                try:
+                    ticker = self.coinone_client.get_ticker(asset)
+                    # 코인원 API 응답에서 현재가 추출 (여러 필드 시도)
+                    ticker_data = ticker.get("data", {})
+                    current_price = (
+                        float(ticker_data.get("last", 0)) or
+                        float(ticker_data.get("close_24h", 0)) or
+                        float(ticker_data.get("close", 0))
+                    )
+                    
+                    if current_price <= 0:
+                        logger.error(f"{asset}: 현재가 조회 실패 - ticker_data: {ticker_data}")
+                        continue
+                    
+                    quantity = amount_krw / current_price
+                    logger.info(f"{asset} 현재가: {current_price:,.0f} KRW, 주문량: {quantity:.6f}")
+                    
+                except Exception as e:
+                    logger.error(f"{asset}: 현재가 조회 실패 - {e}")
+                    continue
+                
+                # 소액 주문은 즉시 실행 큐에 추가
+                if amount_krw < 50000:  # 5만원 미만
+                    logger.info(f"{asset}: 소액 주문({amount_krw:,.0f} KRW) 즉시 실행 큐에 추가")
+                    immediate_orders.append({
+                        "asset": asset,
+                        "side": order_info["action"],
+                        "amount_krw": amount_krw,
+                        "quantity": quantity,
+                        "current_price": current_price
+                    })
                     continue
                 
                 # 슬라이스 크기가 너무 작으면 분할 횟수 조정
@@ -214,19 +246,6 @@ class DynamicExecutionEngine:
                                  f"(슬라이스 크기: {amount_krw/adjusted_slice_count:,.0f} KRW)")
                     slice_count = adjusted_slice_count
                     slice_interval_minutes = max(5, (execution_hours * 60) // slice_count)  # 최소 5분 간격
-                
-                # 현재가 조회하여 수량 계산
-                try:
-                    ticker = self.coinone_client.get_ticker(asset)
-                    current_price = float(ticker.get("data", {}).get("close_24h", 0))
-                    if current_price <= 0:
-                        logger.error(f"{asset}: 잘못된 현재가 {current_price}")
-                        continue
-                    
-                    quantity = amount_krw / current_price
-                except Exception as e:
-                    logger.error(f"{asset}: 현재가 조회 실패 - {e}")
-                    continue
                 
                 # TWAP 주문 생성
                 twap_order = TWAPOrder(
@@ -246,6 +265,24 @@ class DynamicExecutionEngine:
                 twap_orders.append(twap_order)
                 logger.info(f"TWAP 주문 생성: {asset} {order_info['action']} {amount_krw:,.0f} KRW "
                           f"({slice_count}회 분할, {slice_interval_minutes}분 간격)")
+            
+            # 즉시 실행 주문들 처리
+            if immediate_orders:
+                logger.info(f"즉시 실행 주문 {len(immediate_orders)}개 처리 시작")
+                for order in immediate_orders:
+                    try:
+                        result = self.coinone_client.place_order(
+                            currency=order["asset"],
+                            side=order["side"],
+                            amount=order["amount_krw"],
+                            amount_in_krw=True
+                        )
+                        if result.get("result") == "success":
+                            logger.info(f"✅ {order['asset']} 즉시 실행 성공: {order['amount_krw']:,.0f} KRW")
+                        else:
+                            logger.error(f"❌ {order['asset']} 즉시 실행 실패: {result}")
+                    except Exception as e:
+                        logger.error(f"❌ {order['asset']} 즉시 실행 중 오류: {e}")
             
             return twap_orders
             
@@ -289,6 +326,7 @@ class DynamicExecutionEngine:
             if order_result.get("result") == "success":
                 twap_order.executed_slices += 1
                 twap_order.remaining_amount_krw -= amount_krw
+                twap_order.last_execution_time = datetime.now()  # 마지막 실행 시간 업데이트
                 
                 if twap_order.executed_slices >= twap_order.slice_count:
                     twap_order.status = "completed"
@@ -306,6 +344,8 @@ class DynamicExecutionEngine:
                     "total_slices": twap_order.slice_count
                 }
             else:
+                # 주문 실패 시에도 실행 시간은 업데이트 (재시도를 위해)
+                twap_order.last_execution_time = datetime.now()
                 logger.error(f"TWAP 슬라이스 실행 실패: {order_result}")
                 return {
                     "success": False,
@@ -356,10 +396,12 @@ class DynamicExecutionEngine:
             # 4. 첫 번째 슬라이스 즉시 실행
             immediate_results = []
             for twap_order in twap_orders:
+                logger.info(f"첫 번째 TWAP 슬라이스 즉시 실행: {twap_order.asset}")
                 result = self.execute_twap_slice(twap_order)
                 immediate_results.append({
                     "asset": twap_order.asset,
-                    "result": result
+                    "result": result,
+                    "slice": f"1/{twap_order.slice_count}"
                 })
             
             # 5. 실행 계획 저장
@@ -424,23 +466,35 @@ class DynamicExecutionEngine:
                     continue
                 
                 # 다음 슬라이스 실행 시간 계산
-                next_execution_time = (
-                    twap_order.start_time + 
-                    timedelta(minutes=twap_order.slice_interval_minutes * twap_order.executed_slices)
-                )
+                if twap_order.last_execution_time is None:
+                    # 첫 번째 슬라이스: 시작 시간 기준
+                    next_execution_time = twap_order.start_time
+                else:
+                    # 두 번째 슬라이스부터: 마지막 실행 시간 + 간격
+                    next_execution_time = (
+                        twap_order.last_execution_time + 
+                        timedelta(minutes=twap_order.slice_interval_minutes)
+                    )
                 
                 # 실행 시간이 되었는지 확인
                 if current_time >= next_execution_time:
+                    logger.info(f"TWAP 슬라이스 실행 시간: {twap_order.asset} "
+                              f"({twap_order.executed_slices + 1}/{twap_order.slice_count})")
                     result = self.execute_twap_slice(twap_order)
                     processed_orders.append({
                         "asset": twap_order.asset,
                         "executed_slices": twap_order.executed_slices,
                         "total_slices": twap_order.slice_count,
-                        "result": result
+                        "result": result,
+                        "next_execution_time": next_execution_time.strftime("%Y-%m-%d %H:%M:%S")
                     })
                     
                     if twap_order.status == "completed":
                         completed_orders.append(twap_order)
+                else:
+                    # 아직 실행 시간이 안된 경우 로그 출력
+                    remaining_minutes = (next_execution_time - current_time).total_seconds() / 60
+                    logger.debug(f"{twap_order.asset}: 다음 실행까지 {remaining_minutes:.1f}분 남음")
             
             # 완료된 주문들 제거
             for completed_order in completed_orders:
