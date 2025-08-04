@@ -151,9 +151,9 @@ dmypy.json
 # 프로파일링
 .prof
 
-# 모니터링 및 메트릭
-metrics/
-monitoring/
+# # 모니터링 및 메트릭
+# metrics/
+# monitoring/
 
 # 캐시 파일
 .cache/
