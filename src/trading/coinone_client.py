@@ -494,10 +494,22 @@ class CoinoneClient:
             if side.lower() == "sell":
                 # 매도 시 해당 코인 보유량 확인
                 available = balances.get(currency.upper(), 0)
-                if available < amount:
-                    logger.error(f"매도 잔액 부족: {currency} 보유량 {available}, 주문량 {amount}")
-                    return False
+                
+                if amount_in_krw:
+                    # amount가 KRW 금액인 경우, 코인 개수로 환산해서 비교
+                    current_price = self.get_latest_price(currency)
+                    required_quantity = amount / current_price
+                    logger.debug(f"매도 검증: {amount:,.0f} KRW = {required_quantity:.6f} {currency} (현재가: {current_price:,.0f})")
                     
+                    if available < required_quantity:
+                        logger.error(f"매도 잔액 부족: {currency} 보유량 {available:.6f}, 필요량 {required_quantity:.6f}")
+                        return False
+                else:
+                    # amount가 코인 개수인 경우
+                    if available < amount:
+                        logger.error(f"매도 잔액 부족: {currency} 보유량 {available:.6f}, 주문량 {amount:.6f}")
+                        return False
+                        
             else:  # buy
                 # 매수 시 KRW 잔액 확인
                 krw_balance = balances.get("KRW", 0)
@@ -512,6 +524,7 @@ class CoinoneClient:
                     logger.error(f"매수 잔액 부족: KRW 보유량 {krw_balance:,.0f}, 필요량 {required_krw:,.0f}")
                     return False
             
+            logger.debug(f"잔액 검증 통과: {side} {amount} {'KRW' if amount_in_krw else currency}")
             return True
             
         except Exception as e:
