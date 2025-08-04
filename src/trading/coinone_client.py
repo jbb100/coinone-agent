@@ -404,7 +404,8 @@ class CoinoneClient:
                 coin_balance = balances.get(coin, 0)
                 if coin_balance > 0:
                     ticker = self.get_ticker(coin)
-                    price_krw = float(ticker.get("last", 0))
+                    # 코인원 API 응답 구조에 맞게 수정: data.close_24h에서 현재가 추출
+                    price_krw = float(ticker.get("data", {}).get("close_24h", 0))
                     value_krw = coin_balance * price_krw
                     
                     portfolio_value["assets"][coin] = {
@@ -413,6 +414,8 @@ class CoinoneClient:
                         "value_krw": value_krw
                     }
                     portfolio_value["total_krw"] += value_krw
+                    
+                    logger.debug(f"{coin} 가치 계산: {coin_balance} * {price_krw:,.0f} = {value_krw:,.0f} KRW")
             
             logger.info(f"포트폴리오 총 가치: {portfolio_value['total_krw']:,.0f} KRW")
             return portfolio_value
