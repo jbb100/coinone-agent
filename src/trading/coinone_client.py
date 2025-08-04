@@ -547,22 +547,42 @@ class CoinoneClient:
             max_limit_krw = max_order_limits.get(currency.upper(), 1_000_000)
             
             if side.lower() == "sell":
-                # 매도 시 수량을 KRW 가치로 환산해서 체크
                 current_price = self.get_latest_price(currency)
-                order_value_krw = amount * current_price
                 
-                if order_value_krw > max_limit_krw:
-                    # 한도에 맞춰 수량 조정 (90% 안전 마진)
-                    adjusted_amount = (max_limit_krw * 0.9) / current_price
-                    logger.info(f"주문 크기 조정: {amount} → {adjusted_amount} {currency} (한도: {max_limit_krw:,.0f} KRW)")
-                    return adjusted_amount
+                if amount_in_krw:
+                    # amount가 KRW 금액인 경우
+                    order_value_krw = amount
                     
+                    if order_value_krw > max_limit_krw:
+                        # 한도에 맞춰 KRW 금액 조정 (90% 안전 마진)
+                        adjusted_amount_krw = max_limit_krw * 0.9
+                        logger.info(f"매도 금액 조정: {amount:,.0f} → {adjusted_amount_krw:,.0f} KRW (한도: {max_limit_krw:,.0f} KRW)")
+                        return adjusted_amount_krw
+                else:
+                    # amount가 코인 개수인 경우
+                    order_value_krw = amount * current_price
+                    
+                    if order_value_krw > max_limit_krw:
+                        # 한도에 맞춰 수량 조정 (90% 안전 마진)
+                        adjusted_quantity = (max_limit_krw * 0.9) / current_price
+                        logger.info(f"매도 수량 조정: {amount:.6f} → {adjusted_quantity:.6f} {currency} (한도: {max_limit_krw:,.0f} KRW)")
+                        return adjusted_quantity
+                        
             else:  # buy
                 if amount_in_krw and amount > max_limit_krw:
                     # KRW 주문 시 한도 초과 체크
                     adjusted_amount = max_limit_krw * 0.9
                     logger.info(f"매수 금액 조정: {amount:,.0f} → {adjusted_amount:,.0f} KRW")
                     return adjusted_amount
+                elif not amount_in_krw:
+                    # 코인 개수로 주문 시 KRW 가치 확인
+                    current_price = self.get_latest_price(currency)
+                    order_value_krw = amount * current_price
+                    
+                    if order_value_krw > max_limit_krw:
+                        adjusted_quantity = (max_limit_krw * 0.9) / current_price
+                        logger.info(f"매수 수량 조정: {amount:.6f} → {adjusted_quantity:.6f} {currency} (한도: {max_limit_krw:,.0f} KRW)")
+                        return adjusted_quantity
             
             return amount
             
