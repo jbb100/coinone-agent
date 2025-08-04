@@ -424,8 +424,18 @@ class KairosSystem:
             remaining_count = execution_result.get("remaining_orders", 0)
             details = execution_result.get("details", [])
             
+            # 에러 발생 여부 확인
+            has_errors = any(not detail.get("result", {}).get("success", False) for detail in details)
+            
+            if has_errors:
+                status_emoji = "⚠️"
+                status_text = "TWAP 주문 실행 (오류 발생)"
+            else:
+                status_emoji = "🔄"
+                status_text = "TWAP 주문 실행 완료"
+            
             message = f"""
-🔄 **TWAP 주문 실행 완료**
+{status_emoji} **{status_text}**
 
 **실행 현황**:
 • 이번에 처리된 주문: {processed_count}개
@@ -436,6 +446,9 @@ class KairosSystem:
             """.strip()
             
             # 실행된 주문들의 상세 내역 추가
+            error_details = []
+            success_count = 0
+            
             for detail in details:
                 asset = detail.get("asset", "Unknown")
                 executed_slices = detail.get("executed_slices", 0)
@@ -447,28 +460,89 @@ class KairosSystem:
                     amount_krw = result.get("amount_krw", 0)
                     order_id = result.get("order_id", "N/A")
                     progress = f"{executed_slices}/{total_slices}"
+                    remaining_amount = result.get("remaining_amount", 0)
                     
                     message += f"""
 • **{asset}**: {progress} 슬라이스 완료 ✅
   - 실행 금액: {amount_krw:,.0f} KRW
   - 주문 ID: {order_id}
+  - 남은 금액: {remaining_amount:,.0f} KRW
   - 다음 실행: {next_execution}"""
+                    success_count += 1
                 else:
                     error = result.get("error", "Unknown error")
+                    error_code = result.get("error_code", "unknown")
+                    amount_krw = result.get("amount_krw", 0)
+                    
                     message += f"""
 • **{asset}**: {executed_slices}/{total_slices} 슬라이스 실행 실패 ❌
-  - 오류: {error}
+  - 시도 금액: {amount_krw:,.0f} KRW
+  - 오류 코드: {error_code}
+  - 오류 내용: {error}
   - 다음 실행: {next_execution}"""
+                    
+                    # 에러 상세 정보 수집
+                    error_details.append({
+                        "asset": asset,
+                        "error_code": error_code,
+                        "error": error,
+                        "amount": amount_krw
+                    })
+            
+            # 에러 발생 시 문제 해결 방안 추가
+            if error_details:
+                message += "\n\n🔧 **문제 해결 방안**:"
+                
+                for error_detail in error_details:
+                    asset = error_detail["asset"]
+                    error_code = error_detail["error_code"]
+                    amount = error_detail["amount"]
+                    
+                    if error_code == "103":  # Lack of Balance
+                        message += f"""
+• **{asset} 잔액 부족 (103)**:
+  - 현재 보유량을 확인하여 매도 가능한 수량인지 점검
+  - 다른 주문이 진행 중인지 확인
+  - 다음 실행 시 자동으로 조정된 수량으로 재시도"""
+                        
+                    elif error_code == "307":  # 최대 주문 금액 초과
+                        message += f"""
+• **{asset} 최대 주문 금액 초과 (307)**:
+  - 한 번에 거래 가능한 최대 금액: {amount/2:,.0f} KRW (추정)
+  - 다음 실행 시 자동으로 크기가 조정되어 재시도
+  - 필요시 TWAP 분할 횟수를 늘려서 주문 크기 축소 고려"""
+                        
+                    elif error_code == "405":  # 최소 주문 금액 미달
+                        message += f"""
+• **{asset} 최소 주문 금액 미달 (405)**:
+  - 코인원 최소 주문 금액 미달로 거래 불가
+  - 남은 금액이 너무 적어 마지막 슬라이스 실행 어려움"""
+                        
+                    else:
+                        message += f"""
+• **{asset} 기타 오류 ({error_code})**:
+  - 일시적 네트워크 문제 또는 거래소 시스템 이슈
+  - 자동 재시도 후에도 지속될 경우 수동 확인 필요"""
+                
+                message += "\n\n💡 **자동 대응**: 시스템이 자동으로 주문 크기를 조정하고 재시도합니다."
             
             if remaining_count > 0:
                 message += f"\n\n⏳ {remaining_count}개 주문이 계속 실행 중입니다."
-            else:
+            elif completed_count > 0:
                 message += "\n\n🎉 모든 TWAP 주문이 완료되었습니다!"
             
-            self.alert_system.send_info_alert(
+            # 성공/실패 비율 표시
+            if processed_count > 0:
+                success_rate = (success_count / processed_count) * 100
+                message += f"\n\n📊 **이번 실행 성공률**: {success_rate:.1f}% ({success_count}/{processed_count})"
+            
+            # 에러 발생 시 경고 레벨로, 정상 시 정보 레벨로 알림
+            alert_type = "warning" if has_errors else "info"
+            
+            self.alert_system.send_alert(
                 "TWAP 주문 실행 완료",
                 message,
-                "twap_execution"
+                alert_type
             )
             
         except Exception as e:

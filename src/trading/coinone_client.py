@@ -392,15 +392,170 @@ class CoinoneClient:
             if response.get("result") == "success":
                 order_id = response.get("order_id", "unknown")
                 logger.info(f"✅ 주문 성공: {side} {amount} {currency} (주문ID: {order_id})")
+                return {"success": True, "order_id": order_id, "response": response}
             else:
                 error_code = response.get("error_code", "unknown")
+                error_msg = response.get("error_msg", "unknown error")
                 logger.error(f"❌ 주문 실패: {response}")
+                return {"success": False, "error_code": error_code, "error_msg": error_msg, "response": response}
                 
-            return response
-            
         except Exception as e:
             logger.error(f"주문 실행 실패: {e}")
-            raise
+            return {"success": False, "error": str(e)}
+
+    def place_safe_order(
+        self,
+        currency: str,
+        side: str,
+        amount: float,
+        price: Optional[float] = None,
+        amount_in_krw: bool = False,
+        max_retries: int = 3
+    ) -> Dict:
+        """
+        안전한 주문 실행 (잔액 확인, 한도 검증, 자동 재시도)
+        
+        Args:
+            currency: 거래할 코인
+            side: 매수/매도 ("buy" or "sell")
+            amount: 주문 수량
+            price: 지정가 (None인 경우 시장가)
+            amount_in_krw: True이면 amount를 KRW 금액으로 처리
+            max_retries: 최대 재시도 횟수
+            
+        Returns:
+            주문 결과 딕셔너리
+        """
+        try:
+            original_amount = amount
+            
+            # 1. 사전 검증 - 잔액 확인
+            if not self._validate_balance(currency, side, amount, amount_in_krw):
+                return {"success": False, "error": "잔액 부족"}
+            
+            # 2. 주문 크기 조정 (거래소 한도 고려)
+            adjusted_amount = self._adjust_order_size(currency, side, amount, amount_in_krw)
+            if adjusted_amount != original_amount:
+                logger.info(f"주문 크기 조정: {original_amount} → {adjusted_amount}")
+                amount = adjusted_amount
+            
+            # 3. 주문 실행 및 재시도
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"안전한 주문 실행 (시도 {attempt + 1}/{max_retries}): {side} {amount} {currency}")
+                    
+                    result = self.place_order(currency, side, amount, price, amount_in_krw)
+                    
+                    if result.get("success"):
+                        return result
+                    
+                    # 에러 코드별 처리
+                    error_code = result.get("error_code")
+                    error_msg = result.get("error_msg", "")
+                    
+                    if error_code == "103":  # Lack of Balance
+                        logger.warning("잔액 부족 - 주문 크기를 90%로 줄여서 재시도")
+                        amount = amount * 0.9
+                        continue
+                        
+                    elif error_code == "307":  # 최대 주문 금액 초과
+                        logger.warning("최대 주문 금액 초과 - 주문 크기를 50%로 줄여서 재시도")
+                        amount = amount * 0.5
+                        continue
+                        
+                    elif error_code == "405":  # 최소 주문 금액 미달
+                        logger.error("최소 주문 금액 미달 - 재시도 중단")
+                        return result
+                        
+                    else:
+                        # 기타 에러는 한 번 더 시도
+                        logger.warning(f"주문 실패 ({error_code}): {error_msg} - 재시도")
+                        if attempt == max_retries - 1:
+                            return result
+                        continue
+                        
+                except Exception as e:
+                    logger.error(f"주문 실행 중 예외 (시도 {attempt + 1}): {e}")
+                    if attempt == max_retries - 1:
+                        return {"success": False, "error": str(e)}
+                    continue
+            
+            return {"success": False, "error": "최대 재시도 횟수 초과"}
+            
+        except Exception as e:
+            logger.error(f"안전한 주문 실행 실패: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _validate_balance(self, currency: str, side: str, amount: float, amount_in_krw: bool) -> bool:
+        """주문 전 잔액 검증"""
+        try:
+            balances = self.get_balances()
+            
+            if side.lower() == "sell":
+                # 매도 시 해당 코인 보유량 확인
+                available = balances.get(currency.upper(), 0)
+                if available < amount:
+                    logger.error(f"매도 잔액 부족: {currency} 보유량 {available}, 주문량 {amount}")
+                    return False
+                    
+            else:  # buy
+                # 매수 시 KRW 잔액 확인
+                krw_balance = balances.get("KRW", 0)
+                if amount_in_krw:
+                    required_krw = amount
+                else:
+                    # 암호화폐 수량을 KRW로 환산
+                    current_price = self.get_latest_price(currency)
+                    required_krw = amount * current_price
+                
+                if krw_balance < required_krw:
+                    logger.error(f"매수 잔액 부족: KRW 보유량 {krw_balance:,.0f}, 필요량 {required_krw:,.0f}")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"잔액 검증 실패: {e}")
+            return False
+    
+    def _adjust_order_size(self, currency: str, side: str, amount: float, amount_in_krw: bool) -> float:
+        """거래소 한도에 맞춰 주문 크기 조정"""
+        try:
+            # 코인원 일반적인 한도 (실제로는 API에서 가져와야 하지만 임시로 설정)
+            max_order_limits = {
+                "BTC": 10_000_000,  # KRW 기준 최대 주문 금액
+                "ETH": 10_000_000,
+                "XRP": 5_000_000,
+                "SOL": 5_000_000,
+                "ADA": 3_000_000,
+                "DOT": 3_000_000
+            }
+            
+            max_limit_krw = max_order_limits.get(currency.upper(), 1_000_000)
+            
+            if side.lower() == "sell":
+                # 매도 시 수량을 KRW 가치로 환산해서 체크
+                current_price = self.get_latest_price(currency)
+                order_value_krw = amount * current_price
+                
+                if order_value_krw > max_limit_krw:
+                    # 한도에 맞춰 수량 조정 (90% 안전 마진)
+                    adjusted_amount = (max_limit_krw * 0.9) / current_price
+                    logger.info(f"주문 크기 조정: {amount} → {adjusted_amount} {currency} (한도: {max_limit_krw:,.0f} KRW)")
+                    return adjusted_amount
+                    
+            else:  # buy
+                if amount_in_krw and amount > max_limit_krw:
+                    # KRW 주문 시 한도 초과 체크
+                    adjusted_amount = max_limit_krw * 0.9
+                    logger.info(f"매수 금액 조정: {amount:,.0f} → {adjusted_amount:,.0f} KRW")
+                    return adjusted_amount
+            
+            return amount
+            
+        except Exception as e:
+            logger.error(f"주문 크기 조정 실패: {e}")
+            return amount
 
     def get_order_status(self, order_id: str) -> Dict:
         """

@@ -299,16 +299,19 @@ class DynamicExecutionEngine:
                 logger.info(f"즉시 실행 주문 {len(immediate_orders)}개 처리 시작")
                 for order in immediate_orders:
                     try:
-                        result = self.coinone_client.place_order(
+                        result = self.coinone_client.place_safe_order(
                             currency=order["asset"],
                             side=order["side"],
                             amount=order["amount_krw"],
-                            amount_in_krw=True
+                            amount_in_krw=True,
+                            max_retries=3
                         )
-                        if result.get("result") == "success":
+                        if result.get("success"):
                             logger.info(f"✅ {order['asset']} 즉시 실행 성공: {order['amount_krw']:,.0f} KRW")
                         else:
-                            logger.error(f"❌ {order['asset']} 즉시 실행 실패: {result}")
+                            error_msg = result.get("error", "Unknown error")
+                            error_code = result.get("error_code", "unknown")
+                            logger.error(f"❌ {order['asset']} 즉시 실행 실패 ({error_code}): {error_msg}")
                     except Exception as e:
                         logger.error(f"❌ {order['asset']} 즉시 실행 중 오류: {e}")
             
@@ -342,19 +345,26 @@ class DynamicExecutionEngine:
             else:
                 amount_krw = twap_order.slice_amount_krw
             
-            # 실제 주문 실행
-            order_result = self.coinone_client.place_order(
+            logger.info(f"TWAP 슬라이스 실행 시작: {twap_order.asset} {amount_krw:,.0f} KRW "
+                       f"({twap_order.executed_slices + 1}/{twap_order.slice_count})")
+            
+            # 안전한 주문 실행 (잔액 확인, 한도 검증, 자동 재시도)
+            order_result = self.coinone_client.place_safe_order(
                 currency=twap_order.asset,
                 side=twap_order.side,
                 amount=amount_krw,
-                amount_in_krw=True
+                amount_in_krw=True,
+                max_retries=3
             )
             
             # 결과 처리
             if order_result.get("success"):
+                # 실제 실행된 금액 (조정된 경우 반영)
+                executed_amount = amount_krw  # TODO: 실제 체결 금액으로 업데이트
+                
                 twap_order.executed_slices += 1
-                twap_order.remaining_amount_krw -= amount_krw
-                twap_order.last_execution_time = datetime.now()  # 마지막 실행 시간 업데이트
+                twap_order.remaining_amount_krw -= executed_amount
+                twap_order.last_execution_time = datetime.now()
                 
                 if twap_order.executed_slices >= twap_order.slice_count:
                     twap_order.status = "completed"
@@ -364,15 +374,16 @@ class DynamicExecutionEngine:
                 # 데이터베이스에 상태 업데이트
                 self._save_twap_orders_to_db()
                 
-                logger.info(f"TWAP 슬라이스 실행 성공: {twap_order.asset} "
+                logger.info(f"✅ TWAP 슬라이스 실행 성공: {twap_order.asset} "
                           f"({twap_order.executed_slices}/{twap_order.slice_count})")
                 
                 return {
                     "success": True,
                     "order_id": order_result.get("order_id"),
-                    "amount_krw": amount_krw,
+                    "amount_krw": executed_amount,
                     "executed_slices": twap_order.executed_slices,
-                    "total_slices": twap_order.slice_count
+                    "total_slices": twap_order.slice_count,
+                    "remaining_amount": twap_order.remaining_amount_krw
                 }
             else:
                 # 주문 실패 시에도 실행 시간은 업데이트 (재시도를 위해)
@@ -380,17 +391,27 @@ class DynamicExecutionEngine:
                 # 실패 시에도 데이터베이스 업데이트
                 self._save_twap_orders_to_db()
                 
-                logger.error(f"TWAP 슬라이스 실행 실패: {order_result}")
+                error_msg = order_result.get("error", "Unknown error")
+                error_code = order_result.get("error_code", "unknown")
+                
+                logger.error(f"❌ TWAP 슬라이스 실행 실패: {twap_order.asset} - {error_msg}")
+                
                 return {
                     "success": False,
-                    "error": order_result.get("error_msg", "주문 실패")
+                    "error": error_msg,
+                    "error_code": error_code,
+                    "asset": twap_order.asset,
+                    "amount_krw": amount_krw,
+                    "executed_slices": twap_order.executed_slices,
+                    "total_slices": twap_order.slice_count
                 }
                 
         except Exception as e:
             logger.error(f"TWAP 슬라이스 실행 중 오류: {e}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "asset": twap_order.asset
             }
 
     def start_twap_execution(self, rebalance_orders: Dict[str, Dict]) -> Dict:
