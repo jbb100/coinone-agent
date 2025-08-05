@@ -71,6 +71,31 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
+                # TWAP 주문 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS twap_orders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        execution_id TEXT NOT NULL,  -- 실행 ID 추가
+                        asset TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        total_amount_krw REAL NOT NULL,
+                        total_quantity REAL NOT NULL,
+                        slice_count INTEGER NOT NULL,
+                        slice_amount_krw REAL NOT NULL,
+                        slice_quantity REAL NOT NULL,
+                        executed_slices INTEGER DEFAULT 0,
+                        remaining_amount_krw REAL NOT NULL,
+                        remaining_quantity REAL NOT NULL,
+                        status TEXT NOT NULL,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT NOT NULL,
+                        last_execution_time TEXT,
+                        market_season TEXT,
+                        target_allocation TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
                 # TWAP 실행 테이블
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS twap_executions (

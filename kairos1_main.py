@@ -207,7 +207,8 @@ class KairosSystem:
             # 동적 실행 엔진
             self.execution_engine = DynamicExecutionEngine(
                 coinone_client=self.coinone_client,
-                db_manager=self.db_manager
+                db_manager=self.db_manager,
+                rebalancer=self.rebalancer  # Add rebalancer instance
             )
             
             logger.info("모든 컴포넌트 초기화 완료")

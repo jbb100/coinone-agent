@@ -98,6 +98,7 @@ class DynamicExecutionEngine:
         self, 
         coinone_client: CoinoneClient,
         db_manager: DatabaseManager,
+        rebalancer=None,  # Add rebalancer parameter
         atr_period: int = 14,
         atr_threshold: float = 0.05
     ):
@@ -105,11 +106,13 @@ class DynamicExecutionEngine:
         Args:
             coinone_client: 코인원 API 클라이언트
             db_manager: 데이터베이스 매니저
+            rebalancer: 리밸런서 인스턴스 (선택적)
             atr_period: ATR 계산 기간 (기본값: 14일)
             atr_threshold: 변동성 임계값 (기본값: 5%)
         """
         self.coinone_client = coinone_client
         self.db_manager = db_manager
+        self.rebalancer = rebalancer  # Store rebalancer instance
         self.atr_period = atr_period
         self.atr_threshold = atr_threshold
         
@@ -299,37 +302,53 @@ class DynamicExecutionEngine:
             logger.error(f"TWAP 주문 생성 실패: {e}")
             return []
     
-    def execute_twap_slice(self, twap_order: TWAPOrder) -> Dict:
-        """
-        TWAP 주문의 단일 슬라이스 실행
-        
-        Args:
-            twap_order: TWAP 주문 정보
-            
-        Returns:
-            실행 결과
-        """
+    def execute_twap_slice(self, order: TWAPOrder) -> Dict:
+        """TWAP 슬라이스 실행"""
         try:
+            logger.info(f"TWAP 슬라이스 실행 시작: {order.asset} {order.slice_amount_krw:,.0f} KRW ({order.executed_slices + 1}/{order.slice_count})")
+            
+            # 잔고 확인 및 주문 크기 조정
+            if order.side == "buy":
+                balance = self.coinone_client.get_balances().get("KRW", 0)
+                if balance < order.slice_amount_krw:
+                    adjusted_amount = min(balance * 0.99, order.slice_amount_krw)  # 1% 마진
+                    if adjusted_amount < 1000:  # 최소 주문 금액
+                        logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset} (실행 중단)")
+                        order.status = "failed"
+                        return {"success": False, "error": "insufficient_balance"}
+                    logger.warning(f"잔고 부족으로 주문 크기 조정: {order.slice_amount_krw:,.0f} → {adjusted_amount:,.0f} KRW")
+                    order.slice_amount_krw = adjusted_amount
+            else:  # sell
+                balance = self.coinone_client.get_balances().get(order.asset, 0)
+                if balance < order.slice_quantity:
+                    adjusted_quantity = min(balance * 0.99, order.slice_quantity)
+                    if adjusted_quantity * self.coinone_client.get_current_price(order.asset) < 1000:
+                        logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset} (실행 중단)")
+                        order.status = "failed"
+                        return {"success": False, "error": "insufficient_balance"}
+                    logger.warning(f"잔고 부족으로 주문 수량 조정: {order.slice_quantity} → {adjusted_quantity} {order.asset}")
+                    order.slice_quantity = adjusted_quantity
+            
             # 실행할 슬라이스 크기 계산
-            if twap_order.executed_slices >= twap_order.slice_count:
+            if order.executed_slices >= order.slice_count:
                 return {
                     "success": False,
                     "error": "모든 슬라이스 실행 완료"
                 }
             
             # 마지막 슬라이스인 경우 남은 전체 수량 실행
-            if twap_order.executed_slices == twap_order.slice_count - 1:
-                amount_krw = twap_order.remaining_amount_krw
+            if order.executed_slices == order.slice_count - 1:
+                amount_krw = order.remaining_amount_krw
             else:
-                amount_krw = twap_order.slice_amount_krw
+                amount_krw = order.slice_amount_krw
             
-            logger.info(f"TWAP 슬라이스 실행 시작: {twap_order.asset} {amount_krw:,.0f} KRW "
-                       f"({twap_order.executed_slices + 1}/{twap_order.slice_count})")
+            logger.info(f"TWAP 슬라이스 실행 시작: {order.asset} {amount_krw:,.0f} KRW "
+                       f"({order.executed_slices + 1}/{order.slice_count})")
             
             # 안전한 주문 실행 (잔액 확인, 한도 검증, 자동 재시도)
             order_result = self.coinone_client.place_safe_order(
-                currency=twap_order.asset,
-                side=twap_order.side,
+                currency=order.asset,
+                side=order.side,
                 amount=amount_krw,
                 amount_in_krw=True,
                 max_retries=3
@@ -342,61 +361,61 @@ class DynamicExecutionEngine:
                 
                 # 거래소 주문 ID 추가
                 order_id = order_result.get("order_id")
-                if order_id and order_id not in twap_order.exchange_order_ids:
-                    twap_order.exchange_order_ids.append(order_id)
+                if order_id and order_id not in order.exchange_order_ids:
+                    order.exchange_order_ids.append(order_id)
                 
-                twap_order.executed_slices += 1
-                twap_order.remaining_amount_krw -= executed_amount
-                twap_order.last_execution_time = datetime.now()
+                order.executed_slices += 1
+                order.remaining_amount_krw -= executed_amount
+                order.last_execution_time = datetime.now()
                 
-                if twap_order.executed_slices >= twap_order.slice_count:
-                    twap_order.status = "completed"
+                if order.executed_slices >= order.slice_count:
+                    order.status = "completed"
                 else:
-                    twap_order.status = "executing"
+                    order.status = "executing"
                 
                 # 데이터베이스에 상태 업데이트
                 self.db_manager.update_twap_orders_status(self.current_execution_id, self.active_twap_orders)
                 
-                logger.info(f"✅ TWAP 슬라이스 실행 성공: {twap_order.asset} "
-                          f"({twap_order.executed_slices}/{twap_order.slice_count})")
+                logger.info(f"✅ TWAP 슬라이스 실행 성공: {order.asset} "
+                          f"({order.executed_slices}/{order.slice_count})")
                 
                 return {
                     "success": True,
                     "order_id": order_result.get("order_id"),
                     "amount_krw": executed_amount,
-                    "executed_slices": twap_order.executed_slices,
-                    "total_slices": twap_order.slice_count,
-                    "remaining_amount": twap_order.remaining_amount_krw
+                    "executed_slices": order.executed_slices,
+                    "total_slices": order.slice_count,
+                    "remaining_amount": order.remaining_amount_krw
                 }
             else:
                 # 주문 실패 시 처리
-                twap_order.last_execution_time = datetime.now()
+                order.last_execution_time = datetime.now()
                 error_msg = order_result.get("error", "Unknown error")
                 error_code = order_result.get("error_code", "unknown")
                 
                 # 잔고 부족 등 치명적인 오류의 경우 주문을 실패 상태로 마킹
                 if "잔고" in error_msg or "잔액" in error_msg or "insufficient" in error_msg.lower():
-                    twap_order.status = "failed"
-                    logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {twap_order.asset} (실행 중단)")
+                    order.status = "failed"
+                    logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset} (실행 중단)")
                     # 데이터베이스에 실패 상태 저장
                     self.db_manager.update_twap_orders_status(self.current_execution_id, self.active_twap_orders)
                 else:
                     # 일시적인 오류의 경우 계속 재시도
-                    logger.warning(f"⚠️ TWAP 슬라이스 일시 실패 (재시도 예정): {twap_order.asset} - {error_msg}")
+                    logger.warning(f"⚠️ TWAP 슬라이스 일시 실패 (재시도 예정): {order.asset} - {error_msg}")
                     # 실패 시에도 데이터베이스 업데이트 (재시도를 위해)
                     self.db_manager.update_twap_orders_status(self.current_execution_id, self.active_twap_orders)
                 
-                logger.error(f"❌ TWAP 슬라이스 실행 실패: {twap_order.asset} - {error_msg}")
+                logger.error(f"❌ TWAP 슬라이스 실행 실패: {order.asset} - {error_msg}")
                 
                 return {
                     "success": False,
                     "error": error_msg,
                     "error_code": error_code,
-                    "asset": twap_order.asset,
+                    "asset": order.asset,
                     "amount_krw": amount_krw,
-                    "executed_slices": twap_order.executed_slices,
-                    "total_slices": twap_order.slice_count,
-                    "is_fatal": twap_order.status == "failed"
+                    "executed_slices": order.executed_slices,
+                    "total_slices": order.slice_count,
+                    "is_fatal": order.status == "failed"
                 }
                 
         except Exception as e:
@@ -404,7 +423,7 @@ class DynamicExecutionEngine:
             return {
                 "success": False,
                 "error": str(e),
-                "asset": twap_order.asset
+                "asset": order.asset
             }
 
     def start_twap_execution(self, rebalance_orders: Dict[str, Dict], market_season: str = None, target_allocation: Dict[str, float] = None) -> Dict:
