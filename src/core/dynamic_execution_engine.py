@@ -666,111 +666,46 @@ class DynamicExecutionEngine:
     
     def _check_market_condition_change(self) -> bool:
         """
-        시장 상황 변화 체크 (개선된 버전)
+        시장 상황 변화 체크
+        
+        시장 계절 변화와 포트폴리오 밸런스를 체크하여 
+        리밸런싱이 필요한지 판단합니다.
         
         Returns:
-            시장 상황이 변경되었는지 여부
+            시장 상황 변화 여부
         """
         try:
-            if not self.active_twap_orders:
-                return False
-            
-            # 기존 TWAP 주문의 시장 계절과 목표 배분 가져오기
-            first_order = self.active_twap_orders[0]
-            original_market_season = first_order.market_season
-            original_allocation = first_order.target_allocation
-            
-            # 쿨다운 체크 - 최근 리밸런싱 체크 후 최소 30분 대기
-            cooldown_minutes = 30
-            if first_order.last_rebalance_check:
-                time_since_last_check = datetime.now() - first_order.last_rebalance_check
-                if time_since_last_check.total_seconds() < cooldown_minutes * 60:
-                    remaining_minutes = cooldown_minutes - (time_since_last_check.total_seconds() / 60)
-                    logger.debug(f"리밸런싱 쿨다운 중: {remaining_minutes:.1f}분 남음")
-                    return False
-            
-            # 현재 시장 상황 분석
+            # 현재 시장 상황 조회
             current_market_season, current_allocation = self._get_current_market_condition()
             
-            # 현재 실제 포트폴리오 상태 조회 (부분 실행된 주문 반영)
-            try:
-                current_portfolio = self.coinone_client.get_portfolio_value()
-                current_weights = self._calculate_current_weights(current_portfolio)
-            except Exception as e:
-                logger.error(f"현재 포트폴리오 조회 실패: {e}")
-                return False
+            # 포트폴리오 건전성 체크
+            portfolio_metrics = self.rebalancer.portfolio_manager.get_portfolio_metrics(
+                self.coinone_client.get_portfolio_value()
+            )
+            is_balanced = portfolio_metrics["portfolio_health"]["is_balanced"]
             
-            # 시장 계절 변화 체크
-            season_changed = original_market_season != current_market_season
-            if season_changed:
-                logger.warning(f"🔄 시장 계절 변화: {original_market_season} → {current_market_season}")
-            
-            # 목표 배분 비율의 유의미한 변화 체크
-            allocation_changed = False
-            significant_threshold = 0.03  # 3% 이상 차이
-            min_absolute_change = 20000   # 최소 2만원 이상 차이
-            
-            if original_allocation and current_allocation and current_weights:
-                total_value = current_portfolio.get("total_krw", 0)
+            for twap_order in self.active_twap_orders:
+                # 시장 계절 변화 체크
+                if current_market_season != twap_order.market_season:
+                    logger.warning(f"시장 계절 변화 감지: {twap_order.market_season} -> {current_market_season}")
+                    return True
                 
-                for asset, original_weight in original_allocation.items():
-                    if asset in ["crypto", "krw"]:  # 상위 레벨 배분만 체크
-                        continue
-                        
-                    current_target_weight = current_allocation.get(asset, 0)
-                    current_actual_weight = current_weights.get(asset, 0)
+                # 포트폴리오 밸런스 체크
+                if not is_balanced:
+                    current_crypto_weight = portfolio_metrics["weights"]["crypto_total"]
+                    target_crypto_weight = twap_order.target_allocation.get("crypto", 0.5)
+                    weight_diff = abs(current_crypto_weight - target_crypto_weight)
                     
-                    # 목표 비중 변화
-                    target_weight_change = abs(original_weight - current_target_weight)
-                    
-                    # 현재 실제 비중과 새로운 목표 비중의 차이
-                    actual_vs_new_target = abs(current_actual_weight - current_target_weight)
-                    
-                    # 절대 금액으로 환산
-                    target_change_krw = target_weight_change * total_value
-                    actual_vs_target_krw = actual_vs_new_target * total_value
-                    
-                    # 유의미한 변화 조건:
-                    # 1. 목표 비중이 3% 이상 변했거나
-                    # 2. 현재 실제 비중과 새 목표 비중의 차이가 3% 이상이면서 2만원 이상
-                    if (target_weight_change > significant_threshold or 
-                        (actual_vs_new_target > significant_threshold and actual_vs_target_krw > min_absolute_change)):
-                        
-                        logger.warning(f"📊 {asset} 배분 변화 감지:")
-                        logger.warning(f"  목표 비중 변화: {original_weight:.1%} → {current_target_weight:.1%} (차이: {target_weight_change:.1%})")
-                        logger.warning(f"  현재 실제: {current_actual_weight:.1%}, 새 목표: {current_target_weight:.1%} (차이: {actual_vs_new_target:.1%})")
-                        logger.warning(f"  금액 환산: {actual_vs_target_krw:,.0f} KRW")
-                        allocation_changed = True
-                        break
+                    # 5% 이상 차이나면 리밸런싱 필요
+                    if weight_diff > 0.05:
+                        logger.warning(
+                            f"포트폴리오 밸런스 깨짐 감지: "
+                            f"현재 암호화폐 비중 {current_crypto_weight:.1%}, "
+                            f"목표 비중 {target_crypto_weight:.1%}"
+                        )
+                        return True
             
-            # TWAP 주문이 너무 오래 실행 중인지 체크 (24시간 초과)
-            max_execution_hours = 24
-            execution_timeout = False
-            if first_order.created_at:
-                execution_duration = datetime.now() - first_order.created_at
-                if execution_duration.total_seconds() > max_execution_hours * 3600:
-                    logger.warning(f"⏰ TWAP 실행 시간 초과: {execution_duration.total_seconds() / 3600:.1f}시간")
-                    execution_timeout = True
-            
-            # 리밸런싱 체크 시간 업데이트
-            for order in self.active_twap_orders:
-                order.last_rebalance_check = datetime.now()
-            
-            # 변화 감지 결과
-            needs_rebalancing = season_changed or allocation_changed or execution_timeout
-            
-            if needs_rebalancing:
-                change_reasons = []
-                if season_changed:
-                    change_reasons.append("시장 계절 변화")
-                if allocation_changed:
-                    change_reasons.append("목표 배분 변화")
-                if execution_timeout:
-                    change_reasons.append("실행 시간 초과")
-                
-                logger.warning(f"🚨 리밸런싱 필요: {', '.join(change_reasons)}")
-            
-            return needs_rebalancing
+            return False
             
         except Exception as e:
             logger.error(f"시장 상황 체크 실패: {e}")
