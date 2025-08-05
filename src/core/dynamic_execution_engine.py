@@ -295,7 +295,7 @@ class DynamicExecutionEngine:
                 # 수량 계산
                 if side == "sell":
                     # 매도 시: 현재가로 수량 재계산
-                    current_price = self.coinone_client.get_ticker_price(asset)
+                    current_price = self.coinone_client.get_latest_price(asset)
                     if not current_price:
                         logger.error(f"{asset} 현재가 조회 실패 - 주문 생성 건너뜀")
                         continue
