@@ -421,13 +421,22 @@ class DynamicExecutionEngine:
                     "remaining_amount": twap_order.remaining_amount_krw
                 }
             else:
-                # 주문 실패 시에도 실행 시간은 업데이트 (재시도를 위해)
+                # 주문 실패 시 처리
                 twap_order.last_execution_time = datetime.now()
-                # 실패 시에도 데이터베이스 업데이트
-                self._save_twap_orders_to_db()
-                
                 error_msg = order_result.get("error", "Unknown error")
                 error_code = order_result.get("error_code", "unknown")
+                
+                # 잔고 부족 등 치명적인 오류의 경우 주문을 실패 상태로 마킹
+                if "잔고" in error_msg or "잔액" in error_msg or "insufficient" in error_msg.lower():
+                    twap_order.status = "failed"
+                    logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {twap_order.asset} (실행 중단)")
+                    # 데이터베이스에 실패 상태 저장
+                    self._save_twap_orders_to_db()
+                else:
+                    # 일시적인 오류의 경우 계속 재시도
+                    logger.warning(f"⚠️ TWAP 슬라이스 일시 실패 (재시도 예정): {twap_order.asset} - {error_msg}")
+                    # 실패 시에도 데이터베이스 업데이트 (재시도를 위해)
+                    self._save_twap_orders_to_db()
                 
                 logger.error(f"❌ TWAP 슬라이스 실행 실패: {twap_order.asset} - {error_msg}")
                 
@@ -438,7 +447,8 @@ class DynamicExecutionEngine:
                     "asset": twap_order.asset,
                     "amount_krw": amount_krw,
                     "executed_slices": twap_order.executed_slices,
-                    "total_slices": twap_order.slice_count
+                    "total_slices": twap_order.slice_count,
+                    "is_fatal": twap_order.status == "failed"
                 }
                 
         except Exception as e:
@@ -460,6 +470,31 @@ class DynamicExecutionEngine:
             실행 계획 정보
         """
         try:
+            # 기존 활성 TWAP 주문들 정리 (새로운 실행 시작 전)
+            if self.active_twap_orders:
+                logger.warning(f"새로운 TWAP 실행 시작 - 기존 활성 주문 {len(self.active_twap_orders)}개 정리")
+                completed_orders = [order for order in self.active_twap_orders if order.status == "completed"]
+                pending_orders = [order for order in self.active_twap_orders if order.status in ["pending", "executing"]]
+                
+                if completed_orders:
+                    logger.info(f"완료된 주문 {len(completed_orders)}개 제거")
+                    
+                if pending_orders:
+                    logger.warning(f"미완료 주문 {len(pending_orders)}개 강제 정리 - 새로운 리밸런싱 시작")
+                    for order in pending_orders:
+                        logger.warning(f"  - {order.asset}: {order.executed_slices}/{order.slice_count} 슬라이스 (강제 중단)")
+                
+                # 기존 실행을 완료로 마킹
+                if self.current_execution_id:
+                    try:
+                        self.db_manager.update_twap_orders_status(self.current_execution_id, self.active_twap_orders)
+                    except Exception as e:
+                        logger.error(f"기존 TWAP 실행 상태 업데이트 실패: {e}")
+                
+                # 활성 주문 리스트 초기화
+                self.active_twap_orders = []
+                self.current_execution_id = None
+                
             # 1. BTC 시장 데이터 수집 (ATR 계산용)
             try:
                 import yfinance as yf
@@ -480,7 +515,7 @@ class DynamicExecutionEngine:
                     "immediate_orders": len(rebalance_orders)
                 }
             
-            # 3. 활성 TWAP 주문에 추가
+            # 3. 활성 TWAP 주문에 추가 (이제 빈 리스트에 추가)
             self.active_twap_orders.extend(twap_orders)
             
             # 4. 첫 번째 슬라이스 즉시 실행
@@ -586,11 +621,23 @@ class DynamicExecutionEngine:
                     remaining_minutes = (next_execution_time - current_time).total_seconds() / 60
                     logger.info(f"{twap_order.asset}: 다음 실행까지 {remaining_minutes:.1f}분 남음 (예정: {next_execution_time.strftime('%H:%M:%S')})")
             
-            # 완료된 주문들 제거
+            # 완료된 주문들과 실패한 주문들 제거
+            orders_to_remove = []
             for completed_order in completed_orders:
                 if completed_order in self.active_twap_orders:
-                    self.active_twap_orders.remove(completed_order)
+                    orders_to_remove.append(completed_order)
                     logger.info(f"TWAP 주문 완료: {completed_order.asset}")
+            
+            # 실패한 주문들도 제거
+            failed_orders = [order for order in self.active_twap_orders if order.status == "failed"]
+            for failed_order in failed_orders:
+                if failed_order in self.active_twap_orders:
+                    orders_to_remove.append(failed_order)
+                    logger.warning(f"TWAP 주문 실패로 제거: {failed_order.asset} (잔고 부족 등)")
+            
+            # 한 번에 제거
+            for order in orders_to_remove:
+                self.active_twap_orders.remove(order)
             
             # 데이터베이스에 활성 TWAP 주문 상태 업데이트
             self._save_twap_orders_to_db()

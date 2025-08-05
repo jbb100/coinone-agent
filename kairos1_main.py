@@ -10,7 +10,7 @@ import os
 import argparse
 import asyncio
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import signal
 from loguru import logger
 
@@ -549,21 +549,60 @@ class KairosSystem:
             logger.error(f"TWAP 실행 알림 실패: {e}")
     
     def get_twap_status(self) -> dict:
-        """TWAP 실행 상태 조회"""
+        """TWAP 주문 상태 상세 조회"""
         try:
-            logger.info("TWAP 상태 조회")
+            active_orders = self.execution_engine.active_twap_orders
+            current_execution_id = self.execution_engine.current_execution_id
             
-            status = self.execution_engine.get_twap_status()
+            if not active_orders:
+                return {
+                    "success": True,
+                    "message": "활성 TWAP 주문이 없습니다",
+                    "active_orders": [],
+                    "execution_id": current_execution_id,
+                    "total_orders": 0
+                }
             
-            # TWAP 상태를 Slack으로도 전송
-            if "error" not in status and status.get("active_orders", 0) > 0:
-                self._send_twap_status_notification(status)
+            orders_detail = []
+            for order in active_orders:
+                # 다음 실행 시간 계산
+                if order.last_execution_time:
+                    next_execution = order.last_execution_time + timedelta(minutes=order.slice_interval_minutes)
+                else:
+                    next_execution = order.start_time
+                
+                remaining_minutes = (next_execution - datetime.now()).total_seconds() / 60
+                
+                orders_detail.append({
+                    "asset": order.asset,
+                    "side": order.side,
+                    "status": order.status,
+                    "progress": f"{order.executed_slices}/{order.slice_count}",
+                    "remaining_amount_krw": order.remaining_amount_krw,
+                    "next_execution": next_execution.strftime("%Y-%m-%d %H:%M:%S"),
+                    "minutes_until_next": max(0, remaining_minutes),
+                    "is_overdue": remaining_minutes < 0
+                })
             
-            return status
+            status_summary = {
+                "pending": len([o for o in active_orders if o.status == "pending"]),
+                "executing": len([o for o in active_orders if o.status == "executing"]),
+                "completed": len([o for o in active_orders if o.status == "completed"]),
+                "failed": len([o for o in active_orders if o.status == "failed"])
+            }
+            
+            return {
+                "success": True,
+                "execution_id": current_execution_id,
+                "total_orders": len(active_orders),
+                "status_summary": status_summary,
+                "orders_detail": orders_detail,
+                "next_process_time": min([datetime.fromisoformat(o["next_execution"]) for o in orders_detail if not o["is_overdue"]], default=None)
+            }
             
         except Exception as e:
             logger.error(f"TWAP 상태 조회 실패: {e}")
-            return {"error": str(e)}
+            return {"success": False, "error": str(e)}
     
     def _send_twap_status_notification(self, status: dict):
         """TWAP 상태 알림"""
@@ -842,7 +881,8 @@ def main():
     parser.add_argument("--quarterly-rebalance", action="store_true", help="분기별 리밸런싱 실행")
     parser.add_argument("--quarterly-rebalance-twap", action="store_true", help="TWAP 방식 분기별 리밸런싱 실행")
     parser.add_argument("--process-twap", action="store_true", help="대기 중인 TWAP 주문 처리")
-    parser.add_argument("--twap-status", action="store_true", help="TWAP 실행 상태 조회")
+    parser.add_argument("--twap-status", action="store_true", help="TWAP 주문 상태 조회")
+    parser.add_argument("--clear-failed-twap", action="store_true", help="실패한 TWAP 주문 정리")
     parser.add_argument("--performance-report", type=int, metavar="DAYS", help="성과 보고서 생성 (기간 일수)")
     parser.add_argument("--system-status", action="store_true", help="시스템 상태 조회")
     parser.add_argument("--dry-run", action="store_true", help="실제 거래 없이 시뮬레이션")
@@ -912,19 +952,68 @@ def main():
                 print("❌ TWAP 주문 처리 실패")
                 
         elif args.twap_status:
-            print("📊 TWAP 실행 상태 조회...")
-            status = kairos.get_twap_status()
-            if "error" not in status:
-                active_orders = status.get("active_orders", 0)
-                print(f"✅ TWAP 상태:")
-                print(f"활성 주문 수: {active_orders}개")
-                for order in status.get("orders", []):
-                    print(f"  • {order['asset']}: {order['progress']} "
-                          f"({order['executed_slices']}/{order['total_slices']} 슬라이스)")
-                    print(f"    남은 금액: {order['remaining_amount_krw']:,.0f} KRW")
-                    print(f"    남은 시간: {order['remaining_time_hours']:.1f}시간")
+            print("📊 TWAP 주문 상태 조회...")
+            result = kairos.get_twap_status()
+            if result.get("success"):
+                total_orders = result.get("total_orders", 0)
+                if total_orders == 0:
+                    print("✅ 활성 TWAP 주문이 없습니다")
+                else:
+                    print(f"📈 활성 TWAP 주문: {total_orders}개")
+                    
+                    status_summary = result.get("status_summary", {})
+                    print(f"상태 요약:")
+                    print(f"  • 대기 중: {status_summary.get('pending', 0)}개")
+                    print(f"  • 실행 중: {status_summary.get('executing', 0)}개") 
+                    print(f"  • 완료: {status_summary.get('completed', 0)}개")
+                    print(f"  • 실패: {status_summary.get('failed', 0)}개")
+                    
+                    orders_detail = result.get("orders_detail", [])
+                    print(f"\n상세 정보:")
+                    for order in orders_detail:
+                        status_icon = {
+                            "pending": "⏳",
+                            "executing": "🔄", 
+                            "completed": "✅",
+                            "failed": "❌"
+                        }.get(order["status"], "❓")
+                        
+                        print(f"  {status_icon} {order['asset']} ({order['side']})")
+                        print(f"    진행률: {order['progress']}")
+                        print(f"    상태: {order['status']}")
+                        print(f"    남은 금액: {order['remaining_amount_krw']:,.0f} KRW")
+                        
+                        if order["status"] in ["pending", "executing"]:
+                            if order["is_overdue"]:
+                                print(f"    ⚠️ 실행 지연 중 (즉시 실행 예정)")
+                            else:
+                                print(f"    다음 실행: {order['next_execution']}")
+                                print(f"    남은 시간: {order['minutes_until_next']:.1f}분")
+                        print()
             else:
                 print("❌ TWAP 상태 조회 실패")
+                
+        elif args.clear_failed_twap:
+            print("🧹 실패한 TWAP 주문 정리...")
+            # 실패한 주문들을 강제로 정리하는 기능
+            try:
+                active_orders = kairos.execution_engine.active_twap_orders
+                failed_orders = [order for order in active_orders if order.status == "failed"]
+                
+                if not failed_orders:
+                    print("✅ 정리할 실패한 주문이 없습니다")
+                else:
+                    print(f"🗑️ 실패한 주문 {len(failed_orders)}개 정리 중...")
+                    for order in failed_orders:
+                        print(f"  • {order.asset}: {order.executed_slices}/{order.slice_count} 슬라이스")
+                        kairos.execution_engine.active_twap_orders.remove(order)
+                    
+                    # 데이터베이스 업데이트
+                    kairos.execution_engine._save_twap_orders_to_db()
+                    print("✅ 실패한 TWAP 주문 정리 완료")
+                    
+            except Exception as e:
+                print(f"❌ 실패한 TWAP 주문 정리 실패: {e}")
                 
         elif args.performance_report:
             print(f"📊 성과 보고서 생성... ({args.performance_report}일간)")
@@ -963,6 +1052,7 @@ def main():
             print("  --quarterly-rebalance-twap  : TWAP 방식 분기별 리밸런싱")
             print("  --process-twap              : 대기 중인 TWAP 주문 처리")
             print("  --twap-status               : TWAP 실행 상태 조회")
+            print("  --clear-failed-twap         : 실패한 TWAP 주문 정리")
             print("  --performance-report N      : N일간 성과 보고서")
             print("  --system-status             : 시스템 상태 조회")
             print("  --test-alerts               : 알림 시스템 테스트")

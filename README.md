@@ -101,8 +101,11 @@ python kairos1_main.py --quarterly-rebalance-twap
 # 대기 중인 TWAP 주문 처리
 python kairos1_main.py --process-twap
 
-# TWAP 실행 상태 조회
+# TWAP 주문 상태 조회
 python kairos1_main.py --twap-status
+
+# 실패한 TWAP 주문 정리
+python kairos1_main.py --clear-failed-twap
 
 # 성과 보고서 생성 (예: 최근 30일)
 python kairos1_main.py --performance-report 30
@@ -311,3 +314,28 @@ python kairos1_main.py --process-twap
 ---
 
 > **한 줄 요약**: "ATR로 시장 변동성을 측정하고, TWAP으로 시장 충격을 최소화하며, 200주 이동평균선 기준으로 ±5% 벗어날 때만 큰 포지션 변경을 시도한다." 
+
+### TWAP 관련 트러블슈팅
+
+**문제**: TWAP 주문이 완료되었는데 다시 주문이 들어가고 잔고 부족에서도 계속 실행됨
+
+**원인**:
+1. 새로운 분기별 리밸런싱 시작 시 기존 완료된 주문이 정리되지 않음
+2. 잔고 부족으로 실패한 주문이 계속 재시도됨
+
+**해결 방법**:
+```bash
+# 1. 현재 TWAP 상태 확인
+python kairos1_main.py --twap-status
+
+# 2. 실패한 주문들 정리
+python kairos1_main.py --clear-failed-twap
+
+# 3. 필요시 시스템 재시작으로 완전 초기화
+# (새로운 시작 시 완료된 주문은 자동으로 제외됨)
+```
+
+**예방**:
+- 분기별 리밸런싱은 정해진 스케줄에 따라 자동 실행하고 수동 실행은 최소화
+- 정기적으로 `--twap-status`로 상태 모니터링
+- 잔고 부족 등의 문제 발생 시 즉시 `--clear-failed-twap`로 정리 
