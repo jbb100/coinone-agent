@@ -310,47 +310,92 @@ class Rebalancer:
             key=lambda x: x[1]["priority"]
         )
         
+        # KRW 비율이 심각하게 낮은지 확인
+        current_portfolio = self.coinone_client.get_portfolio_value()
+        total_value = current_portfolio.get("total_krw", 0)
+        krw_balance = current_portfolio.get("KRW", {}).get("amount_krw", 0)
+        krw_ratio = krw_balance / total_value if total_value > 0 else 0
+        
+        # KRW 비율이 1% 미만이면 매도 주문 우선 실행
+        if krw_ratio < 0.01:
+            logger.warning(f"KRW 비율이 심각하게 낮음: {krw_ratio:.1%}")
+            # 매도 주문을 먼저 처리하도록 재정렬
+            sorted_orders = sorted(
+                sorted_orders,
+                key=lambda x: 0 if x[1]["action"] == "sell" else 1
+            )
+        
         for asset, order_info in sorted_orders:
-            # KRW는 기본 통화이므로 직접 거래할 수 없음 (다른 자산 거래로 자동 조정)
-            if asset == "KRW":
-                logger.info(f"KRW: 기본 통화이므로 주문 건너뜀 (자동 조정됨)")
-                continue
-                
             if not validation_results.get(asset, False):
                 logger.warning(f"{asset}: 검증 실패로 건너뜀")
                 continue
             
             try:
-                # 매도 주문 먼저 실행 (현금 확보)
-                if order_info["action"] == "sell":
-                    order_result = self._execute_sell_order(asset, order_info)
-                else:
-                    # 디버깅: 매수 주문 정보 확인
-                    amount_krw = order_info["amount_diff_krw"]
-                    logger.info(f"=== {asset} 매수 주문 실행 ===")
-                    logger.info(f"  주문 금액: {amount_krw:,.0f} KRW")
-                    logger.info(f"  주문 정보: {order_info}")
-                    
-                    order_result = self._execute_buy_order(asset, order_info)
+                amount = abs(order_info["amount_diff_krw"])
+                side = order_info["action"]
                 
-                if order_result["success"]:
-                    executed_orders.append(order_result)
-                    logger.info(f"{asset} {order_info['action']} 주문 성공")
-                else:
-                    failed_orders.append(order_result)
-                    logger.error(f"{asset} {order_info['action']} 주문 실패")
-            
+                # 매도 주문 실행
+                if side == "sell":
+                    logger.info(f"{asset} 매도 주문 시작: {amount:,.0f} KRW")
+                    order_result = self.order_manager.place_market_order(
+                        asset, "sell", amount
+                    )
+                    if order_result.get("success"):
+                        executed_orders.append(order_result)
+                        logger.info(f"{asset} 매도 주문 성공")
+                    else:
+                        failed_orders.append({
+                            "asset": asset,
+                            "side": "sell",
+                            "amount": amount,
+                            "error": order_result.get("error")
+                        })
+                        logger.error(f"{asset} 매도 주문 실패: {order_result.get('error')}")
+                
+                # 매수 주문 실행 (KRW 잔고 확인 후)
+                elif side == "buy":
+                    # KRW 잔고 재확인
+                    current_krw = self.coinone_client.get_balances().get("KRW", 0)
+                    if current_krw < amount:
+                        logger.warning(f"{asset} 매수 주문 연기 - KRW 잔고 부족: {current_krw:,.0f} < {amount:,.0f}")
+                        failed_orders.append({
+                            "asset": asset,
+                            "side": "buy",
+                            "amount": amount,
+                            "error": "insufficient_krw",
+                            "retry_needed": True
+                        })
+                        continue
+                    
+                    logger.info(f"{asset} 매수 주문 시작: {amount:,.0f} KRW")
+                    order_result = self.order_manager.place_market_order(
+                        asset, "buy", amount
+                    )
+                    if order_result.get("success"):
+                        executed_orders.append(order_result)
+                        logger.info(f"{asset} 매수 주문 성공")
+                    else:
+                        failed_orders.append({
+                            "asset": asset,
+                            "side": "buy",
+                            "amount": amount,
+                            "error": order_result.get("error")
+                        })
+                        logger.error(f"{asset} 매수 주문 실패: {order_result.get('error')}")
+                
             except Exception as e:
-                error_result = {
+                logger.error(f"{asset} 주문 처리 중 오류 발생: {e}")
+                failed_orders.append({
                     "asset": asset,
-                    "action": order_info["action"],
-                    "error": str(e),
-                    "success": False
-                }
-                failed_orders.append(error_result)
-                logger.error(f"{asset} 주문 실행 중 오류: {e}")
+                    "side": order_info["action"],
+                    "amount": amount,
+                    "error": str(e)
+                })
         
-        return {"executed": executed_orders, "failed": failed_orders}
+        return {
+            "executed": executed_orders,
+            "failed": failed_orders
+        }
     
     def _execute_sell_order(self, asset: str, order_info: Dict) -> Dict:
         """
