@@ -417,45 +417,21 @@ class KairosSystem:
         try:
             logger.info("TWAP 주문 처리 시작")
             
-            # 1. 활성 TWAP 주문 확인
-            active_orders = self.execution_engine.active_twap_orders
-            if not active_orders:
-                logger.info("처리할 TWAP 주문이 없습니다")
-                return {"success": True, "message": "no_active_orders"}
-            
-            # 각 TWAP 주문 처리
-            results = []
-            for order in active_orders:
-                if order.status == "executing":
-                    # 다음 슬라이스 실행 시간인지 확인
-                    if self._is_next_slice_due(order):
-                        result = self.execution_engine.execute_twap_slice(order)
-                        results.append(result)
-                        
-                        # 실행 실패 시 상태 업데이트
-                        if not result.get("success"):
-                            error_type = result.get("error")
-                            if error_type in ["krw_ratio_too_low", "balance_ratio_invalid"]:
-                                # 다음 process_twap 호출에서 재조정되도록 표시
-                                return {
-                                    "success": False,
-                                    "error": error_type,
-                                    "message": result.get("message"),
-                                    "market_condition_changed": False,
-                                    "balance_invalid": True
-                                }
-            
-            # 5. 결과 반환
-            return {
-                "success": True,
-                "results": results,
-                "market_condition_changed": False, # 자동 리밸런싱 방지
-                "balance_invalid": False # 자동 리밸런싱 방지
-            }
-            
+            # 모든 주문 처리 로직은 DynamicExecutionEngine에 위임
+            # check_market_conditions=False로 설정하여 순수하게 주문 실행만 담당
+            return self.execution_engine.process_pending_twap_orders(check_market_conditions=False)
+
         except Exception as e:
             logger.error(f"TWAP 주문 처리 중 오류: {e}")
             return {"success": False, "error": str(e)}
+    
+    def _is_next_slice_due(self, order) -> bool:
+        """다음 슬라이스 실행 시간인지 확인"""
+        if not order.last_execution_time:
+            return False # 처음 실행된 주문은 다음 슬라이스가 없음
+            
+        next_execution_time = order.last_execution_time + timedelta(minutes=order.slice_interval_minutes)
+        return datetime.now() >= next_execution_time
     
     def _send_twap_execution_notification(self, execution_result: dict):
         """TWAP 실행 결과 알림"""
