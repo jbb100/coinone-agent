@@ -296,17 +296,8 @@ class DynamicExecutionEngine:
                 side = "buy" if amount_krw > 0 else "sell"
                 amount_krw = abs(amount_krw)
                 
-                # 수량 계산
-                if side == "sell":
-                    # 매도 시: 현재가로 수량 재계산
-                    current_price = self.coinone_client.get_latest_price(asset)
-                    if not current_price:
-                        logger.error(f"{asset} 현재가 조회 실패 - 주문 생성 건너뜀")
-                        continue
-                    quantity = amount_krw / current_price
-                else:
-                    # 매수 시: 수량은 0으로 설정 (거래소에서 금액으로 계산)
-                    quantity = 0
+                # 매수/매도 모두 금액(KRW) 기준으로 주문하므로 수량은 0으로 설정
+                quantity = 0
 
                 # 슬라이스당 금액이 최소 주문 금액을 만족하는지 확인하고 슬라이스 횟수 조정
                 local_slice_count = slice_count
@@ -327,7 +318,7 @@ class DynamicExecutionEngine:
                 
                 # 조정된 슬라이스 횟수로 슬라이스당 금액/수량 재계산
                 slice_amount = amount_krw / local_slice_count
-                slice_quantity = quantity / local_slice_count if quantity > 0 else 0
+                slice_quantity = 0
                 
                 # TWAP 주문 생성
                 twap_order = TWAPOrder(
@@ -415,7 +406,7 @@ class DynamicExecutionEngine:
                     }
             
             # 주문 실행
-            amount = order.slice_amount_krw if order.side == "buy" else order.slice_quantity
+            amount = order.slice_amount_krw
             order_result_obj = self.rebalancer.order_manager.submit_market_order(
                 currency=order.asset,
                 side=order.side,
