@@ -778,4 +778,25 @@ class DatabaseManager:
                 return None
         except Exception as e:
             logger.error(f"최신 활성 TWAP 실행 조회 실패: {e}")
-            return None 
+            return None
+
+    def update_twap_execution_plan(self, execution_id: str, twap_orders: List[Dict]) -> None:
+        """TWAP 실행 계획의 주문 상세 정보를 업데이트 (진행 상황 저장)"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # TWAPOrder 객체는 dataclasses.asdict를 사용하거나 to_dict 메서드를 구현해야 함
+                twap_orders_detail_json = json.dumps([serialize_for_json(o) for o in twap_orders])
+                
+                cursor.execute("""
+                    UPDATE twap_executions 
+                    SET twap_orders_detail = ?
+                    WHERE execution_id = ?
+                """, (twap_orders_detail_json, execution_id))
+                
+                conn.commit()
+                logger.info(f"TWAP 실행 계획 업데이트 완료: {execution_id}")
+        except Exception as e:
+            logger.error(f"TWAP 실행 계획 업데이트 실패: {e}")
+            raise 

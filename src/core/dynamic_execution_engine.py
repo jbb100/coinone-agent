@@ -277,6 +277,10 @@ class DynamicExecutionEngine:
             twap_orders = []
             
             for asset, order_info in rebalance_orders.items():
+                # KRW 주문은 생성하지 않음
+                if asset == "KRW":
+                    continue
+
                 amount_krw = order_info.get("amount_diff_krw", 0)
                 
                 # 최소 주문 금액 체크 (1만원)
@@ -659,7 +663,11 @@ class DynamicExecutionEngine:
                 self.active_twap_orders.remove(order)
             
             # 데이터베이스에 활성 TWAP 주문 상태 업데이트
-            self.db_manager.update_twap_orders_status(self.current_execution_id, self.active_twap_orders)
+            try:
+                orders_to_save = [o.to_dict() for o in self.active_twap_orders]
+                self.db_manager.update_twap_execution_plan(self.current_execution_id, orders_to_save)
+            except Exception as e:
+                logger.error(f"TWAP 주문 상태 DB 업데이트 실패: {e}")
 
             return {
                 "success": True,
