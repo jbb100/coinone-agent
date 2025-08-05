@@ -438,7 +438,7 @@ class KairosSystem:
             balance_invalid = weight_diff > 0.03
             
             # 시장 상황 변화나 밸런스 깨짐이 감지되면 주문 재조정
-            if market_condition_changed or balance_invalid:
+            if market_condition_changed:
                 reason = "시장 상황 변화" if market_condition_changed else "포트폴리오 밸런스 깨짐"
                 logger.warning(f"🔄 {reason}로 인한 기존 TWAP 중단 - 새로운 리밸런싱 시작")
                 
