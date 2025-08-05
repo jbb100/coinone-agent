@@ -147,8 +147,18 @@ class OrderManager:
                 logger.info(f"주문 제출 성공: {order_id}")
                 return order
             else:
-                logger.error(f"주문 제출 실패: {response}")
-                return None
+                error_msg = response.get('error_msg', 'Unknown error')
+                logger.error(f"주문 제출 실패: {error_msg} - {response}")
+                # 상세 오류를 포함하여 반환하도록 수정
+                failed_order = Order(
+                    order_id=f"failed_{currency}_{int(time.time())}",
+                    currency=currency,
+                    side=side,
+                    order_type="market",
+                    amount=amount
+                )
+                failed_order.update_status(OrderStatus.FAILED, error_message=error_msg)
+                return failed_order
                 
         except Exception as e:
             logger.error(f"주문 제출 중 오류: {e}")

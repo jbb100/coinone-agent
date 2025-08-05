@@ -292,10 +292,18 @@ class DynamicExecutionEngine:
                 side = "buy" if amount_krw > 0 else "sell"
                 amount_krw = abs(amount_krw)
                 
-                # 수량 계산 (매도 시에만 사용)
-                quantity = order_info.get("quantity_diff", 0)
-                quantity = abs(quantity) if side == "sell" else 0
-                
+                # 수량 계산
+                if side == "sell":
+                    # 매도 시: 현재가로 수량 재계산
+                    current_price = self.coinone_client.get_ticker_price(asset)
+                    if not current_price:
+                        logger.error(f"{asset} 현재가 조회 실패 - 주문 생성 건너뜀")
+                        continue
+                    quantity = amount_krw / current_price
+                else:
+                    # 매수 시: 수량은 0으로 설정 (거래소에서 금액으로 계산)
+                    quantity = 0
+
                 # 슬라이스당 금액/수량 계산
                 slice_amount = amount_krw / slice_count
                 slice_quantity = quantity / slice_count if quantity > 0 else 0
@@ -396,14 +404,15 @@ class DynamicExecutionEngine:
             # Order 객체를 딕셔너리로 변환
             if order_result_obj:
                 order_result = {
-                    "success": True,
+                    "success": order_result_obj.status != OrderStatus.FAILED,
                     "order_id": order_result_obj.order_id,
-                    "status": order_result_obj.status.value
+                    "status": order_result_obj.status.value,
+                    "error": order_result_obj.error_message if order_result_obj.status == OrderStatus.FAILED else None
                 }
             else:
                 order_result = {
                     "success": False,
-                    "error": "Order submission failed"
+                    "error": "Order submission returned None"
                 }
 
             if order_result.get("success"):
