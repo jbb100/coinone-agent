@@ -308,21 +308,51 @@ class DynamicExecutionEngine:
             return []
     
     def execute_twap_slice(self, order: TWAPOrder) -> Dict:
-        """TWAP 슬라이스 실행"""
-        try:
-            logger.info(f"TWAP 슬라이스 실행 시작: {order.asset} {order.slice_amount_krw:,.0f} KRW ({order.executed_slices + 1}/{order.slice_count})")
+        """
+        TWAP 주문의 한 슬라이스 실행
+        
+        Args:
+            order: TWAP 주문 정보
             
-            # 잔고 확인 및 주문 크기 조정
+        Returns:
+            실행 결과
+        """
+        try:
+            # 1. 포트폴리오 상태 확인
+            portfolio = self.coinone_client.get_portfolio_value()
+            portfolio_metrics = self.rebalancer.portfolio_manager.get_portfolio_metrics(portfolio)
+            
+            # 2. 포트폴리오 밸런스 체크
+            crypto_weight = portfolio_metrics["weights"]["crypto_total"]
+            target_crypto_weight = order.target_allocation.get("crypto", 0.5)
+            weight_diff = abs(crypto_weight - target_crypto_weight)
+            
+            # 3% 이상 차이나면 리밸런싱 필요
+            if weight_diff > 0.03:
+                logger.warning(
+                    f"포트폴리오 밸런스 깨짐 감지: "
+                    f"현재 암호화폐 비중 {crypto_weight:.1%}, "
+                    f"목표 비중 {target_crypto_weight:.1%}"
+                )
+                return {
+                    "success": False,
+                    "error": "balance_ratio_invalid",
+                    "message": "포트폴리오 밸런스가 목표 비중과 크게 차이납니다",
+                    "current_ratio": crypto_weight,
+                    "target_ratio": target_crypto_weight,
+                    "weight_diff": weight_diff
+                }
+            
+            # 주문 실행 전 잔고 확인
             if order.side == "buy":
                 balance = self.coinone_client.get_balances().get("KRW", 0)
                 if balance < order.slice_amount_krw:
-                    # 포트폴리오 상태 확인
-                    portfolio = self.coinone_client.get_portfolio_value()
+                    # KRW 비율 확인
                     total_value = portfolio.get("total_krw", 0)
                     krw_ratio = balance / total_value if total_value > 0 else 0
                     
-                    # KRW 비율이 1% 미만이면 리밸런싱 필요
-                    if krw_ratio < 0.01:
+                    # KRW 비율이 2% 미만이면 리밸런싱 필요
+                    if krw_ratio < 0.02:
                         logger.warning(f"KRW 비율 심각하게 낮음 ({krw_ratio:.1%}) - 리밸런싱 필요")
                         return {
                             "success": False,
@@ -347,7 +377,7 @@ class DynamicExecutionEngine:
             else:  # sell
                 balance = self.coinone_client.get_balances().get(order.asset, 0)
                 if balance < order.slice_quantity:
-                    logger.error(f"💥 TWAP 매도 주문 실패 - {order.asset} 잔고 부족")
+                    logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset}")
                     return {
                         "success": False,
                         "error": "insufficient_balance",
@@ -355,52 +385,44 @@ class DynamicExecutionEngine:
                     }
             
             # 주문 실행
-            try:
-                if order.side == "buy":
-                    order_result = self.coinone_client.place_safe_order(
-                        currency=order.asset,
-                        side="buy",
-                        amount=order.slice_amount_krw,
-                        amount_in_krw=True,
-                        max_retries=3
-                    )
-                else:
-                    order_result = self.coinone_client.place_safe_order(
-                        currency=order.asset,
-                        side="sell",
-                        amount=order.slice_quantity,
-                        amount_in_krw=False, # 매도는 수량 기준
-                        max_retries=3
-                    )
+            order_result = self.rebalancer.order_manager.place_order(
+                asset=order.asset,
+                side=order.side,
+                amount_krw=order.slice_amount_krw if order.side == "buy" else None,
+                quantity=None if order.side == "buy" else order.slice_quantity
+            )
+            
+            if order_result.get("success"):
+                # 주문 ID 저장
+                order.exchange_order_ids.append(order_result.get("order_id"))
+                order.executed_slices += 1
+                order.last_execution_time = datetime.now()
                 
-                if order_result.get("success"):
-                    # 주문 상태 업데이트
-                    order.executed_slices += 1
+                # 남은 수량 업데이트
+                if order.side == "buy":
                     order.remaining_amount_krw -= order.slice_amount_krw
-                    order.remaining_quantity -= order.slice_quantity
-                    order.last_execution_time = datetime.now()
-                    
-                    # 거래소 주문 ID 추적
-                    if "order_id" in order_result:
-                        order.exchange_order_ids.append(order_result["order_id"])
-                    
-                    logger.info(f"TWAP 슬라이스 실행 성공: {order.asset}")
-                    return {"success": True, "order_result": order_result}
                 else:
-                    logger.error(f"TWAP 슬라이스 실행 실패: {order_result.get('error')}")
-                    return {
-                        "success": False,
-                        "error": order_result.get("error"),
-                        "message": "주문 실행 실패"
-                    }
-                    
-            except Exception as e:
-                logger.error(f"TWAP 주문 실행 중 오류: {e}")
-                return {"success": False, "error": str(e)}
+                    order.remaining_quantity -= order.slice_quantity
+                
+                logger.info(f"✅ TWAP 슬라이스 실행 성공: {order.asset} "
+                          f"({order.executed_slices}/{order.slice_count})")
+                
+                return {
+                    "success": True,
+                    "order_id": order_result.get("order_id"),
+                    "executed_slices": order.executed_slices,
+                    "remaining_slices": order.slice_count - order.executed_slices
+                }
+            else:
+                logger.error(f"💥 TWAP 주문 실패: {order_result.get('error')}")
+                return order_result
             
         except Exception as e:
-            logger.error(f"TWAP 슬라이스 처리 중 오류: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error(f"TWAP 슬라이스 실행 중 오류: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     def start_twap_execution(self, rebalance_orders: Dict[str, Dict], market_season: str = None, target_allocation: Dict[str, float] = None) -> Dict:
         """

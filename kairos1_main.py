@@ -412,75 +412,130 @@ class KairosSystem:
             return {"success": False, "error": str(e)}
     
     def process_twap_orders(self) -> dict:
-        """대기 중인 TWAP 주문 처리"""
+        """TWAP 주문 처리"""
         try:
             logger.info("TWAP 주문 처리 시작")
             
-            result = self.execution_engine.process_pending_twap_orders()
+            # 1. 활성 TWAP 주문 확인
+            active_orders = self.execution_engine.active_twap_orders
+            if not active_orders:
+                logger.info("처리할 TWAP 주문이 없습니다")
+                return {"success": True, "message": "no_active_orders"}
             
-            if result.get("success"):
-                processed_count = result.get("processed_orders", 0)
-                completed_count = result.get("completed_orders", 0)
-                remaining_count = result.get("remaining_orders", 0)
-                details = result.get("details", [])
-                market_condition_changed = result.get("market_condition_changed", False)
+            # 2. 시장 상황 변화 체크
+            market_condition_changed = self.execution_engine._check_market_condition_change()
+            
+            # 3. 포트폴리오 밸런스 체크
+            portfolio = self.coinone_client.get_portfolio_value()
+            portfolio_metrics = self.portfolio_manager.get_portfolio_metrics(portfolio)
+            
+            crypto_weight = portfolio_metrics["weights"]["crypto_total"]
+            target_crypto_weight = active_orders[0].target_allocation.get("crypto", 0.5)
+            weight_diff = abs(crypto_weight - target_crypto_weight)
+            
+            # 3% 이상 차이나면 리밸런싱 필요
+            balance_invalid = weight_diff > 0.03
+            
+            # 시장 상황 변화나 밸런스 깨짐이 감지되면 주문 재조정
+            if market_condition_changed or balance_invalid:
+                reason = "시장 상황 변화" if market_condition_changed else "포트폴리오 밸런스 깨짐"
+                logger.warning(f"🔄 {reason}로 인한 기존 TWAP 중단 - 새로운 리밸런싱 시작")
                 
-                # 시장 상황 변화 감지 시 새로운 리밸런싱 트리거
-                if market_condition_changed:
-                    logger.warning("🔄 시장 상황 변화로 인한 기존 TWAP 중단 - 새로운 리밸런싱 시작")
+                # 1. 먼저 실제 거래소 주문들 취소
+                cancel_result = self.execution_engine._cancel_pending_exchange_orders(active_orders)
+                logger.info(f"📋 거래소 주문 취소 결과: 성공 {cancel_result.get('cancelled_count', 0)}개, "
+                           f"실패 {cancel_result.get('failed_count', 0)}개")
+                
+                # 2. 기존 주문들을 강제로 중단 상태로 변경
+                cancelled_orders = []
+                for order in active_orders:
+                    if order.status in ["pending", "executing"]:
+                        order.status = "cancelled"
+                        cancelled_orders.append(order)
+                        logger.info(f"TWAP 주문 중단: {order.asset} ({order.executed_slices}/{order.slice_count} 슬라이스 완료)")
+                
+                # 3. 잠시 대기 (거래소 주문 취소 반영 시간)
+                if cancel_result.get('cancelled_count', 0) > 0:
+                    logger.info("⏱️ 거래소 주문 취소 반영을 위해 5초 대기...")
+                    import time
+                    time.sleep(5)
+                
+                # 4. 새로운 리밸런싱 계획 수립
+                rebalance_plan = self.rebalancer.calculate_rebalancing_orders()
+                
+                if not rebalance_plan.get("success"):
+                    logger.error("새로운 리밸런싱 계획 수립 실패")
+                    return rebalance_plan
+                
+                # 5. 새로운 TWAP 주문 시작
+                market_season = rebalance_plan.get("market_season", "neutral")
+                target_weights = rebalance_plan.get("target_weights", {})
+                
+                # target_weights를 allocation 형태로 변환
+                target_allocation = {}
+                if target_weights:
+                    crypto_total = sum(weight for asset, weight in target_weights.items() 
+                                     if asset not in ["KRW"])
+                    krw_weight = target_weights.get("KRW", 0.3)
                     
-                    # 1. 먼저 실제 거래소 주문들 취소
-                    cancel_result = self.execution_engine._cancel_pending_exchange_orders(self.execution_engine.active_twap_orders)
-                    logger.info(f"📋 거래소 주문 취소 결과: 성공 {cancel_result.get('cancelled_count', 0)}개, "
-                               f"실패 {cancel_result.get('failed_count', 0)}개")
-                    
-                    # 2. 기존 주문들을 강제로 중단 상태로 변경
-                    cancelled_orders = []
-                    for order in self.execution_engine.active_twap_orders:
-                        if order.status in ["pending", "executing"]:
-                            order.status = "cancelled"
-                            cancelled_orders.append(order)
-                            logger.info(f"TWAP 주문 중단: {order.asset} ({order.executed_slices}/{order.slice_count} 슬라이스 완료)")
-                    
-                    # 3. 잠시 대기 (거래소 주문 취소 반영 시간)
-                    if cancel_result.get('cancelled_count', 0) > 0:
-                        logger.info("⏱️ 거래소 주문 취소 반영을 위해 5초 대기...")
-                        import time
-                        time.sleep(5)
-                    
-                    # 4. 새로운 리밸런싱 시작
-                    try:
-                        new_rebalance_result = self.run_quarterly_rebalance_twap(dry_run=False)
-                        if new_rebalance_result.get("success"):
-                            logger.info("✅ 시장 상황 변화에 따른 새로운 리밸런싱 시작 완료")
-                            # 알림 발송
-                            self._send_market_change_rebalance_notification(result, new_rebalance_result, cancel_result)
-                        else:
-                            logger.error("❌ 새로운 리밸런싱 시작 실패")
-                            
-                        result["new_rebalancing_triggered"] = True
-                        result["new_rebalancing_result"] = new_rebalance_result
-                        result["cancelled_orders_result"] = cancel_result
+                    target_allocation = {
+                        "crypto": crypto_total,
+                        "krw": krw_weight
+                    }
+                    # 개별 자산 비중도 추가
+                    target_allocation.update(target_weights)
+                
+                # 새로운 TWAP 실행 시작
+                rebalance_orders = rebalance_plan.get("rebalance_orders", {})
+                execution_result = self.execution_engine.start_twap_execution(
+                    rebalance_orders,
+                    market_season=market_season,
+                    target_allocation=target_allocation
+                )
+                
+                if execution_result.get("success"):
+                    logger.info("새로운 TWAP 주문 시작 완료")
+                    self._send_twap_rebalance_notification(execution_result, reason)
+                
+                return {
+                    "success": True,
+                    "market_condition_changed": market_condition_changed,
+                    "balance_invalid": balance_invalid,
+                    "execution_result": execution_result
+                }
+            
+            # 4. 각 TWAP 주문 처리
+            results = []
+            for order in active_orders:
+                if order.status == "executing":
+                    # 다음 슬라이스 실행 시간인지 확인
+                    if self._is_next_slice_due(order):
+                        result = self.execution_engine.execute_twap_slice(order)
+                        results.append(result)
                         
-                    except Exception as e:
-                        logger.error(f"새로운 리밸런싱 트리거 실패: {e}")
-                        result["new_rebalancing_error"] = str(e)
-                    
-                    return result
-                
-                # 일반적인 TWAP 처리 결과
-                if processed_count > 0:
-                    self._send_twap_execution_notification(result)
-                    logger.info(f"TWAP 주문 처리 완료: {processed_count}개 처리, {completed_count}개 완료, {remaining_count}개 남음")
-                elif remaining_count > 0:
-                    logger.info(f"TWAP 주문 대기 중: {remaining_count}개 남음")
-                else:
-                    logger.info("처리할 TWAP 주문이 없습니다")
+                        # 실행 실패 시 상태 업데이트
+                        if not result.get("success"):
+                            error_type = result.get("error")
+                            if error_type in ["krw_ratio_too_low", "balance_ratio_invalid"]:
+                                # 다음 process_twap 호출에서 재조정되도록 표시
+                                return {
+                                    "success": False,
+                                    "error": error_type,
+                                    "message": result.get("message"),
+                                    "market_condition_changed": False,
+                                    "balance_invalid": True
+                                }
             
-            return result
+            # 5. 결과 반환
+            return {
+                "success": True,
+                "results": results,
+                "market_condition_changed": market_condition_changed,
+                "balance_invalid": balance_invalid
+            }
             
         except Exception as e:
-            logger.error(f"TWAP 주문 처리 실패: {e}")
+            logger.error(f"TWAP 주문 처리 중 오류: {e}")
             return {"success": False, "error": str(e)}
     
     def _send_twap_execution_notification(self, execution_result: dict):
