@@ -386,13 +386,26 @@ class DynamicExecutionEngine:
                     }
             
             # 주문 실행
-            order_result = self.rebalancer.order_manager.place_order(
-                asset=order.asset,
+            amount = order.slice_amount_krw if order.side == "buy" else order.slice_quantity
+            order_result_obj = self.rebalancer.order_manager.submit_market_order(
+                currency=order.asset,
                 side=order.side,
-                amount_krw=order.slice_amount_krw if order.side == "buy" else None,
-                quantity=None if order.side == "buy" else order.slice_quantity
+                amount=amount
             )
             
+            # Order 객체를 딕셔너리로 변환
+            if order_result_obj:
+                order_result = {
+                    "success": True,
+                    "order_id": order_result_obj.order_id,
+                    "status": order_result_obj.status.value
+                }
+            else:
+                order_result = {
+                    "success": False,
+                    "error": "Order submission failed"
+                }
+
             if order_result.get("success"):
                 # 주문 ID 저장
                 order.exchange_order_ids.append(order_result.get("order_id"))
