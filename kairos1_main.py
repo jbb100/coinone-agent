@@ -455,18 +455,30 @@ class KairosSystem:
                 next_execution = detail.get("next_execution_time", "N/A")
                 
                 if result.get("success"):
-                    amount_krw = result.get("amount_krw", 0)
-                    order_id = result.get("order_id", "N/A")
-                    progress = f"{executed_slices}/{total_slices}"
-                    remaining_amount = result.get("remaining_amount", 0)
-                    
-                    message += f"""
+                    if result.get("skipped"):
+                        # 건너뛴 슬라이스 (최소량 미달로 다음과 합침)
+                        progress = f"{executed_slices}/{total_slices}"
+                        skip_message = result.get("message", "최소량 미달로 건너뜀")
+                        
+                        message += f"""
+• **{asset}**: {progress} 슬라이스 건너뜀 ⏭️
+  - 상태: {skip_message}
+  - 다음 실행: {next_execution}"""
+                        success_count += 1
+                    else:
+                        # 정상 실행된 슬라이스
+                        amount_krw = result.get("amount_krw", 0)
+                        order_id = result.get("order_id", "N/A")
+                        progress = f"{executed_slices}/{total_slices}"
+                        remaining_amount = result.get("remaining_amount", 0)
+                        
+                        message += f"""
 • **{asset}**: {progress} 슬라이스 완료 ✅
   - 실행 금액: {amount_krw:,.0f} KRW
   - 주문 ID: {order_id}
   - 남은 금액: {remaining_amount:,.0f} KRW
   - 다음 실행: {next_execution}"""
-                    success_count += 1
+                        success_count += 1
                 else:
                     error = result.get("error", "Unknown error")
                     error_code = result.get("error_code", "unknown")

@@ -501,15 +501,41 @@ class DynamicExecutionEngine:
                         "VET": 1000000.0, # 최대 1,000,000 VET
                     }
                     
-                    # 최소 주문량 검증
+                    # 최소 주문량 검증 및 처리
                     min_limit = min_order_quantities.get(order.asset, 0.0001)  # 기본값: 0.0001
                     if safe_quantity < min_limit:
-                        logger.warning(f"{order.asset} 주문량이 최소 한도 미달: {safe_quantity:.8f} < {min_limit:.8f} - 건너뜀")
-                        return {
-                            "success": False,
-                            "error": "order_too_small",
-                            "message": f"{order.asset} 주문량이 최소 한도({min_limit:.8f})보다 작습니다"
-                        }
+                        # 남은 슬라이스 수가 1개일 때는 최소량으로 강제 조정
+                        remaining_slices = order.slice_count - order.executed_slices
+                        if remaining_slices <= 1:
+                            # 마지막 슬라이스: 최소량 또는 전체 잔고 중 작은 값으로 설정
+                            safe_quantity = min(min_limit, balance * 0.99)
+                            logger.info(f"{order.asset} 마지막 슬라이스: 최소량으로 조정 {safe_quantity:.8f}")
+                        else:
+                            # 중간 슬라이스: 건너뛰고 다음 슬라이스와 합치기
+                            logger.warning(f"{order.asset} 주문량이 최소 한도 미달: {safe_quantity:.8f} < {min_limit:.8f} - 다음 슬라이스와 합치기")
+                            
+                            # 현재 슬라이스를 실행한 것으로 표시하되 실제 거래는 하지 않음
+                            order.executed_slices += 1
+                            order.last_execution_time = datetime.now()
+                            
+                            # 다음 슬라이스 크기를 늘리기 위해 슬라이스 수량 조정
+                            if remaining_slices > 1:
+                                # 남은 슬라이스들에 현재 슬라이스 분량을 분배
+                                additional_quantity_per_slice = order.slice_quantity / (remaining_slices - 1)
+                                order.slice_quantity += additional_quantity_per_slice
+                                
+                                additional_amount_per_slice = order.slice_amount_krw / (remaining_slices - 1)
+                                order.slice_amount_krw += additional_amount_per_slice
+                                
+                                logger.info(f"{order.asset} 다음 슬라이스 크기 증가: {order.slice_quantity:.8f} {order.asset}, {order.slice_amount_krw:,.0f} KRW")
+                            
+                            return {
+                                "success": True,
+                                "skipped": True,
+                                "message": f"{order.asset} 최소량 미달로 다음 슬라이스와 합침",
+                                "executed_slices": order.executed_slices,
+                                "remaining_slices": remaining_slices - 1
+                            }
                     
                     # 최대 주문량 검증
                     max_limit = max_order_limits.get(order.asset, 1.0)  # 기본값: 1개
@@ -553,6 +579,23 @@ class DynamicExecutionEngine:
                     "error": "Order submission returned None"
                 }
 
+            # 건너뛴 슬라이스인 경우 (최소량 미달로 다음과 합침)
+            if order_result.get("skipped"):
+                # 모든 슬라이스가 완료되었는지 확인 (건너뛴 것도 실행으로 간주)
+                if order.executed_slices >= order.slice_count:
+                    order.status = "completed"
+                    logger.info(f"🎉 TWAP 주문 완료: {order.asset} ({order.executed_slices}/{order.slice_count} 슬라이스)")
+                else:
+                    order.status = "executing"
+                
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "message": order_result.get("message"),
+                    "executed_slices": order.executed_slices,
+                    "remaining_slices": order.slice_count - order.executed_slices
+                }
+            
             if order_result.get("success"):
                 # 주문 ID 저장
                 order.exchange_order_ids.append(order_result.get("order_id"))
