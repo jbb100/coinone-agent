@@ -496,7 +496,7 @@ class KairosSystem:
                 
                 if execution_result.get("success"):
                     logger.info("새로운 TWAP 주문 시작 완료")
-                    self._send_twap_rebalance_notification(execution_result, reason)
+                    # self._send_twap_rebalance_notification(execution_result, reason)
                 
                 return {
                     "success": True,

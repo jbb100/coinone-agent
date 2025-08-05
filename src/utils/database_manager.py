@@ -750,4 +750,32 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"활성 TWAP 실행 조회 실패: {e}")
-            return [] 
+            return []
+
+    def get_latest_active_twap_execution(self) -> Optional[Dict]:
+        """
+        가장 최근의 활성 TWAP 실행 계획을 조회
+        
+        Returns:
+            활성 TWAP 실행 정보 또는 None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT execution_id, twap_orders_detail
+                    FROM twap_executions
+                    WHERE status = 'executing'
+                    ORDER BY start_time DESC
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "execution_id": row["execution_id"],
+                        "twap_orders_detail": json.loads(row["twap_orders_detail"])
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"최신 활성 TWAP 실행 조회 실패: {e}")
+            return None 

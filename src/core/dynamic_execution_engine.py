@@ -137,17 +137,35 @@ class DynamicExecutionEngine:
     def _load_active_twap_orders(self):
         """데이터베이스에서 활성 TWAP 주문들을 로드"""
         try:
-            # 현재 실행 ID가 없으면 빈 리스트 반환
-            if not self.current_execution_id:
-                logger.info("현재 활성 TWAP 실행 ID가 없음")
-                self.active_twap_orders = []
-                return
+            active_execution = self.db_manager.get_latest_active_twap_execution()
+            
+            if active_execution:
+                self.current_execution_id = active_execution["execution_id"]
+                orders_detail = active_execution["twap_orders_detail"]
+                
+                # 상세 정보를 TWAPOrder 객체로 변환
+                loaded_orders = []
+                for order_data in orders_detail:
+                    # 'status'가 'completed'가 아닌 주문만 로드
+                    if order_data.get("status") != "completed":
+                        # datetime 필드 변환
+                        for field in ['start_time', 'end_time', 'last_execution_time', 'created_at']:
+                            if order_data.get(field):
+                                order_data[field] = datetime.fromisoformat(order_data[field])
+                        
+                        loaded_orders.append(TWAPOrder(**order_data))
 
-            self.active_twap_orders = self.db_manager.load_active_twap_orders(self.current_execution_id)
-            logger.info(f"활성 TWAP 주문 로드: {len(self.active_twap_orders)}개")
+                self.active_twap_orders = loaded_orders
+                logger.info(f"활성 TWAP 실행 복원: {self.current_execution_id} ({len(self.active_twap_orders)}개 주문)")
+            else:
+                logger.info("현재 활성 TWAP 실행이 없습니다.")
+                self.active_twap_orders = []
+                self.current_execution_id = None
+
         except Exception as e:
             logger.error(f"활성 TWAP 주문 로드 실패: {e}")
             self.active_twap_orders = []
+            self.current_execution_id = None
     
     def calculate_atr(self, price_data: pd.DataFrame) -> float:
         """
@@ -465,7 +483,9 @@ class DynamicExecutionEngine:
                 
                 # 1-3. 데이터베이스 상태 업데이트
                 try:
-                    self.db_manager.update_twap_orders_status(self.current_execution_id, self.active_twap_orders)
+                    orders_to_update = [order.to_dict() for order in self.active_twap_orders if order.status in ["pending", "executing"]]
+                    if orders_to_update:
+                        self.db_manager.update_twap_orders_status(self.current_execution_id, orders_to_update)
                 except Exception as e:
                     logger.error(f"TWAP 주문 상태 업데이트 실패: {e}")
                     # 실패해도 계속 진행
