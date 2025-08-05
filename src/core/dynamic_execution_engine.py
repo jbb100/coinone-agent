@@ -137,12 +137,17 @@ class DynamicExecutionEngine:
     def _load_active_twap_orders(self):
         """데이터베이스에서 활성 TWAP 주문들을 로드"""
         try:
-            self.current_execution_id, self.active_twap_orders = self.db_manager.load_active_twap_orders()
+            # 현재 실행 ID가 없으면 빈 리스트 반환
+            if not self.current_execution_id:
+                logger.info("현재 활성 TWAP 실행 ID가 없음")
+                self.active_twap_orders = []
+                return
+
+            self.active_twap_orders = self.db_manager.load_active_twap_orders(self.current_execution_id)
             logger.info(f"활성 TWAP 주문 로드: {len(self.active_twap_orders)}개")
         except Exception as e:
             logger.error(f"활성 TWAP 주문 로드 실패: {e}")
             self.active_twap_orders = []
-            self.current_execution_id = None
     
     def calculate_atr(self, price_data: pd.DataFrame) -> float:
         """
