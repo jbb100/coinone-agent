@@ -683,7 +683,11 @@ class CoinoneClient:
             
             # KRW 잔고
             krw_balance = balances.get("KRW", 0)
-            portfolio_value["assets"]["KRW"] = krw_balance
+            portfolio_value["assets"]["KRW"] = {
+                "balance": krw_balance,
+                "price_krw": 1,
+                "value_krw": krw_balance
+            }
             portfolio_value["total_krw"] += krw_balance
             
             # 암호화폐 잔고를 KRW로 환산 (최신 체결가 사용)

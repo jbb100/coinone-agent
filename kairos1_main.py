@@ -190,6 +190,7 @@ class KairosSystem:
             # 리밸런서
             self.rebalancer = Rebalancer(
                 coinone_client=self.coinone_client,
+                db_manager=self.db_manager,
                 portfolio_manager=self.portfolio_manager,
                 market_season_filter=self.market_filter,
                 order_manager=self.order_manager
