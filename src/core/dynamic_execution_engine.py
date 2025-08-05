@@ -344,27 +344,6 @@ class DynamicExecutionEngine:
             portfolio = self.coinone_client.get_portfolio_value()
             portfolio_metrics = self.rebalancer.portfolio_manager.get_portfolio_metrics(portfolio)
             
-            # 2. 포트폴리오 밸런스 체크
-            crypto_weight = portfolio_metrics["weights"]["crypto_total"]
-            target_crypto_weight = order.target_allocation.get("crypto", 0.5)
-            weight_diff = abs(crypto_weight - target_crypto_weight)
-            
-            # 3% 이상 차이나면 리밸런싱 필요
-            if weight_diff > 0.03:
-                logger.warning(
-                    f"포트폴리오 밸런스 깨짐 감지: "
-                    f"현재 암호화폐 비중 {crypto_weight:.1%}, "
-                    f"목표 비중 {target_crypto_weight:.1%}"
-                )
-                return {
-                    "success": False,
-                    "error": "balance_ratio_invalid",
-                    "message": "포트폴리오 밸런스가 목표 비중과 크게 차이납니다",
-                    "current_ratio": crypto_weight,
-                    "target_ratio": target_crypto_weight,
-                    "weight_diff": weight_diff
-                }
-            
             # 주문 실행 전 잔고 확인
             if order.side == "buy":
                 balance = self.coinone_client.get_balances().get("KRW", 0)
