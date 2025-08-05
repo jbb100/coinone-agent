@@ -309,7 +309,7 @@ class CoinoneClient:
             
         except Exception as e:
             logger.error(f"{currency} 최신 가격 조회 실패: {e}")
-            raise
+            return 0.0
 
     def _generate_nonce(self) -> str:
         """UUID nonce 생성"""
