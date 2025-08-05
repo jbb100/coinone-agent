@@ -185,14 +185,13 @@ class Rebalancer:
             
             return {
                 "success": True,
-                "market_season": target_market_season,
-                "total_value_before": total_value_before,
-                "allocation_weights": allocation_weights,
+                "rebalance_orders": rebalance_info.get("rebalance_orders", {}),
                 "target_weights": target_weights,
                 "current_weights": current_weights,
-                "rebalance_orders": rebalance_info.get("rebalance_orders", {}),
-                "validation_results": validation_results,
-                "rebalance_summary": rebalance_info.get("summary", {})
+                "market_season": target_market_season.value if target_market_season else "neutral",
+                "total_orders": len([o for o in rebalance_info.get("rebalance_orders", {}).values() if abs(o["amount_diff_krw"]) > 10000]),
+                "rebalance_summary": rebalance_info.get("rebalance_summary", {}),
+                "timestamp": datetime.now()
             }
             
         except Exception as e:

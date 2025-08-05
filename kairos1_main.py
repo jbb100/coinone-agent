@@ -373,12 +373,34 @@ class KairosSystem:
             if not rebalance_plan.get("success"):
                 return rebalance_plan
             
-            # 2. TWAP 실행 시작
+            # 2. 현재 시장 계절과 목표 배분 정보 수집
+            market_season = rebalance_plan.get("market_season", "neutral")
+            target_weights = rebalance_plan.get("target_weights", {})
+            
+            # target_weights를 allocation 형태로 변환
+            target_allocation = {}
+            if target_weights:
+                crypto_total = sum(weight for asset, weight in target_weights.items() 
+                                 if asset not in ["KRW"])
+                krw_weight = target_weights.get("KRW", 0.3)
+                
+                target_allocation = {
+                    "crypto": crypto_total,
+                    "krw": krw_weight
+                }
+                # 개별 자산 비중도 추가
+                target_allocation.update(target_weights)
+            
+            # 3. TWAP 실행 시작 (시장 정보 포함)
             rebalance_orders = rebalance_plan.get("rebalance_orders", {})
-            execution_result = self.execution_engine.start_twap_execution(rebalance_orders)
+            execution_result = self.execution_engine.start_twap_execution(
+                rebalance_orders, 
+                market_season=market_season, 
+                target_allocation=target_allocation
+            )
             
             if execution_result.get("success"):
-                # 3. TWAP 실행 계획 알림
+                # 4. TWAP 실행 계획 알림
                 self._send_twap_start_notification(execution_result)
                 logger.info("TWAP 분기별 리밸런싱 시작 완료")
             
@@ -400,8 +422,52 @@ class KairosSystem:
                 completed_count = result.get("completed_orders", 0)
                 remaining_count = result.get("remaining_orders", 0)
                 details = result.get("details", [])
+                market_condition_changed = result.get("market_condition_changed", False)
                 
-                # 처리된 주문이 있으면 상세 알림 발송
+                # 시장 상황 변화 감지 시 새로운 리밸런싱 트리거
+                if market_condition_changed:
+                    logger.warning("🔄 시장 상황 변화로 인한 기존 TWAP 중단 - 새로운 리밸런싱 시작")
+                    
+                    # 1. 먼저 실제 거래소 주문들 취소
+                    cancel_result = self.execution_engine._cancel_pending_exchange_orders(self.execution_engine.active_twap_orders)
+                    logger.info(f"📋 거래소 주문 취소 결과: 성공 {cancel_result.get('cancelled_count', 0)}개, "
+                               f"실패 {cancel_result.get('failed_count', 0)}개")
+                    
+                    # 2. 기존 주문들을 강제로 중단 상태로 변경
+                    cancelled_orders = []
+                    for order in self.execution_engine.active_twap_orders:
+                        if order.status in ["pending", "executing"]:
+                            order.status = "cancelled"
+                            cancelled_orders.append(order)
+                            logger.info(f"TWAP 주문 중단: {order.asset} ({order.executed_slices}/{order.slice_count} 슬라이스 완료)")
+                    
+                    # 3. 잠시 대기 (거래소 주문 취소 반영 시간)
+                    if cancel_result.get('cancelled_count', 0) > 0:
+                        logger.info("⏱️ 거래소 주문 취소 반영을 위해 5초 대기...")
+                        import time
+                        time.sleep(5)
+                    
+                    # 4. 새로운 리밸런싱 시작
+                    try:
+                        new_rebalance_result = self.run_quarterly_rebalance_twap(dry_run=False)
+                        if new_rebalance_result.get("success"):
+                            logger.info("✅ 시장 상황 변화에 따른 새로운 리밸런싱 시작 완료")
+                            # 알림 발송
+                            self._send_market_change_rebalance_notification(result, new_rebalance_result, cancel_result)
+                        else:
+                            logger.error("❌ 새로운 리밸런싱 시작 실패")
+                            
+                        result["new_rebalancing_triggered"] = True
+                        result["new_rebalancing_result"] = new_rebalance_result
+                        result["cancelled_orders_result"] = cancel_result
+                        
+                    except Exception as e:
+                        logger.error(f"새로운 리밸런싱 트리거 실패: {e}")
+                        result["new_rebalancing_error"] = str(e)
+                    
+                    return result
+                
+                # 일반적인 TWAP 처리 결과
                 if processed_count > 0:
                     self._send_twap_execution_notification(result)
                     logger.info(f"TWAP 주문 처리 완료: {processed_count}개 처리, {completed_count}개 완료, {remaining_count}개 남음")
@@ -792,6 +858,39 @@ class KairosSystem:
             
         except Exception as e:
             logger.error(f"즉시 리밸런싱 알림 실패: {e}")
+    
+    def _send_market_change_rebalance_notification(self, twap_result: dict, rebalance_result: dict, cancel_result: dict = None):
+        """시장 상황 변화로 인한 리밸런싱 알림"""
+        try:
+            remaining_orders = twap_result.get("remaining_orders", 0)
+            new_orders = len(rebalance_result.get("twap_orders", []))
+            
+            # 거래소 주문 취소 정보
+            cancel_info = ""
+            if cancel_result:
+                cancelled_count = cancel_result.get("cancelled_count", 0)
+                failed_count = cancel_result.get("failed_count", 0)
+                if cancelled_count > 0 or failed_count > 0:
+                    cancel_info = f"""
+**거래소 주문 취소**: {cancelled_count}개 성공, {failed_count}개 실패"""
+            
+            message = f"""🔄 **시장 상황 변화 감지 - 리밸런싱 조정**
+            
+**기존 TWAP 중단**: {remaining_orders}개 주문 중단{cancel_info}
+**새로운 TWAP 시작**: {new_orders}개 주문 시작
+
+✅ 시장 상황에 맞는 최적 포트폴리오로 자동 조정되었습니다.
+⚡ 기존 미완료 거래소 주문들이 안전하게 취소되었습니다."""
+
+            self.alert_system.send_notification(
+                title="🔄 시장 변화 대응 - 자동 리밸런싱",
+                message=message,
+                alert_type="rebalancing",
+                priority="high"
+            )
+            
+        except Exception as e:
+            logger.error(f"시장 변화 리밸런싱 알림 발송 실패: {e}")
     
     def _signal_handler(self, signum, frame):
         """시그널 핸들러"""
