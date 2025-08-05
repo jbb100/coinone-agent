@@ -261,6 +261,7 @@ class DynamicExecutionEngine:
         """
         try:
             MIN_ORDER_KRW = 1000  # 코인원 최소 주문 금액 (KRW)
+            MIN_ORDER_KRW_BUFFER = 1.05  # 5% 안전 마진
 
             # 실행 파라미터 계산
             exec_params = self._get_execution_parameters()
@@ -311,8 +312,8 @@ class DynamicExecutionEngine:
                 local_slice_count = slice_count
                 slice_amount = amount_krw / local_slice_count
 
-                if slice_amount < MIN_ORDER_KRW:
-                    new_slice_count = math.floor(amount_krw / MIN_ORDER_KRW)
+                if slice_amount < (MIN_ORDER_KRW * MIN_ORDER_KRW_BUFFER):
+                    new_slice_count = math.floor(amount_krw / (MIN_ORDER_KRW * MIN_ORDER_KRW_BUFFER))
                     if new_slice_count > 0:
                         logger.warning(
                             f"{asset}: 슬라이스당 주문 금액({slice_amount:,.0f} KRW)이 최소 금액({MIN_ORDER_KRW} KRW)보다 작아 "
