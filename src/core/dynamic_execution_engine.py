@@ -100,6 +100,7 @@ class DynamicExecutionEngine:
         coinone_client: CoinoneClient,
         db_manager: DatabaseManager,
         rebalancer=None,  # Add rebalancer parameter
+        alert_system=None,  # Add alert_system parameter
         atr_period: int = 14,
         atr_threshold: float = 0.05
     ):
@@ -108,12 +109,14 @@ class DynamicExecutionEngine:
             coinone_client: 코인원 API 클라이언트
             db_manager: 데이터베이스 매니저
             rebalancer: 리밸런서 인스턴스 (선택적)
+            alert_system: 알림 시스템 인스턴스 (선택적)
             atr_period: ATR 계산 기간 (기본값: 14일)
             atr_threshold: 변동성 임계값 (기본값: 5%)
         """
         self.coinone_client = coinone_client
         self.db_manager = db_manager
         self.rebalancer = rebalancer  # Store rebalancer instance
+        self.alert_system = alert_system  # Store alert_system instance
         self.atr_period = atr_period
         self.atr_threshold = atr_threshold
         
@@ -260,8 +263,28 @@ class DynamicExecutionEngine:
             TWAP 주문 리스트
         """
         try:
+            # 상수 정의
             MIN_ORDER_KRW = 1000  # 코인원 최소 주문 금액 (KRW)
             MIN_ORDER_KRW_BUFFER = 1.05  # 5% 안전 마진
+
+            # 암호화폐별 최소 주문 수량 (코인원 기준)
+            MIN_ORDER_QUANTITIES = {
+                "BTC": 0.0001,      # 최소 0.0001 BTC
+                "ETH": 0.0001,      # 최소 0.0001 ETH  
+                "XRP": 1.0,         # 최소 1 XRP
+                "SOL": 0.01,        # 최소 0.01 SOL
+                "ADA": 2.0,         # 최소 2 ADA
+                "DOT": 1.0,         # 최소 1 DOT
+                "DOGE": 10.0,       # 최소 10 DOGE
+                "TRX": 10.0,        # 최소 10 TRX
+                "XLM": 10.0,        # 최소 10 XLM
+                "ATOM": 0.2,        # 최소 0.2 ATOM
+                "ALGO": 5.0,        # 최소 5 ALGO
+                "VET": 50.0,        # 최소 50 VET
+            }
+
+            # 최소 주문 금액을 만족하는 KRW 기준 최소 금액 (각 암호화폐별)
+            # 이 값들은 현재가 × 최소 수량으로 동적 계산될 예정
 
             # 실행 파라미터 계산
             exec_params = self._get_execution_parameters()
@@ -299,21 +322,36 @@ class DynamicExecutionEngine:
                 # 매수/매도 모두 금액(KRW) 기준으로 주문하므로 수량은 0으로 설정
                 quantity = 0
 
-                # 슬라이스당 금액이 최소 주문 금액을 만족하는지 확인하고 슬라이스 횟수 조정
+                # 암호화폐별 최소 주문 수량을 고려한 슬라이스 횟수 조정
                 local_slice_count = slice_count
                 slice_amount = amount_krw / local_slice_count
+                
+                # 1. 기본 KRW 최소 금액 검증
+                min_krw_amount = MIN_ORDER_KRW * MIN_ORDER_KRW_BUFFER
+                
+                # 2. 암호화폐별 최소 수량을 고려한 최소 KRW 금액 계산
+                if asset in MIN_ORDER_QUANTITIES and side == "sell":
+                    try:
+                        # 현재가 조회하여 최소 수량에 해당하는 KRW 금액 계산
+                        current_price = self.coinone_client.get_latest_price(asset)
+                        if current_price > 0:
+                            min_quantity_krw = MIN_ORDER_QUANTITIES[asset] * current_price
+                            min_krw_amount = max(min_krw_amount, min_quantity_krw * 1.1)  # 10% 안전 마진
+                            logger.info(f"{asset} 최소 수량 검증: {MIN_ORDER_QUANTITIES[asset]} {asset} = {min_quantity_krw:,.0f} KRW (현재가: {current_price:,.0f})")
+                    except Exception as e:
+                        logger.warning(f"{asset} 현재가 조회 실패, 기본 최소 금액 사용: {e}")
 
-                if slice_amount < (MIN_ORDER_KRW * MIN_ORDER_KRW_BUFFER):
-                    new_slice_count = math.floor(amount_krw / (MIN_ORDER_KRW * MIN_ORDER_KRW_BUFFER))
+                if slice_amount < min_krw_amount:
+                    new_slice_count = math.floor(amount_krw / min_krw_amount)
                     if new_slice_count > 0:
                         logger.warning(
-                            f"{asset}: 슬라이스당 주문 금액({slice_amount:,.0f} KRW)이 최소 금액({MIN_ORDER_KRW} KRW)보다 작아 "
+                            f"{asset}: 슬라이스당 주문 금액({slice_amount:,.0f} KRW)이 최소 금액({min_krw_amount:,.0f} KRW)보다 작아 "
                             f"분할 횟수 조정: {local_slice_count} -> {new_slice_count}"
                         )
                         local_slice_count = new_slice_count
                     else:
-                        # 총 주문 금액이 최소 주문 금액보다 작은 경우는 이미 필터링 되어야 함
-                        logger.warning(f"{asset}: 총 주문 금액({amount_krw:,.0f} KRW)이 최소 주문 금액({MIN_ORDER_KRW} KRW)보다 작아 주문을 건너뜁니다.")
+                        # 총 주문 금액이 최소 주문 금액보다 작은 경우
+                        logger.warning(f"{asset}: 총 주문 금액({amount_krw:,.0f} KRW)이 최소 금액({min_krw_amount:,.0f} KRW)보다 작아 주문을 건너뜁니다.")
                         continue
                 
                 # 조정된 슬라이스 횟수로 슬라이스당 금액/수량 재계산
@@ -396,17 +434,105 @@ class DynamicExecutionEngine:
                         }
             
             else:  # sell
-                balance = self.coinone_client.get_balances().get(order.asset, 0)
-                if balance < order.slice_quantity:
-                    logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset}")
-                    return {
-                        "success": False,
-                        "error": "insufficient_balance",
-                        "message": f"{order.asset} 잔고가 부족합니다"
-                    }
+                # 매도 주문 준비: 현재가와 필요 수량 미리 계산
+                pass
             
             # 주문 실행
-            amount = order.slice_amount_krw
+            if order.side == "buy":
+                # 매수: KRW 금액으로 주문
+                amount = order.slice_amount_krw
+            else:
+                # 매도: 코인 수량으로 주문 (KRW 금액을 현재가로 나누어 계산)
+                try:
+                    current_price = self.coinone_client.get_latest_price(order.asset)
+                    if current_price <= 0:
+                        logger.error(f"💥 {order.asset} 현재가 조회 실패: {current_price}")
+                        return {
+                            "success": False,
+                            "error": f"현재가 조회 실패: {current_price}"
+                        }
+                    
+                    # KRW 금액을 현재가로 나누어 매도할 수량 계산
+                    calculated_quantity = order.slice_amount_krw / current_price
+                    
+                    # 잔고 확인하여 안전한 수량으로 조정
+                    balance = self.coinone_client.get_balances().get(order.asset, 0)
+                    
+                    # 충분한 잔고가 있는지 먼저 확인
+                    if balance < calculated_quantity:
+                        logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset} (필요: {calculated_quantity:.8f}, 보유: {balance:.8f})")
+                        return {
+                            "success": False,
+                            "error": "insufficient_balance",
+                            "message": f"{order.asset} 잔고가 부족합니다 (필요: {calculated_quantity:.8f}, 보유: {balance:.8f})"
+                        }
+                    
+                    # 안전한 수량으로 조정 (수수료 고려)
+                    safe_quantity = min(calculated_quantity, balance * 0.99)  # 99%만 매도
+                    
+                    # 거래소 주문 한도 적용 (최소/최대)
+                    min_order_quantities = {
+                        "BTC": 0.0001,    # 최소 0.0001 BTC
+                        "ETH": 0.001,     # 최소 0.001 ETH  
+                        "XRP": 1.0,       # 최소 1 XRP
+                        "SOL": 0.01,      # 최소 0.01 SOL
+                        "ADA": 2.0,       # 최소 2 ADA
+                        "DOT": 1.0,       # 최소 1 DOT
+                        "DOGE": 10.0,     # 최소 10 DOGE
+                        "TRX": 10.0,      # 최소 10 TRX
+                        "XLM": 10.0,      # 최소 10 XLM
+                        "ATOM": 0.2,      # 최소 0.2 ATOM
+                        "ALGO": 5.0,      # 최소 5 ALGO
+                        "VET": 50.0,      # 최소 50 VET
+                    }
+                    
+                    max_order_limits = {
+                        "BTC": 10.0,      # 최대 10 BTC
+                        "ETH": 100.0,     # 최대 100 ETH
+                        "XRP": 100000.0,  # 최대 100,000 XRP
+                        "SOL": 1000.0,    # 최대 1,000 SOL
+                        "ADA": 100000.0,  # 최대 100,000 ADA
+                        "DOT": 5000.0,    # 최대 5,000 DOT
+                        "DOGE": 1000000.0,# 최대 1,000,000 DOGE
+                        "TRX": 1000000.0, # 최대 1,000,000 TRX
+                        "XLM": 100000.0,  # 최대 100,000 XLM
+                        "ATOM": 10000.0,  # 최대 10,000 ATOM
+                        "ALGO": 100000.0, # 최대 100,000 ALGO
+                        "VET": 1000000.0, # 최대 1,000,000 VET
+                    }
+                    
+                    # 최소 주문량 검증
+                    min_limit = min_order_quantities.get(order.asset, 0.0001)  # 기본값: 0.0001
+                    if safe_quantity < min_limit:
+                        logger.warning(f"{order.asset} 주문량이 최소 한도 미달: {safe_quantity:.8f} < {min_limit:.8f} - 건너뜀")
+                        return {
+                            "success": False,
+                            "error": "order_too_small",
+                            "message": f"{order.asset} 주문량이 최소 한도({min_limit:.8f})보다 작습니다"
+                        }
+                    
+                    # 최대 주문량 검증
+                    max_limit = max_order_limits.get(order.asset, 1.0)  # 기본값: 1개
+                    if safe_quantity > max_limit:
+                        logger.warning(f"{order.asset} 주문량이 최대 한도 초과: {safe_quantity:.8f} → {max_limit:.8f}")
+                        safe_quantity = max_limit
+                    
+                    amount = safe_quantity
+                    
+                    logger.info(f"{order.asset} 매도 수량 계산:")
+                    logger.info(f"  • 슬라이스 금액: {order.slice_amount_krw:,.0f} KRW")
+                    logger.info(f"  • 현재가: {current_price:,.0f} KRW")
+                    logger.info(f"  • 계산된 수량: {calculated_quantity:.8f} {order.asset}")
+                    logger.info(f"  • 보유 잔고: {balance:.8f} {order.asset}")
+                    logger.info(f"  • 최종 주문량: {amount:.8f} {order.asset}")
+                    
+                except Exception as e:
+                    logger.error(f"💥 {order.asset} 매도 수량 계산 실패: {e}")
+                    return {
+                        "success": False,
+                        "error": f"매도 수량 계산 실패: {e}"
+                    }
+            
             order_result_obj = self.rebalancer.order_manager.submit_market_order(
                 currency=order.asset,
                 side=order.side,
@@ -433,14 +559,17 @@ class DynamicExecutionEngine:
                 order.executed_slices += 1
                 order.last_execution_time = datetime.now()
                 
-                # 남은 수량 업데이트
-                if order.side == "buy":
-                    order.remaining_amount_krw -= order.slice_amount_krw
-                else:
-                    order.remaining_quantity -= order.slice_quantity
+                # 남은 수량 업데이트 (매수/매도 모두 KRW 기준으로 추적)
+                order.remaining_amount_krw -= order.slice_amount_krw
                 
-                logger.info(f"✅ TWAP 슬라이스 실행 성공: {order.asset} "
-                          f"({order.executed_slices}/{order.slice_count})")
+                # 모든 슬라이스가 완료되었는지 확인
+                if order.executed_slices >= order.slice_count:
+                    order.status = "completed"
+                    logger.info(f"🎉 TWAP 주문 완료: {order.asset} ({order.executed_slices}/{order.slice_count} 슬라이스)")
+                else:
+                    order.status = "executing"
+                    logger.info(f"✅ TWAP 슬라이스 실행 성공: {order.asset} "
+                              f"({order.executed_slices}/{order.slice_count})")
                 
                 return {
                     "success": True,
@@ -449,8 +578,29 @@ class DynamicExecutionEngine:
                     "remaining_slices": order.slice_count - order.executed_slices
                 }
             else:
-                logger.error(f"💥 TWAP 주문 실패: {order_result.get('error')}")
-                return order_result
+                error_msg = order_result.get('error', 'Unknown error')
+                logger.error(f"💥 TWAP 주문 실패: {error_msg}")
+                
+                # 특정 오류의 경우 주문을 실패로 마킹하지 않고 다음 슬라이스를 시도
+                retryable_errors = [
+                    "Cannot be process the orders exceed the maximum amount",
+                    "Cannot be process the orders below the minimum amount", 
+                    "order_too_small",
+                    "Insufficient balance",
+                    "Market temporarily unavailable"
+                ]
+                
+                is_retryable = any(err.lower() in error_msg.lower() for err in retryable_errors)
+                
+                if is_retryable:
+                    logger.warning(f"⚠️ 일시적 오류로 판단, 다음 슬라이스에서 재시도: {order.asset}")
+                    # 주문 상태는 변경하지 않고 오류만 반환
+                    return order_result
+                else:
+                    # 복구 불가능한 오류의 경우 주문을 실패로 마킹
+                    order.status = "failed"
+                    logger.error(f"💥 복구 불가능한 오류로 TWAP 주문 실패: {order.asset}")
+                    return order_result
             
         except Exception as e:
             logger.error(f"TWAP 슬라이스 실행 중 오류: {e}")
@@ -1051,26 +1201,4 @@ class DynamicExecutionEngine:
                 "atr_value": None
             } 
 
-    def _send_twap_start_notification(self, twap_orders: List[TWAPOrder]) -> None:
-        """TWAP 시작 알림 발송"""
-        try:
-            if not twap_orders:
-                return
-                
-            message = "🔄 **TWAP 실행 시작**\n\n"
-            
-            for order in twap_orders:
-                order_info = order.to_dict()
-                message += f"**{order_info['asset']}**: {order_info['side']} {order_info['total_amount_krw']:,.0f} KRW\n"
-                message += f"  • {order_info['slice_count']}회 분할, {order_info['slice_interval_minutes']}분 간격\n"
-                message += f"  • 실행 시간: {order_info['execution_hours']}시간\n\n"
-            
-            self.alert_system.send_notification(
-                title="🔄 TWAP 실행 시작",
-                message=message,
-                alert_type="twap_start",
-                priority="high"
-            )
-            
-        except Exception as e:
-            logger.error(f"TWAP 시작 알림 실패: {e}") 
+ 

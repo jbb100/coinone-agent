@@ -130,7 +130,7 @@ class OrderManager:
                 price=None  # 시장가
             )
             
-            if response.get("result") == "success":
+            if response.get("success", False):
                 order_id = response.get("order_id") or f"market_{currency}_{int(time.time())}"
                 
                 order = Order(

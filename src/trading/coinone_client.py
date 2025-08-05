@@ -387,6 +387,13 @@ class CoinoneClient:
                     }
                     
                 else:
+                    # 암호화폐별 최소 주문 수량
+                    MIN_ORDER_QUANTITIES = {
+                        "BTC": 0.0001, "ETH": 0.0001, "XRP": 1.0, "SOL": 0.01,
+                        "ADA": 2.0, "DOT": 1.0, "DOGE": 10.0, "TRX": 10.0,
+                        "XLM": 10.0, "ATOM": 0.2, "ALGO": 5.0, "VET": 50.0
+                    }
+                    
                     # 시장가 매도: qty 필드 사용 (주문 수량)
                     if amount_in_krw:
                         # amount가 KRW 금액인 경우, 현재가로 수량 계산
@@ -395,13 +402,27 @@ class CoinoneClient:
                             if current_price <= 0:
                                 raise ValueError(f"잘못된 현재가: {current_price}")
                             quantity = amount / current_price
+                            
+                            # 최소 주문 수량 검증
+                            min_quantity = MIN_ORDER_QUANTITIES.get(currency.upper(), 0)
+                            if min_quantity > 0 and quantity < min_quantity:
+                                logger.error(f"매도 수량 부족: {quantity:.6f} {currency} < 최소 수량 {min_quantity} {currency}")
+                                raise ValueError(f"매도 수량({quantity:.6f})이 최소 주문 수량({min_quantity})보다 작습니다")
+                            
                             logger.info(f"시장가 매도: {amount:,.0f} KRW → {quantity:.6f} {currency} (현재가: {current_price:,.0f})")
                         except Exception as e:
-                            logger.error(f"시장가 매도 중 현재가 조회 실패: {e}")
-                            raise Exception(f"현재가 조회 실패로 시장가 매도 불가: {e}")
+                            logger.error(f"시장가 매도 중 처리 실패: {e}")
+                            raise Exception(f"시장가 매도 처리 실패: {e}")
                     else:
                         # amount가 암호화폐 수량인 경우
                         quantity = amount
+                        
+                        # 최소 주문 수량 검증
+                        min_quantity = MIN_ORDER_QUANTITIES.get(currency.upper(), 0)
+                        if min_quantity > 0 and quantity < min_quantity:
+                            logger.error(f"매도 수량 부족: {quantity:.6f} {currency} < 최소 수량 {min_quantity} {currency}")
+                            raise ValueError(f"매도 수량({quantity:.6f})이 최소 주문 수량({min_quantity})보다 작습니다")
+                        
                         logger.info(f"시장가 매도: {quantity:.6f} {currency}")
                     
                     params = {

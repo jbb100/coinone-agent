@@ -91,9 +91,6 @@ class KairosSystem:
             self.components_initialized = True
             logger.info("✅ KAIROS-1 시스템 초기화 완료")
             
-            # 5. 시작 알림 발송
-            self._send_startup_notification()
-            
             return True
             
         except Exception as e:
@@ -209,7 +206,8 @@ class KairosSystem:
             self.execution_engine = DynamicExecutionEngine(
                 coinone_client=self.coinone_client,
                 db_manager=self.db_manager,
-                rebalancer=self.rebalancer  # Add rebalancer instance
+                rebalancer=self.rebalancer,  # Add rebalancer instance
+                alert_system=self.alert_system
             )
             
             logger.info("모든 컴포넌트 초기화 완료")
@@ -270,30 +268,7 @@ class KairosSystem:
             logger.error(f"시스템 상태 체크 실패: {e}")
             return False
     
-    def _send_startup_notification(self):
-        """시작 알림 발송"""
-        try:
-            startup_message = f"""
-🚀 **KAIROS-1 시스템 시작**
 
-**시작 시간**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**모드**: {'샌드박스' if self.config.is_sandbox_mode() else '실제 거래'}
-**디버그**: {'활성화' if self.config.is_debug_mode() else '비활성화'}
-
-**시스템 상태**: 모든 컴포넌트 정상 초기화 완료
-**다음 예정 작업**: 주간 시장 분석 및 분기별 리밸런싱
-
-✅ 시스템이 정상적으로 시작되었습니다.
-            """.strip()
-            
-            self.alert_system.send_info_alert(
-                "KAIROS-1 시스템 시작",
-                startup_message,
-                "system_startup"
-            )
-            
-        except Exception as e:
-            logger.warning(f"시작 알림 발송 실패: {e}")
     
     def run_weekly_analysis(self, dry_run: bool = False) -> dict:
         """주간 시장 분석 실행. 시장 계절 변화 시 즉시 리밸런싱을 실행할 수 있습니다."""
@@ -419,7 +394,13 @@ class KairosSystem:
             
             # 모든 주문 처리 로직은 DynamicExecutionEngine에 위임
             # check_market_conditions=False로 설정하여 순수하게 주문 실행만 담당
-            return self.execution_engine.process_pending_twap_orders(check_market_conditions=False)
+            result = self.execution_engine.process_pending_twap_orders(check_market_conditions=False)
+            
+            # TWAP 실행 결과가 있고 실제로 처리된 주문이 있을 때만 알림 발송
+            if result.get("success") and result.get("processed_orders", 0) > 0:
+                self._send_twap_execution_notification(result)
+            
+            return result
 
         except Exception as e:
             logger.error(f"TWAP 주문 처리 중 오류: {e}")
@@ -855,25 +836,7 @@ class KairosSystem:
             
             self.running = False
             
-            # 종료 알림 발송
-            if self.alert_system:
-                shutdown_message = f"""
-⏹️ **KAIROS-1 시스템 종료**
 
-**종료 시간**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**상태**: 정상 종료
-
-시스템이 안전하게 종료되었습니다.
-                """.strip()
-                
-                try:
-                    self.alert_system.send_info_alert(
-                        "KAIROS-1 시스템 종료",
-                        shutdown_message,
-                        "system_shutdown"
-                    )
-                except:
-                    pass  # 종료 시에는 알림 실패를 무시
             
             logger.info("✅ KAIROS-1 시스템 종료 완료")
             
