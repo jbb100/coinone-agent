@@ -4,11 +4,12 @@ Database Manager
 SQLite 데이터베이스 관리를 담당하는 모듈
 """
 
-import sqlite3
+import os
 import json
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
 from loguru import logger
 
@@ -75,7 +76,7 @@ class DatabaseManager:
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS twap_orders (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        execution_id TEXT NOT NULL,  -- 실행 ID 추가
+                        execution_id TEXT NOT NULL,
                         asset TEXT NOT NULL,
                         side TEXT NOT NULL,
                         total_amount_krw REAL NOT NULL,
@@ -92,37 +93,44 @@ class DatabaseManager:
                         last_execution_time TEXT,
                         market_season TEXT,
                         target_allocation TEXT,
-                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
-                # TWAP 실행 테이블
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS twap_executions (
-                        execution_id TEXT PRIMARY KEY,
-                        start_time TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        twap_orders_detail TEXT,
+                        exchange_order_ids TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                
-                # 시장 분석 결과 테이블
+
+                # TWAP 실행 기록 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS twap_executions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        execution_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT,
+                        market_season TEXT,
+                        target_allocation TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                # 시장 분석 테이블
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS market_analysis (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         analysis_date TEXT NOT NULL,
                         market_season TEXT NOT NULL,
-                        price_ratio REAL,
+                        btc_price REAL,
                         ma_200w REAL,
-                        current_price REAL,
+                        price_ratio REAL,
                         allocation_crypto REAL,
                         allocation_krw REAL,
+                        season_changed BOOLEAN,
+                        analysis_data TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                
+
                 # 포트폴리오 스냅샷 테이블
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS portfolio_snapshots (
@@ -130,6 +138,23 @@ class DatabaseManager:
                         snapshot_date TEXT NOT NULL,
                         total_value_krw REAL NOT NULL,
                         portfolio_detail TEXT NOT NULL,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                # 거래 기록 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS trade_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        trade_date TEXT NOT NULL,
+                        asset TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        price REAL NOT NULL,
+                        quantity REAL NOT NULL,
+                        amount_krw REAL NOT NULL,
+                        fee_krw REAL,
+                        order_id TEXT,
+                        execution_id TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
@@ -574,152 +599,88 @@ class DatabaseManager:
             logger.error(f"TWAP 실행 계획 저장 실패: {e}")
             raise
 
-    def update_twap_orders_status(self, execution_id: str, twap_orders: List[Any]) -> None:
-        """
-        TWAP 주문 상태 업데이트
-        
-        Args:
-            execution_id: 실행 ID
-            twap_orders: TWAP 주문 리스트
-        """
-        if not execution_id:
-            logger.warning("실행 ID가 없어 TWAP 주문 상태 업데이트를 건너뜀")
-            return
-            
+    def update_twap_orders_status(self, execution_id: str, orders: List[Dict]):
+        """TWAP 주문 상태 업데이트"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # 실행 ID 존재 여부 확인
-                cursor.execute("SELECT 1 FROM twap_executions WHERE execution_id = ?", (execution_id,))
-                if not cursor.fetchone():
-                    # 실행 ID가 없으면 새로 생성
+                for order in orders:
+                    # exchange_order_ids와 target_allocation을 JSON으로 변환
+                    exchange_order_ids = json.dumps(order.get('exchange_order_ids', []))
+                    target_allocation = json.dumps(order.get('target_allocation', {}))
+                    
+                    # datetime 객체를 ISO 형식 문자열로 변환
+                    last_execution_time = order.get('last_execution_time')
+                    if last_execution_time and isinstance(last_execution_time, datetime):
+                        last_execution_time = last_execution_time.isoformat()
+                    
                     cursor.execute("""
-                        INSERT INTO twap_executions (
-                            execution_id,
-                            start_time,
-                            status
-                        ) VALUES (?, ?, ?)
+                        UPDATE twap_orders SET
+                            executed_slices = ?,
+                            remaining_amount_krw = ?,
+                            remaining_quantity = ?,
+                            status = ?,
+                            last_execution_time = ?,
+                            exchange_order_ids = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE execution_id = ? AND asset = ?
                     """, (
+                        order['executed_slices'],
+                        order['remaining_amount_krw'],
+                        order['remaining_quantity'],
+                        order['status'],
+                        last_execution_time,
+                        exchange_order_ids,
                         execution_id,
-                        datetime.now().isoformat(),
-                        "executing"
+                        order['asset']
                     ))
                 
-                # TWAP 주문 상세 정보 업데이트
-                twap_orders_detail = [
-                    {
-                        "asset": order.asset,
-                        "side": order.side,
-                        "total_amount_krw": order.total_amount_krw,
-                        "total_quantity": order.total_quantity,
-                        "execution_hours": order.execution_hours,
-                        "slice_count": order.slice_count,
-                        "slice_amount_krw": order.slice_amount_krw,
-                        "slice_quantity": order.slice_quantity,
-                        "start_time": order.start_time.isoformat(),
-                        "end_time": order.end_time.isoformat(),
-                        "slice_interval_minutes": order.slice_interval_minutes,
-                        "executed_slices": order.executed_slices,
-                        "remaining_amount_krw": order.remaining_amount_krw,
-                        "remaining_quantity": order.remaining_quantity,
-                        "status": order.status,
-                        "last_execution_time": order.last_execution_time.isoformat() if order.last_execution_time else None,
-                        "market_season": order.market_season,
-                        "target_allocation": order.target_allocation,
-                        "created_at": order.created_at.isoformat(),
-                        "exchange_order_ids": order.exchange_order_ids,
-                        "last_rebalance_check": order.last_rebalance_check.isoformat() if order.last_rebalance_check else None
-                    } for order in twap_orders
-                ]
-                
-                cursor.execute("""
-                    UPDATE twap_executions 
-                    SET twap_orders_detail = ?,
-                        updated_at = ?
-                    WHERE execution_id = ?
-                """, (
-                    json.dumps(twap_orders_detail),
-                    datetime.now().isoformat(),
-                    execution_id
-                ))
-                
                 conn.commit()
-                logger.info(f"TWAP 주문 상태 업데이트 완료: {execution_id}")
+                logger.debug(f"TWAP 주문 상태 업데이트 완료: {len(orders)}개")
                 
         except Exception as e:
             logger.error(f"TWAP 주문 상태 업데이트 실패: {e}")
             raise
 
-    def load_active_twap_orders(self):
-        """
-        활성 TWAP 주문들을 데이터베이스에서 로드
-        
-        Returns:
-            (execution_id, twap_orders_list) 튜플
-        """
+    def load_active_twap_orders(self, execution_id: str) -> List[Dict]:
+        """활성 TWAP 주문 로드"""
         try:
-            from src.core.dynamic_execution_engine import TWAPOrder
-            
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, execution_plan
-                    FROM twap_executions 
-                    WHERE status = 'active'
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """)
+                    SELECT * FROM twap_orders 
+                    WHERE execution_id = ? 
+                    AND status IN ('pending', 'executing')
+                    ORDER BY created_at ASC
+                """, (execution_id,))
                 
-                result = cursor.fetchone()
-                if not result:
-                    logger.info("활성 TWAP 실행이 없습니다")
-                    return None, []
+                rows = cursor.fetchall()
+                columns = [description[0] for description in cursor.description]
                 
-                execution_id = result[0]
-                execution_plan = json.loads(result[1])
+                orders = []
+                for row in rows:
+                    order_dict = dict(zip(columns, row))
+                    # JSON 문자열을 딕셔너리로 변환
+                    if order_dict.get('target_allocation'):
+                        order_dict['target_allocation'] = json.loads(order_dict['target_allocation'])
+                    if order_dict.get('exchange_order_ids'):
+                        order_dict['exchange_order_ids'] = json.loads(order_dict['exchange_order_ids'])
+                    else:
+                        order_dict['exchange_order_ids'] = []
+                    
+                    # 날짜/시간 문자열을 datetime 객체로 변환
+                    for field in ['start_time', 'end_time', 'last_execution_time', 'created_at']:
+                        if order_dict.get(field):
+                            order_dict[field] = datetime.fromisoformat(order_dict[field])
+                    
+                    orders.append(order_dict)
                 
-                # TWAP 주문 객체들로 복원
-                twap_orders = []
-                twap_orders_detail = execution_plan.get("twap_orders_detail", [])
-                
-                for order_data in twap_orders_detail:
-                    # 완료된 주문은 제외
-                    if order_data.get("status") == "completed":
-                        continue
-                        
-                    twap_order = TWAPOrder(
-                        asset=order_data["asset"],
-                        side=order_data["side"],
-                        total_amount_krw=order_data["total_amount_krw"],
-                        total_quantity=order_data["total_quantity"],
-                        execution_hours=order_data["execution_hours"],
-                        slice_count=order_data["slice_count"],
-                        slice_amount_krw=order_data["slice_amount_krw"],
-                        slice_quantity=order_data["slice_quantity"],
-                        start_time=datetime.fromisoformat(order_data["start_time"]),
-                        end_time=datetime.fromisoformat(order_data["end_time"]),
-                        slice_interval_minutes=order_data["slice_interval_minutes"],
-                        executed_slices=order_data["executed_slices"],
-                        remaining_amount_krw=order_data["remaining_amount_krw"],
-                        remaining_quantity=order_data["remaining_quantity"],
-                        status=order_data["status"],
-                        last_execution_time=datetime.fromisoformat(order_data["last_execution_time"]) if order_data["last_execution_time"] else None,
-                        # 새로운 필드들 (없으면 기본값 사용)
-                        market_season=order_data.get("market_season", "neutral"),
-                        target_allocation=order_data.get("target_allocation", {}),
-                        created_at=datetime.fromisoformat(order_data["created_at"]) if order_data.get("created_at") else datetime.now(),
-                        exchange_order_ids=order_data.get("exchange_order_ids", []),
-                        last_rebalance_check=datetime.fromisoformat(order_data["last_rebalance_check"]) if order_data.get("last_rebalance_check") else None
-                    )
-                    twap_orders.append(twap_order)
-                
-                logger.info(f"활성 TWAP 주문 {len(twap_orders)}개 로드 완료 (실행 ID: {execution_id})")
-                return execution_id, twap_orders
+                return orders
                 
         except Exception as e:
             logger.error(f"활성 TWAP 주문 로드 실패: {e}")
-            return None, []
+            return []
 
     def update_twap_execution_status(self, execution_id: int, status: str, result_data: dict = None):
         """
