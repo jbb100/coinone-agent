@@ -17,6 +17,7 @@ from loguru import logger
 import uuid
 
 from ..trading.coinone_client import CoinoneClient
+from ..trading.order_manager import OrderStatus
 from ..utils.database_manager import DatabaseManager
 
 
@@ -259,6 +260,8 @@ class DynamicExecutionEngine:
             TWAP 주문 리스트
         """
         try:
+            MIN_ORDER_KRW = 1000  # 코인원 최소 주문 금액 (KRW)
+
             # 실행 파라미터 계산
             exec_params = self._get_execution_parameters()
             
@@ -304,9 +307,26 @@ class DynamicExecutionEngine:
                     # 매수 시: 수량은 0으로 설정 (거래소에서 금액으로 계산)
                     quantity = 0
 
-                # 슬라이스당 금액/수량 계산
-                slice_amount = amount_krw / slice_count
-                slice_quantity = quantity / slice_count if quantity > 0 else 0
+                # 슬라이스당 금액이 최소 주문 금액을 만족하는지 확인하고 슬라이스 횟수 조정
+                local_slice_count = slice_count
+                slice_amount = amount_krw / local_slice_count
+
+                if slice_amount < MIN_ORDER_KRW:
+                    new_slice_count = math.floor(amount_krw / MIN_ORDER_KRW)
+                    if new_slice_count > 0:
+                        logger.warning(
+                            f"{asset}: 슬라이스당 주문 금액({slice_amount:,.0f} KRW)이 최소 금액({MIN_ORDER_KRW} KRW)보다 작아 "
+                            f"분할 횟수 조정: {local_slice_count} -> {new_slice_count}"
+                        )
+                        local_slice_count = new_slice_count
+                    else:
+                        # 총 주문 금액이 최소 주문 금액보다 작은 경우는 이미 필터링 되어야 함
+                        logger.warning(f"{asset}: 총 주문 금액({amount_krw:,.0f} KRW)이 최소 주문 금액({MIN_ORDER_KRW} KRW)보다 작아 주문을 건너뜁니다.")
+                        continue
+                
+                # 조정된 슬라이스 횟수로 슬라이스당 금액/수량 재계산
+                slice_amount = amount_krw / local_slice_count
+                slice_quantity = quantity / local_slice_count if quantity > 0 else 0
                 
                 # TWAP 주문 생성
                 twap_order = TWAPOrder(
@@ -315,7 +335,7 @@ class DynamicExecutionEngine:
                     total_amount_krw=amount_krw,
                     total_quantity=quantity,
                     execution_hours=execution_hours,
-                    slice_count=slice_count,
+                    slice_count=local_slice_count,
                     slice_amount_krw=slice_amount,
                     slice_quantity=slice_quantity,
                     start_time=start_time,
@@ -329,7 +349,7 @@ class DynamicExecutionEngine:
                 
                 twap_orders.append(twap_order)
                 logger.info(f"TWAP 주문 생성: {asset} {side} {amount_krw:,.0f} KRW "
-                          f"({slice_count}회 분할, {slice_interval_minutes}분 간격)")
+                          f"({local_slice_count}회 분할, {slice_interval_minutes}분 간격)")
             
             return twap_orders
             
