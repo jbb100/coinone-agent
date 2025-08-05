@@ -53,6 +53,7 @@ class Rebalancer:
         coinone_client: CoinoneClient,
         portfolio_manager: PortfolioManager,
         market_season_filter: MarketSeasonFilter,
+        db_manager: "DatabaseManager",
         order_manager: Optional[OrderManager] = None
     ):
         """
@@ -60,11 +61,13 @@ class Rebalancer:
             coinone_client: 코인원 클라이언트
             portfolio_manager: 포트폴리오 관리자
             market_season_filter: 시장 계절 필터
-            order_manager: 주문 관리자 (선택사항)
+            db_manager: 데이터베이스 관리자
+            order_manager: 주문 관리자
         """
         self.coinone_client = coinone_client
         self.portfolio_manager = portfolio_manager
         self.market_season_filter = market_season_filter
+        self.db_manager = db_manager
         self.order_manager = order_manager or OrderManager(coinone_client)
         
         # 리밸런싱 설정

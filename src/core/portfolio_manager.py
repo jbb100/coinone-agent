@@ -109,7 +109,8 @@ class PortfolioManager:
         assets = portfolio_value.get("assets", {})
         
         # KRW 비중
-        krw_value = assets.get("KRW", 0)
+        krw_asset = assets.get("KRW", {})
+        krw_value = krw_asset.get("value_krw", 0) if isinstance(krw_asset, dict) else krw_asset
         current_weights["KRW"] = krw_value / total_value
         
         # 암호화폐 비중
