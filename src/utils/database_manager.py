@@ -109,6 +109,7 @@ class DatabaseManager:
                         end_time TEXT,
                         market_season TEXT,
                         target_allocation TEXT,
+                        twap_orders_detail TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
