@@ -17,6 +17,8 @@ from .types import AccountID, AccountName, KRWAmount, Percentage
 from .base_service import BaseService, ServiceConfig
 from .exceptions import KairosException, ConfigurationException
 from .multi_account_manager import MultiAccountManager, get_multi_account_manager
+from .market_season_filter import MarketSeasonFilter
+from ..utils.database_manager import DatabaseManager
 
 # 기존 단일 계정 매니저들 import
 from .portfolio_manager import PortfolioManager, AssetAllocation
@@ -69,7 +71,7 @@ class MultiAccountFeatureManager(BaseService):
     각 계정별로 독립적인 기능 실행과 통합 관리를 동시에 지원합니다.
     """
     
-    def __init__(self):
+    def __init__(self, db_manager=None, market_season_filter=None):
         super().__init__(ServiceConfig(
             name="multi_account_feature_manager",
             enabled=True,
@@ -77,6 +79,14 @@ class MultiAccountFeatureManager(BaseService):
         ))
         
         self.multi_account_manager = get_multi_account_manager()
+        self.db_manager = db_manager
+        self.market_season_filter = market_season_filter
+        
+        # 필수 의존성 검증
+        if self.db_manager is None:
+            logger.warning("⚠️ DatabaseManager가 제공되지 않음 - 일부 기능이 제한될 수 있습니다")
+        if self.market_season_filter is None:
+            logger.warning("⚠️ MarketSeasonFilter가 제공되지 않음 - 일부 기능이 제한될 수 있습니다")
         
         # 계정별 기능 인스턴스 캐시
         self.portfolio_managers: Dict[AccountID, PortfolioManager] = {}
@@ -142,10 +152,16 @@ class MultiAccountFeatureManager(BaseService):
                     use_dynamic_optimization=True
                 )
                 
-                self.rebalancers[account_id] = Rebalancer(
-                    portfolio_manager=self.portfolio_managers[account_id],
-                    coinone_client=client
-                )
+                # Rebalancer는 market_season_filter와 db_manager가 필요함
+                if self.market_season_filter is not None and self.db_manager is not None:
+                    self.rebalancers[account_id] = Rebalancer(
+                        coinone_client=client,
+                        portfolio_manager=self.portfolio_managers[account_id],
+                        market_season_filter=self.market_season_filter,
+                        db_manager=self.db_manager
+                    )
+                else:
+                    logger.warning(f"⚠️ 계정 {account_id} Rebalancer 초기화 건너뛰기 (필수 의존성 없음)")
                 
                 self.risk_managers[account_id] = RiskManager(
                     coinone_client=client
@@ -176,10 +192,14 @@ class MultiAccountFeatureManager(BaseService):
                     coinone_client=client
                 )
                 
-                self.execution_engines[account_id] = DynamicExecutionEngine(
-                    coinone_client=client,
-                    account_id=account_id
-                )
+                # DynamicExecutionEngine은 db_manager가 필요함
+                if self.db_manager is not None:
+                    self.execution_engines[account_id] = DynamicExecutionEngine(
+                        coinone_client=client,
+                        db_manager=self.db_manager
+                    )
+                else:
+                    logger.warning(f"⚠️ 계정 {account_id} DynamicExecutionEngine 초기화 건너뛰기 (db_manager 없음)")
                 
                 logger.info(f"✅ 계정 {account_id} 기능 초기화 완료")
                 
@@ -505,9 +525,9 @@ class MultiAccountFeatureManager(BaseService):
 # 전역 인스턴스
 _multi_account_feature_manager: Optional[MultiAccountFeatureManager] = None
 
-def get_multi_account_feature_manager() -> MultiAccountFeatureManager:
+def get_multi_account_feature_manager(db_manager=None, market_season_filter=None) -> MultiAccountFeatureManager:
     """멀티 계정 기능 관리자 인스턴스 반환"""
     global _multi_account_feature_manager
     if _multi_account_feature_manager is None:
-        _multi_account_feature_manager = MultiAccountFeatureManager()
+        _multi_account_feature_manager = MultiAccountFeatureManager(db_manager, market_season_filter)
     return _multi_account_feature_manager
