@@ -1,6 +1,11 @@
 # KAIROS-1: 장기 투자 시스템 (코인원 거래소 맞춤 버전)
 
-**🚀 최신 업데이트 (2025.01)**: 고급 장기 투자 시스템 추가
+**🚀 최신 업데이트 (2025.02)**: Enhanced Multi-Account System 🆕
+- **🎯 Enhanced Multi-Account Manager** - 핵심 기능을 멀티 계정에서 제공 (일부 제한사항 있음)
+- **🎬 Multi-Account Coordinator** - 병렬 작업 실행 및 자동 스케줄링 시스템
+- **⚡ Unified Feature Management** - 주요 기능의 멀티 계정 확장 (TWAP 등 일부 미지원)
+- **📊 Advanced Analytics** - 포트폴리오 최적화, 리스크 분석, 성과 추적 통합
+- **🚀 Smart CLI Interface** - 주요 기능을 직관적인 명령어로 제공
 - **10개 고급 분석 시스템** 통합 (멀티 타임프레임, 매크로 경제, 온체인 데이터 등)
 - **멀티 계정 관리 시스템** - 여러 코인원 계정 동시 관리 및 독립적 전략 운용
 - **고급 CLI 도구** - 백테스팅, 포트폴리오 최적화, 성과 분석 등 전문 도구
@@ -19,13 +24,28 @@
 
 ## 🏗️ 시스템 아키텍처
 
-### 🏦 멀티 계정 관리 시스템 (Multi-Account System) 🆕
-- **다중 계정 지원**: 여러 코인원 계정을 동시에 관리
-- **개별 투자 전략**: 각 계정별 독립적인 리스크 수준 및 투자 전략 (Conservative/Moderate/Aggressive)
-- **통합 모니터링**: 모든 계정의 성과를 통합 조회 및 분석
-- **자동 리밸런싱**: 스케줄 기반 및 조건 기반 자동 실행
-- **멀티 포트폴리오 관리**: 계정별 포트폴리오 최적화 및 리스크 패리티 적용
-- **보안 강화**: 계정별 암호화된 API 키 관리 및 접근 감사
+### 🏦 Enhanced Multi-Account System 🆕
+**모든 기능을 멀티 계정에서 동일하게 제공하는 통합 시스템**
+
+#### 🎯 핵심 특징:
+- **🔄 Unified Feature Management**: 단일 계정의 모든 기능을 멀티 계정에서 제공
+  - 포트폴리오 최적화, 리밸런싱, 리스크 분석, 성과 추적
+  - DCA+ 전략, 세금 최적화, 온체인 분석
+  - 매크로 경제 분석, 심리적 편향 방지
+- **🎬 Smart Coordinator**: 병렬 작업 실행 및 자동 스케줄링
+  - 작업 우선순위 관리 (Critical/High/Medium/Low)
+  - 리소스 풀 관리 및 동시성 제어
+  - 자동 재시도 및 장애 복구
+- **📊 Advanced Analytics**: 통합 분석 및 리포팅
+  - 계정별 + 통합 포트폴리오 분석
+  - 실시간 성과 추적 및 벤치마킹
+  - 다차원 리스크 평가
+- **⚡ Enhanced CLI**: 직관적이고 강력한 명령어 인터페이스
+  - 모든 기능을 단순한 명령어로 실행
+  - 실시간 상태 모니터링 및 헬스체크
+  - 작업 스케줄링 및 관리
+
+> **⚡ 빠른 시작**: Enhanced 멀티 계정을 사용하려면 [Enhanced Multi-Account 사용법](#-enhanced-multi-account-system-사용법-신규) 섹션으로 바로 이동하세요.
 
 ### 모듈 1: 시장 계절 필터 (Market Season Filter)
 - **주기**: 매주 1회
@@ -104,14 +124,17 @@ vim config/config.yaml
 
 #### 멀티 계정 설정 (신규)
 ```bash
-# 멀티 계정 시스템 초기화 (자동으로 기본 설정 생성)
+# 보안 마스터 키 설정 (권장 - 먼저 설정)
+export KAIROS_MASTER_KEY="your_secure_master_key_32_chars_long"
+
+# 현재 계정 목록 확인
 python3 kairos1_multi.py accounts
 
-# 첫 번째 계정 추가
+# 첫 번째 계정 추가 (테스트 모드)
 python3 kairos1_multi.py add my_main "메인 계정" "YOUR_API_KEY" "YOUR_SECRET_KEY" --dry-run
 
-# 보안 마스터 키 설정 (권장)
-export KAIROS_MASTER_KEY="your_secure_master_key_32_chars_long"
+# 실제 거래 모드로 계정 추가
+python3 kairos1_multi.py add my_main "메인 계정" "YOUR_API_KEY" "YOUR_SECRET_KEY" --live
 ```
 
 ### 3. 보안 설정 및 API 구성
@@ -123,30 +146,120 @@ export KAIROS_MASTER_KEY="your_secure_master_key_32_chars_long"
 
 ## 🚀 실행
 
-### 🏦 멀티 계정 관리 (신규)
-여러 코인원 계정을 동시에 관리하는 통합 시스템:
+### 🚀 Enhanced Multi-Account System 사용법 (신규)
+모든 기능을 멀티 계정에서 동일하게 제공하는 확장된 통합 시스템입니다.
 
+#### ✨ Enhanced vs 기존 멀티 계정 시스템 비교
+
+| 기능 | Enhanced System | 기존 Multi-Account |
+|------|-----------------|-------------------|
+| **모든 기능 지원** | ✅ 단일 계정 모든 기능 제공 | ❌ 기본 기능만 |
+| **포트폴리오 최적화** | ✅ 전체/개별 계정 | ❌ 미지원 |
+| **리스크 분석** | ✅ 고급 리스크 메트릭 | ❌ 기본 분석만 |
+| **성과 분석** | ✅ 벤치마킹, 샤프비율 등 | ❌ 기본 수익률만 |
+| **DCA+ 전략** | ✅ 공포/탐욕 지수 기반 | ❌ 미지원 |
+| **세금 최적화** | ✅ 로트 관리, 손실 수확 | ❌ 미지원 |
+| **작업 스케줄링** | ✅ 우선순위, 자동 재시도 | ❌ 미지원 |
+| **통합 분석** | ✅ 온체인, 매크로 분석 | ❌ 미지원 |
+| **CLI 인터페이스** | ✅ 고급 명령어 | ❌ 기본 명령어만 |
+
+#### 📌 멀티 계정 vs 단일 계정 선택 가이드
+
+**⚠️ 중요: 기능 차이**
+| 기능 | 멀티 계정 | 단일 계정 |
+|------|-----------|-----------|
+| **TWAP 분할 매매** | ❌ 미지원 | ✅ 지원 |
+| **실시간 모니터링** | ❌ 간소화 | ✅ 15분/시간 단위 |
+| **고급 분석 시스템** | ⚠️ 일부 지원 | ✅ 전체 지원 |
+| **crontab 복잡도** | 🟢 단순 (3-7개) | 🔴 복잡 (12개+) |
+
+**권장 사용법**:
+- **멀티 계정 사용**: 여러 계정 운영, 간단한 리밸런싱, 복잡한 스케줄 관리 부담스러운 경우
+- **단일 계정 사용**: 정교한 분할 매매, 실시간 모니터링, 모든 고급 기능이 필요한 경우
+
+#### 🚀 Enhanced Multi-Account 빠른 시작
 ```bash
-# 계정 목록 확인
-python3 kairos1_multi.py accounts
+# 1. 첫 계정 추가 (기존 멀티 계정 시스템 사용)
+python3 kairos1_multi.py add main_account "메인계정" "YOUR_API_KEY" "YOUR_SECRET_KEY" --dry-run
 
-# 새 계정 추가
-python3 kairos1_multi.py add my_account "내 계정" "API_KEY" "SECRET_KEY"
+# 2. Enhanced 시스템으로 모든 기능 사용
+# 계정 목록 조회
+python3 kairos1_enhanced_multi.py accounts -d
 
-# 통합 포트폴리오 현황
-python3 kairos1_multi.py portfolio
+# 포트폴리오 최적화 실행 (모든 계정)
+python3 kairos1_enhanced_multi.py optimize
 
-# 전체 계정 리밸런싱
-python3 kairos1_multi.py rebalance
+# 특정 계정만 최적화
+python3 kairos1_enhanced_multi.py optimize -a main_account
+
+# 리밸런싱 실행 (테스트 모드)
+python3 kairos1_enhanced_multi.py rebalance
+
+# 실제 거래로 리밸런싱
+python3 kairos1_enhanced_multi.py rebalance --live
+
+# 리스크 분석 실행
+python3 kairos1_enhanced_multi.py risk
+
+# 통합 분석 정보 조회
+python3 kairos1_enhanced_multi.py analytics
 
 # 시스템 상태 확인
-python3 kairos1_multi.py health
+python3 kairos1_enhanced_multi.py health
+```
 
-# 계정 제거
-python3 kairos1_multi.py remove my_account
+#### 📋 Enhanced 시스템 주요 명령어
+```bash
+# 🏦 계정 관리 (기존 시스템 사용)
+python3 kairos1_multi.py accounts           # 계정 목록
+python3 kairos1_multi.py add [계정ID] [이름] [API_KEY] [SECRET_KEY]  # 계정 추가
+python3 kairos1_multi.py remove [계정ID]    # 계정 제거
 
-# 특정 계정 포트폴리오 보기
-python3 kairos1_multi.py portfolio --account my_account
+# 📊 Enhanced 포트폴리오 관리
+python3 kairos1_enhanced_multi.py accounts [-d]     # 계정 상태 조회
+python3 kairos1_enhanced_multi.py optimize [-a 계정ID]  # 포트폴리오 최적화
+python3 kairos1_enhanced_multi.py rebalance [-a 계정ID] [--live]  # 리밸런싱
+
+# 📈 고급 분석 기능
+python3 kairos1_enhanced_multi.py risk [-a 계정ID]        # 리스크 분석
+python3 kairos1_enhanced_multi.py performance [-a 계정ID] # 성과 분석
+python3 kairos1_enhanced_multi.py analytics              # 통합 분석
+
+# 💡 전략 실행
+python3 kairos1_enhanced_multi.py dca [-a 계정ID] [--amount 금액]  # DCA+ 전략
+python3 kairos1_enhanced_multi.py tax [-a 계정ID]                  # 세금 최적화
+
+# 🎬 시스템 관리
+python3 kairos1_enhanced_multi.py status     # 코디네이터 상태
+python3 kairos1_enhanced_multi.py health     # 헬스체크
+python3 kairos1_enhanced_multi.py schedule <작업명> [-a 계정ID] [-p 우선순위]  # 작업 스케줄링
+```
+
+#### 🔄 작업 스케줄링 예시
+```bash
+# 포트폴리오 최적화 스케줄링 (높은 우선순위)
+python3 kairos1_enhanced_multi.py schedule portfolio_optimization -p high
+
+# 특정 계정 DCA 전략 스케줄링
+python3 kairos1_enhanced_multi.py schedule dca_strategy -a main_account -p medium
+
+# 전체 계정 리스크 분석 스케줄링 (즉시 실행)
+python3 kairos1_enhanced_multi.py schedule risk_analysis -p critical
+```
+
+#### ⚙️ 리스크 수준별 계정 추가 예시
+```bash
+# Conservative (보수적) - 안정성 중시
+python3 kairos1_multi.py add safe_account "안전계정" "API_KEY" "SECRET_KEY" \
+  --risk-level conservative --initial-capital 1000000
+
+# Moderate (중도적) - 균형 투자
+python3 kairos1_multi.py add balanced_account "균형계정" "API_KEY" "SECRET_KEY" \
+  --risk-level moderate --initial-capital 2000000
+
+# Aggressive (공격적) - 수익률 중시
+python3 kairos1_multi.py add growth_account "성장계정" "API_KEY" "SECRET_KEY" \
+  --risk-level aggressive --initial-capital 3000000
 ```
 
 ### 🔧 고급 CLI 도구 (신규)
@@ -220,15 +333,59 @@ python scripts/performance_report.py
 
 ### 자동 실행 (스케줄러)
 
-`crontab`을 사용해 주요 작업을 자동화할 수 있습니다. 아래 예시를 참고하여 시스템에 맞게 경로를 설정하세요.
+`crontab`을 사용해 주요 작업을 자동화할 수 있습니다. **통합 병렬 처리** 또는 **개별 작업 세분화** 방식을 선택하세요.
 
+#### 📋 방식 선택 가이드
+
+**🔷 통합 병렬 처리를 선택하세요**:
+- 여러 계정을 간단하게 관리하고 싶은 경우
+- crontab 설정을 최소화하고 싶은 경우 (3-5개 스케줄)
+- 기본적인 리밸런싱만으로도 충분한 경우
+- 시스템 관리 부담을 줄이고 싶은 경우
+
+**🔶 개별 작업 세분화를 선택하세요**:
+- TWAP 분할 매매로 시장 충격을 최소화하려는 경우
+- 모든 고급 분석 기능(10개 시스템)을 사용하려는 경우
+- 실시간 모니터링이 중요한 경우
+- 정교한 투자 전략이 필요한 경우
+
+#### 🔷 통합 병렬 처리 방식 (간단함 우선)
 ```bash
 # crontab -e 명령어로 편집기를 열어 아래 내용을 추가합니다.
 # 시스템 환경에 따라 PATH를 명시적으로 설정해주는 것이 안정적입니다.
 # PATH=/path/to/kairos_env/bin:/usr/bin:/bin
 
 # --------------------------------------------------------------------------
-# KAIROS-1 자동 실행 스케줄
+# KAIROS-1 통합 병렬 처리 자동 실행 스케줄
+# --------------------------------------------------------------------------
+
+# 1. 전체 계정 통합 리밸런싱 (매주 월요일 09:00)
+# 하나의 스크립트로 모든 계정을 병렬 처리합니다.
+0 9 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_multi.py rebalance
+
+# 2. 전체 계정 상태 모니터링 (매일 09:00, 18:00)
+# 모든 계정의 포트폴리오와 시스템 상태를 동시에 점검합니다.
+0 9,18 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_multi.py health
+
+# 3. 통합 포트폴리오 리포트 (매일 21:00)
+# 모든 계정의 통합 현황을 병렬로 수집하여 리포트를 생성합니다.
+0 21 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_multi.py portfolio
+
+# --------------------------------------------------------------------------
+# 선택: 계정별 개별 스케줄이 필요한 경우 추가
+# --------------------------------------------------------------------------
+# 특정 계정만 리밸런싱 (예: aggressive 계정은 더 자주)
+# 0 9 * * 1,4 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_multi.py rebalance -a aggressive_account
+```
+
+#### 🔶 개별 작업 세분화 방식 (완전한 기능)
+```bash
+# crontab -e 명령어로 편집기를 열어 아래 내용을 추가합니다.
+# 시스템 환경에 따라 PATH를 명시적으로 설정해주는 것이 안정적입니다.
+# PATH=/path/to/kairos_env/bin:/usr/bin:/bin
+
+# --------------------------------------------------------------------------
+# KAIROS-1 개별 작업 세분화 자동 실행 스케줄
 # --------------------------------------------------------------------------
 
 # 1. 주간 시장 분석 (매주 월요일 09:00)
@@ -283,7 +440,8 @@ python scripts/performance_report.py
 
 # 12. 고급 성과 분석 (매주 일요일 21:00)
 # 샤프비율, 최대낙폭, 승률 등 고급 성과 지표를 분석합니다.
-0 21 * * 0 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --advanced-performance-report
+# 파라미터: 분석할 기간(일수) - 예: 30일간 분석
+0 21 * * 0 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --advanced-performance-report 30
 ```
 
 ## 📈 모니터링 및 알림
@@ -384,6 +542,26 @@ mentions:
 # 알림 시스템 테스트 (멘션 포함)
 python kairos1_main.py --test-alerts
 ```
+
+## ❗ 중요 사항 및 주의점
+
+### 🔍 통합 병렬 처리 vs 개별 작업 세분화 차이점
+
+| 항목 | 통합 병렬 처리 (kairos1_multi.py) | 개별 작업 세분화 (kairos1_main.py) |
+|------|-------------------------------|------------------------------|
+| **리밸런싱 주기** | 주간 (매주 월요일) | 분기별 (3개월마다) |
+| **TWAP 분할 매매** | 미지원 (즉시 실행) | 지원 (시장 충격 최소화) |
+| **계정 관리** | 여러 계정 동시 관리 | 단일 계정만 관리 |
+| **리스크 수준** | 계정별 개별 설정 | config.yaml 통합 설정 |
+| **실행 방식** | CLI 명령어 기반 | 옵션 플래그 기반 |
+| **crontab 복잡도** | 간단 (3-5개 스케줄) | 복잡 (12개 스케줄) |
+| **병렬 처리** | 하나의 스크립트가 모든 계정 처리 | 각 기능별 개별 스크립트 실행 |
+
+### ⚠️ 통합 병렬 처리 방식 주의사항
+1. **TWAP 미지원**: 통합 처리 방식은 TWAP 분할 매매를 지원하지 않습니다. 대량 거래 시 시장 충격 주의
+2. **주간 리밸런싱**: 매주 리밸런싱하므로 거래 빈도가 높습니다
+3. **API 제한**: 여러 계정 동시 조회 시 API rate limit 주의
+4. **메모리 사용**: 계정이 많을수록 메모리 사용량 증가
 
 ## ⚠️ 리스크 관리 및 보안
 
@@ -561,8 +739,8 @@ python kairos1_main.py --bias-check
 
 ### 10. 고급 성과 분석
 ```bash
-# 고급 성과 리포트
-python kairos1_main.py --advanced-performance-report
+# 고급 성과 리포트 (예: 최근 30일간 분석)
+python kairos1_main.py --advanced-performance-report 30
 
 # 고급 지표
 - 샤프 비율 (Sharpe Ratio)
@@ -604,7 +782,16 @@ python kairos1_main.py --process-twap
 
 ## 📈 업데이트 내역
 
-### v3.1.0 (2025.02) - Multi-Account & Enterprise Features 🆕
+### v3.2.0 (2025.02) - Enhanced Multi-Account System 🆕
+- ✅ **🎯 Enhanced Multi-Account Manager**: 모든 기능을 멀티 계정에서 동일하게 제공
+- ✅ **🎬 Multi-Account Coordinator**: 병렬 작업 실행, 우선순위 관리, 자동 스케줄링
+- ✅ **⚡ Unified Feature Management**: 단일 계정 모든 기능의 멀티 계정 확장
+- ✅ **📊 Advanced Analytics Integration**: 포트폴리오 최적화, 리스크 분석, 성과 추적 통합
+- ✅ **🚀 Smart CLI Interface**: 직관적이고 강력한 명령어로 모든 기능 제공
+- ✅ **🔄 Intelligent Task Scheduling**: 작업 우선순위, 재시도 로직, 리소스 관리
+- ✅ **📈 Comprehensive Reporting**: 통합 분석 리포트 및 실시간 모니터링
+
+### v3.1.0 (2025.02) - Multi-Account & Enterprise Features
 - ✅ **멀티 계정 관리 시스템**: 여러 코인원 계정 동시 관리
 - ✅ **고급 CLI 도구**: 백테스팅, 포트폴리오 최적화 전문 도구
 - ✅ **통합 보안 시스템**: AES-256 암호화, API 키 관리, 접근 감사
@@ -678,4 +865,63 @@ python kairos1_main.py --clear-failed-twap
 **예방**:
 - 분기별 리밸런싱은 정해진 스케줄에 따라 자동 실행하고 수동 실행은 최소화
 - 정기적으로 `--twap-status`로 상태 모니터링
-- 잔고 부족 등의 문제 발생 시 즉시 `--clear-failed-twap`로 정리 
+- 잔고 부족 등의 문제 발생 시 즉시 `--clear-failed-twap`로 정리
+
+---
+
+## 🎯 멀티 계정 운영 빠른 가이드
+
+### ✅ 멀티 계정을 사용해야 하는 경우:
+- 여러 개의 코인원 계정을 보유하고 있는 경우
+- 계정별로 다른 리스크 수준 (Conservative/Moderate/Aggressive)을 적용하고 싶은 경우
+- 간단한 주간 리밸런싱으로 운영하고 싶은 경우
+- 계정별 독립적인 모니터링이 필요한 경우
+
+### ✅ 단일 계정을 사용해야 하는 경우:
+- 하나의 계정만 운영하는 경우
+- TWAP 분할 매매로 시장 충격을 최소화하려는 경우
+- 분기별 리밸런싱으로 거래 빈도를 줄이려는 경우
+- 기존 kairos1_main.py 시스템에 익숙한 경우
+
+### 🚀 Enhanced Multi-Account 운영 3단계:
+```bash
+# 1단계: 계정 추가 (기존 시스템 사용)
+python3 kairos1_multi.py add main_account "메인계정" "API_KEY" "SECRET_KEY" --dry-run
+
+# 2단계: Enhanced 시스템으로 모든 기능 활용
+python3 kairos1_enhanced_multi.py optimize     # 포트폴리오 최적화
+python3 kairos1_enhanced_multi.py rebalance    # 리밸런싱 실행
+python3 kairos1_enhanced_multi.py analytics    # 통합 분석
+
+# 3단계: 자동 스케줄링 및 모니터링
+python3 kairos1_enhanced_multi.py schedule portfolio_optimization -p high
+python3 kairos1_enhanced_multi.py status       # 코디네이터 상태
+python3 kairos1_enhanced_multi.py health       # 시스템 헬스체크
+```
+
+### 🔄 Enhanced 시스템 crontab 설정 (권장)
+```bash
+# Enhanced Multi-Account 자동 실행 스케줄 (총 5개)
+# ⚠️ 주의: 단일 계정 대비 기능 제한 있음 (TWAP 미지원, 실시간 모니터링 간소화)
+
+# 매일 오전 9시 포트폴리오 최적화
+0 9 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_enhanced_multi.py optimize
+
+# 매주 월요일 오전 10시 리밸런싱 (실제 거래)
+0 10 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_enhanced_multi.py rebalance --live
+
+# 매시간 리스크 분석 (단일 계정 대비 간소화됨)
+0 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_enhanced_multi.py risk
+
+# 매일 오후 6시 성과 분석
+0 18 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_enhanced_multi.py performance
+
+# 매일 오후 9시 통합 분석 리포트
+0 21 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_enhanced_multi.py analytics
+```
+
+**📊 복잡도 비교**:
+- **Enhanced Multi-Account**: 5개 스케줄 (간단, 관리 용이)  
+- **단일 계정**: 12개 스케줄 (복잡, TWAP/실시간 모니터링 포함)
+
+**⚠️ 투자는 원금 손실의 위험이 있습니다. 충분한 검토와 테스트 후 사용하시기 바랍니다.** 

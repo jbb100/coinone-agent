@@ -19,6 +19,7 @@ import uuid
 from ..trading.coinone_client import CoinoneClient
 from ..trading.order_manager import OrderStatus
 from ..utils.database_manager import DatabaseManager
+from ..utils.constants import MIN_ORDER_AMOUNTS_KRW
 
 
 class MarketVolatility(Enum):
@@ -444,16 +445,17 @@ class DynamicExecutionEngine:
                         }
                     
                     # KRW가 있지만 부족한 경우 주문 크기 조정
+                    min_amount_krw = MIN_ORDER_AMOUNTS_KRW.get(order.asset.upper(), 5000)
                     adjusted_amount = min(balance * 0.99, order.slice_amount_krw)  # 1% 마진
-                    if adjusted_amount >= 1000:  # 최소 주문 금액
+                    if adjusted_amount >= min_amount_krw:  # 최소 주문 금액 확인
                         logger.warning(f"잔고 부족으로 주문 크기 조정: {order.slice_amount_krw:,.0f} → {adjusted_amount:,.0f} KRW")
                         order.slice_amount_krw = adjusted_amount
                     else:
-                        logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset}")
+                        logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset} (조정된 금액 {adjusted_amount:,.0f} KRW < 최소 금액 {min_amount_krw:,.0f} KRW)")
                         return {
                             "success": False,
                             "error": "insufficient_balance",
-                            "message": "KRW 잔고가 최소 주문 금액보다 작습니다"
+                            "message": f"KRW 잔고가 최소 주문 금액({min_amount_krw:,.0f} KRW)보다 작습니다"
                         }
             
             else:  # sell
@@ -691,8 +693,58 @@ class DynamicExecutionEngine:
                 is_retryable = any(err.lower() in error_msg.lower() for err in retryable_errors)
                 error_code = order_result.get('error_code', '')
                 
+                # 최소 주문 금액 미만 오류 (306)에 대한 특별 처리  
+                if error_code == '306' or "below the minimum amount" in error_msg:
+                    logger.warning(f"💰 최소 주문 금액 미만 감지 - 남은 전체 금액을 한 번에 주문: {order.asset}")
+                    
+                    # 남은 전체 금액으로 한 번에 주문 시도
+                    total_remaining_amount = order.remaining_amount_krw
+                    logger.info(f"🔄 슬라이싱 없이 남은 전체 금액으로 주문: {total_remaining_amount:,.0f} KRW")
+                    
+                    # 전체 남은 금액으로 주문 제출
+                    full_order_result_obj = self.rebalancer.order_manager.submit_market_order(
+                        currency=order.asset,
+                        side=order.side,
+                        amount=total_remaining_amount
+                    )
+                    
+                    # Order 객체를 딕셔너리로 변환
+                    if full_order_result_obj:
+                        full_order_result = {
+                            "success": full_order_result_obj.status != OrderStatus.FAILED,
+                            "order_id": full_order_result_obj.order_id,
+                            "status": full_order_result_obj.status.value,
+                            "error": full_order_result_obj.error_message if full_order_result_obj.status == OrderStatus.FAILED else None
+                        }
+                    else:
+                        full_order_result = {
+                            "success": False,
+                            "error": "Order submission returned None"
+                        }
+                    
+                    if full_order_result.get("success"):
+                        # 전체 주문 성공시 TWAP 완료 처리
+                        order.exchange_order_ids.append(full_order_result.get("order_id"))
+                        order.executed_slices = order.slice_count  # 모든 슬라이스 완료로 처리
+                        order.remaining_amount_krw = 0
+                        order.status = "completed"
+                        order.last_execution_time = datetime.now()
+                        
+                        logger.info(f"✅ 전체 주문 성공으로 TWAP 완료: {order.asset}")
+                        return {
+                            "success": True,
+                            "order_id": full_order_result.get("order_id"),
+                            "executed_slices": order.executed_slices,
+                            "remaining_slices": 0,
+                            "full_amount_executed": True
+                        }
+                    else:
+                        logger.error(f"💥 전체 금액 주문도 실패: {full_order_result.get('error')}")
+                        order.status = "failed"
+                        return full_order_result
+                
                 # 최대 주문 금액 초과 오류 (307)에 대한 특별 처리
-                if error_code == '307' or "exceed the maximum amount" in error_msg:
+                elif error_code == '307' or "exceed the maximum amount" in error_msg:
                     logger.warning(f"🔄 최대 주문 금액 초과 오류 감지 - 슬라이스 크기 동적 조정: {order.asset}")
                     
                     # 현재 슬라이스 크기를 50% 감소

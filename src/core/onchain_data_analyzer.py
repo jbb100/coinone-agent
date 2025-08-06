@@ -535,6 +535,50 @@ class OnchainDataAnalyzer:
         
         return max(0.3, min(1.0, confidence))
     
+    def get_latest_signal(self) -> Dict[str, Any]:
+        """
+        최신 시장 신호 조회
+        
+        Returns:
+            최신 온체인 분석 결과와 시장 신호
+        """
+        try:
+            # 최신 온체인 분석 실행
+            analysis = self.analyze_comprehensive_onchain(asset="BTC")
+            
+            if not analysis.get("success"):
+                return {
+                    "market_signal": 0.0,
+                    "confidence": 0.3,
+                    "timestamp": datetime.now(),
+                    "error": analysis.get("error", "분석 실패")
+                }
+            
+            # 주요 신호들을 종합하여 단일 시장 신호로 변환
+            signals = analysis.get("signals", {})
+            market_signal = (
+                signals.get("short_term", 0) * 0.4 +
+                signals.get("medium_term", 0) * 0.4 +
+                signals.get("long_term", 0) * 0.2
+            )
+            
+            return {
+                "market_signal": market_signal,
+                "confidence": analysis.get("confidence", 0.5),
+                "timestamp": datetime.now(),
+                "signals": signals,
+                "metrics": analysis.get("metrics")
+            }
+            
+        except Exception as e:
+            logger.error(f"온체인 최신 신호 조회 실패: {e}")
+            return {
+                "market_signal": 0.0,
+                "confidence": 0.3,
+                "timestamp": datetime.now(),
+                "error": str(e)
+            }
+    
     # 데이터 수집 메서드들 (예시 - 실제로는 API 호출)
     def _get_whale_count(self, asset: str) -> int:
         """고래 주소 수 조회"""

@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 import requests
 from loguru import logger
 from ..utils.constants import (
-    MIN_ORDER_QUANTITIES, MAX_ORDER_LIMITS_KRW, SAFETY_MARGIN,
+    MIN_ORDER_QUANTITIES, MIN_ORDER_AMOUNTS_KRW, MAX_ORDER_LIMITS_KRW, SAFETY_MARGIN,
     SUPPORTED_CRYPTOCURRENCIES, API_REQUEST_TIMEOUT
 )
 
@@ -379,6 +379,17 @@ class CoinoneClient:
                         except Exception as e:
                             logger.error(f"시장가 매수 중 최신 가격 조회 실패: {e}")
                             raise Exception(f"최신 가격 조회 실패로 시장가 매수 불가: {e}")
+                    
+                    # 최소 주문 금액 사전 검증
+                    min_amount_krw = MIN_ORDER_AMOUNTS_KRW.get(currency.upper(), 5000)
+                    if total_amount < min_amount_krw:
+                        logger.error(f"❌ 주문 금액({total_amount:,.0f} KRW)이 최소 한도({min_amount_krw:,.0f} KRW) 미만")
+                        return {
+                            "success": False, 
+                            "error_code": "306", 
+                            "error_msg": f"Cannot be process the orders below the minimum amount.",
+                            "response": {"result": "error", "error_code": "306", "error_msg": "Cannot be process the orders below the minimum amount."}
+                        }
                     
                     # 최대 주문 금액 사전 검증
                     COINONE_MAX_ORDER_AMOUNT_KRW = 500_000_000  # 500M KRW

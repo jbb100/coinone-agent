@@ -19,6 +19,17 @@ from loguru import logger
 from ..utils.market_data_provider import MarketDataProvider
 
 
+@dataclass
+class DCASignal:
+    """DCA 신호 결과"""
+    signal_strength: float  # 0.0 - 1.0
+    recommended_amount: float  # 권장 투자 금액 (KRW)
+    next_execution_date: datetime
+    market_adjustment_factor: float  # 시장 상황 조정 배수
+    reasoning: str  # 결정 근거
+    market_conditions: Dict[str, Any] = field(default_factory=dict)
+
+
 class FearGreedLevel(Enum):
     """공포/탐욕 지수 레벨"""
     EXTREME_FEAR = "extreme_fear"      # 0-25
@@ -109,6 +120,140 @@ class DCAPlus:
         }
         
         logger.info("DCA+ 전략 엔진 초기화 완료")
+    
+    def calculate_dca_signal(
+        self, 
+        asset: str, 
+        base_amount: float, 
+        market_conditions: Dict[str, Any]
+    ) -> DCASignal:
+        """
+        DCA 신호 계산 - 단일 자산에 대한 투자 신호 분석
+        
+        Args:
+            asset: 자산명 (예: "BTC")
+            base_amount: 기본 투자 금액 (KRW)
+            market_conditions: 시장 상황 정보
+            
+        Returns:
+            DCA 신호 결과
+        """
+        try:
+            current_date = datetime.now()
+            logger.info(f"DCA 신호 계산: {asset}, 기본금액 {base_amount:,.0f} KRW")
+            
+            # 시장 상황 분석 및 배수 계산
+            fear_greed_index = market_conditions.get("fear_greed_index", 50)
+            price_volatility = market_conditions.get("price_volatility", 0.03)
+            trend_direction = market_conditions.get("trend_direction", "neutral")
+            
+            # 공포/탐욕 지수 기반 배수
+            if fear_greed_index <= 25:  # 극도의 공포
+                fear_greed_multiplier = 3.0
+                fear_greed_level = FearGreedLevel.EXTREME_FEAR
+            elif fear_greed_index <= 40:  # 공포
+                fear_greed_multiplier = 2.0
+                fear_greed_level = FearGreedLevel.FEAR
+            elif fear_greed_index <= 55:  # 중립
+                fear_greed_multiplier = 1.0
+                fear_greed_level = FearGreedLevel.NEUTRAL
+            elif fear_greed_index <= 75:  # 탐욕
+                fear_greed_multiplier = 0.7
+                fear_greed_level = FearGreedLevel.GREED
+            else:  # 극도의 탐욕
+                fear_greed_multiplier = 0.3
+                fear_greed_level = FearGreedLevel.EXTREME_GREED
+            
+            # 변동성 기반 배수
+            if price_volatility > 0.08:  # 8% 이상 고변동성
+                volatility_multiplier = 1.5
+            elif price_volatility > 0.05:  # 5% 이상 중변동성
+                volatility_multiplier = 1.2
+            else:  # 저변동성
+                volatility_multiplier = 1.0
+            
+            # 트렌드 기반 배수
+            if trend_direction == "down":
+                trend_multiplier = 1.3  # 하락 시 더 많이 매수
+            elif trend_direction == "up":
+                trend_multiplier = 0.8  # 상승 시 적게 매수
+            else:
+                trend_multiplier = 1.0  # 횡보
+            
+            # 전체 배수 계산 (가중 평균)
+            market_adjustment_factor = (
+                fear_greed_multiplier * 0.5 +
+                volatility_multiplier * 0.3 +
+                trend_multiplier * 0.2
+            )
+            
+            # 최종 투자 금액 계산
+            recommended_amount = base_amount * market_adjustment_factor
+            
+            # 신호 강도 계산 (0.0 - 1.0)
+            # 공포일수록, 변동성이 클수록, 하락장일수록 강한 신호
+            signal_strength = min(1.0, (
+                (100 - fear_greed_index) / 100 * 0.4 +  # 공포 지수 (역방향)
+                min(price_volatility / 0.1, 1.0) * 0.3 +  # 변동성
+                (1.3 if trend_direction == "down" else 0.8 if trend_direction == "up" else 1.0) * 0.3
+            ))
+            
+            # 다음 실행 일자 계산 (기본 주간 DCA)
+            next_execution_date = current_date + timedelta(days=7)
+            
+            # 결정 근거 생성
+            reasoning_parts = []
+            
+            if fear_greed_level in [FearGreedLevel.EXTREME_FEAR, FearGreedLevel.FEAR]:
+                reasoning_parts.append(f"시장 공포 상황({fear_greed_index}) - 기회 매수")
+            elif fear_greed_level in [FearGreedLevel.GREED, FearGreedLevel.EXTREME_GREED]:
+                reasoning_parts.append(f"시장 과열({fear_greed_index}) - 매수 축소")
+            
+            if price_volatility > 0.08:
+                reasoning_parts.append(f"고변동성({price_volatility:.1%}) - 분할 매수 증가")
+            
+            if trend_direction == "down":
+                reasoning_parts.append("하락 추세 - 적극 매수")
+            elif trend_direction == "up":
+                reasoning_parts.append("상승 추세 - 신중 매수")
+            
+            reasoning = "; ".join(reasoning_parts) if reasoning_parts else "정상적인 DCA 실행"
+            
+            # DCA 신호 생성
+            dca_signal = DCASignal(
+                signal_strength=signal_strength,
+                recommended_amount=recommended_amount,
+                next_execution_date=next_execution_date,
+                market_adjustment_factor=market_adjustment_factor,
+                reasoning=reasoning,
+                market_conditions={
+                    "fear_greed_index": fear_greed_index,
+                    "fear_greed_level": fear_greed_level.value,
+                    "price_volatility": price_volatility,
+                    "trend_direction": trend_direction,
+                    "fear_greed_multiplier": fear_greed_multiplier,
+                    "volatility_multiplier": volatility_multiplier,
+                    "trend_multiplier": trend_multiplier
+                }
+            )
+            
+            logger.info(f"DCA 신호 생성 완료: {asset} - 강도 {signal_strength:.2f}, "
+                       f"권장금액 {recommended_amount:,.0f} KRW ({market_adjustment_factor:.2f}x)")
+            logger.info(f"근거: {reasoning}")
+            
+            return dca_signal
+            
+        except Exception as e:
+            logger.error(f"DCA 신호 계산 실패: {e}")
+            # 실패 시 기본 신호 반환
+            return DCASignal(
+                signal_strength=0.5,
+                recommended_amount=base_amount,
+                next_execution_date=datetime.now() + timedelta(days=7),
+                market_adjustment_factor=1.0,
+                reasoning="계산 실패 - 기본값 적용",
+                market_conditions=market_conditions
+            )
     
     def calculate_dca_amount(
         self,

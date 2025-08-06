@@ -42,19 +42,20 @@ class PerformanceMetrics:
     skewness: float
     kurtosis: float
     
-    # 일관성 지표 (기본값이 없는 필드들)
-    hit_rate: float              # 양의 수익률 비율
-    profit_factor: float         # 총 이익 / 총 손실
-    expectancy: float            # 기대값
-    consistency_score: float     # 일관성 점수
-    
-    # 시간 기반 지표
-    recovery_factor: float       # 총수익 / 최대낙폭
-    sterling_ratio: float        # 연수익 / 평균낙폭
-    burke_ratio: float          # 연수익 / sqrt(낙폭제곱합)
-    
+    # 필수 시간 정보 (기본값 없음)
     period_start: datetime
     period_end: datetime
+    
+    # 일관성 지표 (기본값 추가)
+    hit_rate: float = 0.0              # 양의 수익률 비율
+    profit_factor: float = 1.0         # 총 이익 / 총 손실
+    expectancy: float = 0.0            # 기대값
+    consistency_score: float = 0.5     # 일관성 점수
+    
+    # 시간 기반 지표 (기본값 추가)
+    recovery_factor: float = 0.0       # 총수익 / 최대낙폭
+    sterling_ratio: float = 0.0        # 연수익 / 평균낙폭
+    burke_ratio: float = 0.0          # 연수익 / sqrt(낙폭제곱합)
     
     # 벤치마크 대비 (기본값이 있는 필드들은 마지막에)
     information_ratio: Optional[float] = None
@@ -639,7 +640,7 @@ class AdvancedPerformanceAnalytics:
             return 0.5
         
         # 월간 수익률의 일관성 측정
-        monthly_returns = returns.resample('M').apply(lambda x: (1 + x).prod() - 1)
+        monthly_returns = returns.resample('ME').apply(lambda x: (1 + x).prod() - 1)
         positive_months = (monthly_returns > 0).sum()
         total_months = len(monthly_returns)
         

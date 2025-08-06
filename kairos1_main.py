@@ -1288,10 +1288,13 @@ def main():
                         "BTC", price_data["Close"]
                     )
                     print("✅ 멀티 타임프레임 분석 완료")
-                    print(f"단기 트렌드: {analysis.short_term_trend.value}")
-                    print(f"중기 트렌드: {analysis.medium_term_trend.value}") 
-                    print(f"장기 트렌드: {analysis.long_term_trend.value}")
-                    print(f"전체 신호: {analysis.overall_signal.value}")
+                    print(f"단기 트렌드: {analysis['overall_trend']['short']}")
+                    print(f"중기 트렌드: {analysis['overall_trend']['medium']}") 
+                    print(f"장기 트렌드: {analysis['overall_trend']['long']}")
+                    print(f"시장 계절: {analysis['market_season']}")
+                    print(f"비트코인 사이클: {analysis['cycle_phase']}")
+                    print(f"신뢰도: {analysis['confidence']:.1%}")
+                    print(f"권장 배분 - 암호화폐: {analysis['recommended_allocation']['crypto']}, KRW: {analysis['recommended_allocation']['krw']}")
                 except Exception as e:
                     print(f"❌ 멀티 타임프레임 분석 실패: {e}")
             else:
@@ -1392,48 +1395,67 @@ def main():
             print("🧠 심리적 편향 체크 (데모)...")
             if kairos.bias_prevention_system:
                 try:
-                    # 샘플 거래 요청 (FOMO 시뮬레이션)
-                    trade_request = {
-                        "side": "buy",
-                        "amount": 5000000,  # 500만원 (큰 금액)
-                        "confidence_level": 0.95
+                    # 샘플 거래 결정 데이터 (FOMO 시뮬레이션)
+                    decision_data = {
+                        "order_side": "buy",
+                        "order_amount": 5000000,        # 500만원 (큰 금액)
+                        "decision_time_seconds": 120,   # 2분 안에 결정
+                        "expected_return": 0.3,         # 30% 수익 기대
+                        "has_stop_loss": False
                     }
                     
-                    # 샘플 시장 데이터
-                    market_data = {
+                    # 샘플 시장 상황
+                    market_context = {
                         "price_change_24h": 0.18,      # 18% 상승
-                        "volume_ratio": 4.0,           # 거래량 4배 증가
+                        "volume_surge": 4.0,           # 거래량 4배 증가
+                        "social_sentiment": 0.9,       # 극도의 긍정
                         "fear_greed_index": 85         # 극도의 탐욕
                     }
                     
-                    # 샘플 포트폴리오 상태
-                    portfolio_state = {
-                        "total_return": 0.15,          # 15% 수익
-                        "recent_big_win": True
+                    # 샘플 사용자 히스토리
+                    user_history = {
+                        "avg_order_amount": 1000000,   # 평소 주문 금액
+                        "consecutive_wins": 6,         # 연속 6회 수익
+                        "avg_position_size": 2000000,  # 평균 포지션 크기
+                        "trades_last_7d": 15,         # 최근 7일 거래 수
+                        "avg_trades_per_week": 4       # 평균 주간 거래 수
                     }
                     
                     biases = kairos.bias_prevention_system.detect_bias(
-                        trade_request, market_data, portfolio_state
+                        decision_data, market_context, user_history
                     )
                     
                     if biases:
                         print(f"⚠️ {len(biases)}개 편향 감지")
                         for bias in biases:
-                            print(f"  • {bias.bias_type.value} ({bias.severity.value})")
+                            print(f"  • {bias.bias_type.value} ({bias.level.value})")
                             print(f"    신뢰도: {bias.confidence:.0%}")
-                            print(f"    트리거 요인: {', '.join(bias.trigger_factors)}")
+                            print(f"    근거: {', '.join(bias.evidence[:2])}")  # 주요 근거 2개만 표시
                         
                         # 방지 조치 시뮬레이션
-                        prevention_result = kairos.bias_prevention_system.apply_prevention(
-                            biases, trade_request
+                        prevention_result = kairos.bias_prevention_system.apply_prevention_measures(
+                            biases, decision_data
                         )
                         
-                        if not prevention_result["allowed"]:
-                            print("🚫 거래 차단")
-                        if prevention_result["warnings"]:
+                        if prevention_result.get("decision_modified"):
+                            print("🔄 거래 결정이 수정되었습니다")
+                            actions = prevention_result.get("actions_taken", [])
+                            if actions:
+                                print("적용된 조치:")
+                                for action in actions:
+                                    print(f"  • {action}")
+                                    
+                        if prevention_result.get("requires_confirmation"):
+                            print("⚠️ 추가 확인이 필요합니다")
+                            
+                        warnings = prevention_result.get("warnings", [])
+                        if warnings:
                             print("경고사항:")
-                            for warning in prevention_result["warnings"]:
+                            for warning in warnings:
                                 print(f"  • {warning}")
+                                
+                        if prevention_result.get("cooling_period_applied"):
+                            print("⏰ 쿨링 기간이 적용되었습니다")
                                 
                     else:
                         print("✅ 감지된 편향 없음")

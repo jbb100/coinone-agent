@@ -733,3 +733,54 @@ class TaxOptimizationSystem:
         except Exception as e:
             logger.error(f"세금 효율성 점수 계산 실패: {e}")
             return score
+    
+    def get_optimization_summary(self) -> Dict[str, Any]:
+        """세금 최적화 요약 정보"""
+        
+        summary = {
+            "optimized_lots": 0,
+            "tax_savings": 0.0,
+            "total_lots": 0,
+            "long_term_lots": 0,
+            "short_term_lots": 0,
+            "total_assets": len(self.tax_lots),
+            "optimization_efficiency": 0.0
+        }
+        
+        try:
+            total_tax_savings = 0.0
+            total_lots = 0
+            long_term_lots = 0
+            optimized_lots = 0
+            
+            for asset, lots in self.tax_lots.items():
+                for lot in lots:
+                    if lot.quantity <= 0:
+                        continue
+                        
+                    total_lots += 1
+                    
+                    if lot.holding_period == HoldingPeriod.LONG_TERM:
+                        long_term_lots += 1
+                        optimized_lots += 1
+                        # 장기보유로 인한 세금 절약 (가정: 10% 차이)
+                        total_tax_savings += lot.cost_basis * 0.1
+                    
+                    # 세금 로트 최적화로 인한 절약 (추정)
+                    if self.default_plan.lot_method == TaxLotMethod.TAX_EFFICIENT:
+                        total_tax_savings += lot.cost_basis * 0.02  # 2% 추정 절약
+            
+            summary.update({
+                "optimized_lots": optimized_lots,
+                "tax_savings": total_tax_savings,
+                "total_lots": total_lots,
+                "long_term_lots": long_term_lots,
+                "short_term_lots": total_lots - long_term_lots,
+                "optimization_efficiency": optimized_lots / total_lots if total_lots > 0 else 0
+            })
+            
+            return summary
+            
+        except Exception as e:
+            logger.error(f"최적화 요약 정보 생성 실패: {e}")
+            return summary

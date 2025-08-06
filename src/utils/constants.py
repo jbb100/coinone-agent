@@ -108,6 +108,22 @@ MIN_ORDER_QUANTITIES = {
     "VET": 50.0
 }
 
+# Minimum order amounts by currency (KRW) - for buy orders
+MIN_ORDER_AMOUNTS_KRW = {
+    "BTC": 5000,
+    "ETH": 5000,
+    "XRP": 5000,
+    "SOL": 5000,
+    "ADA": 5000,
+    "DOT": 5000,
+    "DOGE": 5000,
+    "TRX": 5000,
+    "XLM": 5000,
+    "ATOM": 5000,
+    "ALGO": 5000,
+    "VET": 5000
+}
+
 # Maximum order limits by currency (KRW)
 MAX_ORDER_LIMITS_KRW = {
     "BTC": 10_000_000,

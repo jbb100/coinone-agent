@@ -596,3 +596,50 @@ class MacroEconomicAnalyzer:
             return "crypto_unfavorable"
         else:
             return "neutral"
+    
+    def get_latest_signal(self) -> Dict[str, Any]:
+        """
+        최신 시장 신호 조회
+        
+        Returns:
+            최신 매크로 경제 분석 결과와 시장 신호
+        """
+        try:
+            # 최신 매크로 경제 분석 실행
+            analysis = self.analyze_comprehensive_macro()
+            
+            if "error" in analysis:
+                return {
+                    "market_signal": 0.0,
+                    "confidence": 0.3,
+                    "timestamp": datetime.now(),
+                    "error": analysis.get("error", "분석 실패")
+                }
+            
+            # 전체 트렌드 방향을 시장 신호로 변환
+            overall_direction = analysis.get("overall_direction", "neutral")
+            trend_confidence = analysis.get("trend_confidence", 0.5)
+            
+            if overall_direction == "crypto_favorable":
+                market_signal = 0.5 * trend_confidence
+            elif overall_direction == "crypto_unfavorable":
+                market_signal = -0.5 * trend_confidence
+            else:  # neutral
+                market_signal = 0.0
+            
+            return {
+                "market_signal": market_signal,
+                "confidence": trend_confidence,
+                "timestamp": datetime.now(),
+                "overall_direction": overall_direction,
+                "trends": analysis.get("trends", {})
+            }
+            
+        except Exception as e:
+            logger.error(f"매크로 최신 신호 조회 실패: {e}")
+            return {
+                "market_signal": 0.0,
+                "confidence": 0.3,
+                "timestamp": datetime.now(),
+                "error": str(e)
+            }

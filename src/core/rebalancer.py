@@ -751,20 +751,26 @@ class Rebalancer:
             if hasattr(self.smart_execution_engine, 'onchain_analyzer') and \
                self.smart_execution_engine.onchain_analyzer:
                 try:
-                    # 실제로는 온체인 분석기의 최신 신호를 가져와야 함
-                    # signals["onchain"] = self.smart_execution_engine.onchain_analyzer.get_latest_signal()
-                    pass
-                except:
+                    # 온체인 분석기의 최신 신호를 가져옴
+                    onchain_result = self.smart_execution_engine.onchain_analyzer.get_latest_signal()
+                    if onchain_result and 'market_signal' in onchain_result:
+                        signals["onchain"] = onchain_result['market_signal']
+                        logger.debug(f"온체인 신호 수집: {signals['onchain']:.3f}")
+                except Exception as e:
+                    logger.warning(f"온체인 신호 수집 실패: {e}")
                     pass
             
             # 매크로 경제 신호
             if hasattr(self.smart_execution_engine, 'macro_analyzer') and \
                self.smart_execution_engine.macro_analyzer:
                 try:
-                    # 실제로는 매크로 분석기의 최신 신호를 가져와야 함
-                    # signals["macro"] = self.smart_execution_engine.macro_analyzer.get_latest_signal()
-                    pass
-                except:
+                    # 매크로 분석기의 최신 신호를 가져옴
+                    macro_result = self.smart_execution_engine.macro_analyzer.get_latest_signal()
+                    if macro_result and 'market_signal' in macro_result:
+                        signals["macro"] = macro_result['market_signal']
+                        logger.debug(f"매크로 신호 수집: {signals['macro']:.3f}")
+                except Exception as e:
+                    logger.warning(f"매크로 신호 수집 실패: {e}")
                     pass
             
             return signals

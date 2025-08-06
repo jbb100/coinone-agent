@@ -23,6 +23,8 @@ from src.core.multi_portfolio_manager import get_multi_portfolio_manager
 from src.core.multi_rebalancing_engine import (
     get_multi_rebalancing_engine, RebalanceScheduleType
 )
+from src.core.multi_account_feature_manager import get_multi_account_feature_manager
+from src.core.multi_account_coordinator import get_multi_account_coordinator, TaskPriority
 from src.core.types import AccountID, AccountName, RiskLevel, KRWAmount
 
 
@@ -33,6 +35,8 @@ class MultiAccountCLI:
         self.account_manager = get_multi_account_manager()
         self.portfolio_manager = get_multi_portfolio_manager()
         self.rebalancing_engine = get_multi_rebalancing_engine()
+        self.feature_manager = get_multi_account_feature_manager()
+        self.coordinator = get_multi_account_coordinator()
         self.initialized = False
     
     async def ensure_initialized(self):
@@ -42,6 +46,8 @@ class MultiAccountCLI:
                 await self.account_manager.initialize()
                 await self.portfolio_manager.initialize()
                 await self.rebalancing_engine.initialize()
+                await self.feature_manager.initialize()
+                await self.coordinator.initialize()
                 self.initialized = True
             except Exception as e:
                 logger.error(f"❌ 초기화 실패: {e}")

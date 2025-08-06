@@ -84,6 +84,60 @@ class MultiTimeframeAnalyzer:
         
         logger.info("MultiTimeframeAnalyzer 초기화 완료")
     
+    def analyze_multi_timeframe(self, symbol: str, price_data: pd.Series) -> Dict[str, Any]:
+        """
+        멀티 타임프레임 분석 (외부 인터페이스용)
+        
+        Args:
+            symbol: 분석할 심볼 (예: "BTC")
+            price_data: 가격 데이터 Series
+            
+        Returns:
+            분석 결과 딕셔너리
+        """
+        try:
+            logger.info(f"멀티 타임프레임 분석 시작: {symbol}")
+            
+            # Series를 DataFrame으로 변환
+            if isinstance(price_data, pd.Series):
+                df = pd.DataFrame({'Close': price_data})
+                # 기본 OHLCV 데이터 생성
+                df['Open'] = df['Close'].shift(1).fillna(df['Close'])
+                df['High'] = df[['Open', 'Close']].max(axis=1)
+                df['Low'] = df[['Open', 'Close']].min(axis=1)
+                df['Volume'] = 1000000  # 기본값
+            else:
+                df = price_data
+            
+            # 전체 분석 수행
+            result = self.analyze_all_timeframes(df)
+            
+            # 외부 인터페이스에 맞는 형태로 반환
+            return self.get_analysis_summary(result)
+            
+        except Exception as e:
+            logger.error(f"멀티 타임프레임 분석 실패: {e}")
+            return {
+                "overall_trend": {
+                    "short": "sideways",
+                    "medium": "sideways", 
+                    "long": "sideways"
+                },
+                "market_season": "neutral",
+                "cycle_phase": "accumulation",
+                "confidence": 0.1,
+                "recommended_allocation": {
+                    "crypto": "50.0%",
+                    "krw": "50.0%"
+                },
+                "key_levels": {
+                    "short_term_support": 0,
+                    "short_term_resistance": 0,
+                    "long_term_support": 0,
+                    "long_term_resistance": 0
+                }
+            }
+    
     def analyze_all_timeframes(self, price_data: pd.DataFrame) -> MultiTimeframeResult:
         """
         전체 시간대 통합 분석
