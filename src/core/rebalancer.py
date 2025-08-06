@@ -12,6 +12,11 @@ from ..trading.coinone_client import CoinoneClient
 from ..trading.order_manager import OrderManager
 from .portfolio_manager import PortfolioManager
 from .market_season_filter import MarketSeasonFilter, MarketSeason
+from ..utils.constants import (
+    REBALANCE_THRESHOLD, MAX_SLIPPAGE, ORDER_TIMEOUT_SECONDS,
+    SAFETY_MARGIN, MA_CALCULATION_FALLBACK_RATIO, MARKET_ANALYSIS_MAX_AGE_DAYS
+)
+from ..utils.market_data_provider import MarketDataProvider
 
 
 class RebalanceResult:
@@ -69,11 +74,12 @@ class Rebalancer:
         self.market_season_filter = market_season_filter
         self.db_manager = db_manager
         self.order_manager = order_manager or OrderManager(coinone_client)
+        self.market_data_provider = MarketDataProvider(db_manager)
         
         # 리밸런싱 설정
-        self.min_rebalance_threshold = 0.01  # 1%
-        self.max_slippage = 0.005  # 0.5%
-        self.order_timeout = 300  # 5분
+        self.min_rebalance_threshold = REBALANCE_THRESHOLD
+        self.max_slippage = MAX_SLIPPAGE
+        self.order_timeout = ORDER_TIMEOUT_SECONDS
         
         logger.info("Rebalancer 초기화 완료")
     
@@ -488,7 +494,7 @@ class Rebalancer:
             
             # 안전한 매도 수량 계산 (추가 검증)
             calculated_quantity = target_sell_amount_krw / current_price
-            safe_balance = current_balance * 0.99  # 수수료 고려하여 99%만 매도
+            safe_balance = current_balance * SAFETY_MARGIN  # 수수료 고려하여 안전 마진 적용
             
             sell_quantity = min(calculated_quantity, safe_balance)
             
@@ -569,7 +575,7 @@ class Rebalancer:
                 }
             
             # 시장가 매수 주문 실행 (KRW 금액 기준, 안전한 방법 사용)
-            buy_amount_krw = min(target_buy_amount_krw, krw_balance * 0.99)  # 수수료 고려
+            buy_amount_krw = min(target_buy_amount_krw, krw_balance * SAFETY_MARGIN)  # 수수료 고려
             
             order_result = self.coinone_client.place_safe_order(
                 currency=asset,
@@ -619,7 +625,7 @@ class Rebalancer:
                         
                         days_old = (datetime.now() - analysis_date.replace(tzinfo=None)).days
                         
-                        if days_old <= 7:  # 7일 이내 데이터
+                        if days_old <= MARKET_ANALYSIS_MAX_AGE_DAYS:  # 설정된 일수 이내 데이터
                             season_str = latest_analysis.get("market_season", "neutral")
                             season_map = {
                                 "risk_on": MarketSeason.RISK_ON,
@@ -662,13 +668,25 @@ class Rebalancer:
             
             logger.info(f"BTC 현재가: {current_price:,.0f} KRW")
             
-            # 실제 구현에서는 데이터베이스나 외부 API에서 200주 데이터를 가져와야 함
-            # 현재는 임시로 200주 이동평균을 현재가의 90%로 가정
-            # TODO: 실제 200주 가격 데이터 수집 및 계산 로직 구현 필요
-            ma_200w = current_price * 0.9  # 임시값 (실제로는 DB에서 계산된 값 사용)
-            
-            logger.warning(f"⚠️  임시 200주 이동평균 사용: {ma_200w:,.0f} KRW")
-            logger.warning("💡 정확한 분석을 위해 주간 분석 스크립트를 먼저 실행하세요: python scripts/weekly_check.py")
+            # 실제 200주 이동평균 계산
+            try:
+                ma_200w_usd, data_source = self.market_data_provider.get_btc_200w_ma()
+                
+                # USD to KRW 환산 (대략적인 환율 적용, 실제로는 환율 API 사용 권장)
+                usd_to_krw = current_price / self._get_btc_price_usd()
+                ma_200w = ma_200w_usd * usd_to_krw
+                
+                if data_source == "yfinance":
+                    logger.info(f"✅ 실제 200주 이동평균 사용: {ma_200w:,.0f} KRW (소스: {data_source})")
+                elif data_source == "cache":
+                    logger.info(f"📋 캐시된 200주 이동평균 사용: {ma_200w:,.0f} KRW")
+                else:
+                    logger.warning(f"⚠️ Fallback 200주 이동평균 사용: {ma_200w:,.0f} KRW (소스: {data_source})")
+                    
+            except Exception as e:
+                logger.error(f"200주 이동평균 계산 실패, 임시값 사용: {e}")
+                ma_200w = current_price * MA_CALCULATION_FALLBACK_RATIO
+                logger.warning(f"🚨 비상 임시값 사용: {ma_200w:,.0f} KRW")
             
             # market_season_filter의 올바른 로직 사용
             market_season, analysis_info = self.market_season_filter.determine_market_season(
@@ -687,6 +705,27 @@ class Rebalancer:
         except Exception as e:
             logger.error(f"시장 계절 판단 실패: {e}")
             return MarketSeason.NEUTRAL  # 기본값 반환
+    
+    def _get_btc_price_usd(self) -> float:
+        """
+        BTC USD 가격 조회 (환율 계산용)
+        
+        Returns:
+            BTC USD 가격
+        """
+        try:
+            import yfinance as yf
+            btc = yf.Ticker("BTC-USD")
+            hist = btc.history(period="1d")
+            if not hist.empty:
+                return float(hist['Close'].iloc[-1])
+            
+            # Fallback
+            return 50000.0  # 대략적인 평균 BTC 가격
+            
+        except Exception as e:
+            logger.warning(f"BTC USD 가격 조회 실패: {e}")
+            return 50000.0  # Fallback
     
     def check_rebalance_needed(
         self, 

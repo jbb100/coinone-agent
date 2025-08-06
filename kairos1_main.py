@@ -239,7 +239,19 @@ class KairosSystem:
                 self.db_manager.get_latest_market_analysis()
                 logger.info("✅ 데이터베이스 연결 정상")
             except Exception as e:
-                logger.warning(f"데이터베이스 연결 경고: {e}")
+                logger.error(f"데이터베이스 연결 실패: {e}")
+                logger.error("데이터베이스 없이는 시스템이 정상 작동하지 않을 수 있습니다.")
+                logger.info("해결 방법:")
+                logger.info("  1. 데이터베이스 서비스가 실행 중인지 확인")
+                logger.info("  2. 데이터베이스 URL 및 자격 증명 확인")
+                logger.info("  3. 네트워크 연결 상태 확인")
+                
+                # 중요한 기능들은 데이터베이스가 필요하므로 초기화 실패로 처리
+                if not self.config.get("development.ignore_db_errors", False):
+                    logger.error("데이터베이스 연결 실패로 시스템 초기화를 중단합니다.")
+                    return False
+                else:
+                    logger.warning("개발 모드: 데이터베이스 오류 무시하고 계속 진행")
             
             # 3. 포트폴리오 상태 체크
             try:
@@ -883,7 +895,7 @@ class KairosSystem:
                 },
                 "trading": {
                     "active_orders": len(active_orders),
-                    "last_rebalance": None  # TODO: 마지막 리밸런싱 날짜
+                    "last_rebalance": self._get_last_rebalance_date()
                 },
                 "risk": {
                     "risk_score": risk_score,
@@ -896,6 +908,32 @@ class KairosSystem:
         except Exception as e:
             logger.error(f"시스템 상태 조회 실패: {e}")
             return {"error": str(e)}
+    
+    def _get_last_rebalance_date(self) -> Optional[str]:
+        """
+        마지막 리밸런싱 실행 날짜 조회
+        
+        Returns:
+            마지막 리밸런싱 날짜 (ISO 형식) 또는 None
+        """
+        try:
+            # 데이터베이스에서 가장 최근 리밸런싱 기록 조회
+            last_rebalance = self.db_manager.get_latest_rebalance_record()
+            
+            if last_rebalance and last_rebalance.get("timestamp"):
+                timestamp = last_rebalance["timestamp"]
+                if isinstance(timestamp, str):
+                    return timestamp
+                elif hasattr(timestamp, 'isoformat'):
+                    return timestamp.isoformat()
+                else:
+                    return str(timestamp)
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"마지막 리밸런싱 날짜 조회 실패: {e}")
+            return None
 
 
 def main():

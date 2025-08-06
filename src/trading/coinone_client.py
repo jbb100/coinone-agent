@@ -16,6 +16,10 @@ from typing import Dict, List, Optional, Any
 from urllib.parse import urlencode
 import requests
 from loguru import logger
+from ..utils.constants import (
+    MIN_ORDER_QUANTITIES, MAX_ORDER_LIMITS_KRW, SAFETY_MARGIN,
+    SUPPORTED_CRYPTOCURRENCIES, API_REQUEST_TIMEOUT
+)
 
 
 class CoinoneClient:
@@ -47,7 +51,7 @@ class CoinoneClient:
         
         # 지원하는 코인 리스트 (코인원 상장 기준)
         # KRW 마켓 기준으로 주요 코인들
-        self.supported_coins = ["BTC", "ETH", "XRP", "SOL", "ADA", "DOT", "MATIC", "LINK"]
+        self.supported_coins = SUPPORTED_CRYPTOCURRENCIES + ["ADA", "DOT", "MATIC", "LINK"]
         self.quote_currency = "KRW"  # 기준 통화
     
     def _create_signature(self, request_body: Dict) -> Dict[str, str]:
@@ -387,12 +391,7 @@ class CoinoneClient:
                     }
                     
                 else:
-                    # 암호화폐별 최소 주문 수량
-                    MIN_ORDER_QUANTITIES = {
-                        "BTC": 0.0001, "ETH": 0.0001, "XRP": 1.0, "SOL": 0.01,
-                        "ADA": 2.0, "DOT": 1.0, "DOGE": 10.0, "TRX": 10.0,
-                        "XLM": 10.0, "ATOM": 0.2, "ALGO": 5.0, "VET": 50.0
-                    }
+                    # 암호화폐별 최소 주문 수량 (상수에서 가져옴)
                     
                     # 시장가 매도: qty 필드 사용 (주문 수량)
                     if amount_in_krw:
@@ -505,13 +504,13 @@ class CoinoneClient:
                     error_msg = result.get("error_msg", "")
                     
                     if error_code == "103":  # Lack of Balance
-                        logger.warning("잔액 부족 - 주문 크기를 90%로 줄여서 재시도")
-                        amount = amount * 0.9
+                        logger.warning("잔액 부족 - 주문 크기를 줄여서 재시도")
+                        amount = amount * 0.9  # 90%로 감소
                         continue
                         
                     elif error_code == "307":  # 최대 주문 금액 초과
-                        logger.warning("최대 주문 금액 초과 - 주문 크기를 50%로 줄여서 재시도")
-                        amount = amount * 0.5
+                        logger.warning("최대 주문 금액 초과 - 주문 크기를 절반으로 줄여서 재시도")
+                        amount = amount * 0.5  # 50%로 감소
                         continue
                         
                     elif error_code == "405":  # 최소 주문 금액 미달
@@ -585,17 +584,8 @@ class CoinoneClient:
     def _adjust_order_size(self, currency: str, side: str, amount: float, amount_in_krw: bool) -> float:
         """거래소 한도에 맞춰 주문 크기 조정"""
         try:
-            # 코인원 일반적인 한도 (실제로는 API에서 가져와야 하지만 임시로 설정)
-            max_order_limits = {
-                "BTC": 10_000_000,  # KRW 기준 최대 주문 금액
-                "ETH": 10_000_000,
-                "XRP": 5_000_000,
-                "SOL": 5_000_000,
-                "ADA": 3_000_000,
-                "DOT": 3_000_000
-            }
-            
-            max_limit_krw = max_order_limits.get(currency.upper(), 1_000_000)
+            # 코인원 일반적인 한도 (상수에서 가져옴)
+            max_limit_krw = MAX_ORDER_LIMITS_KRW.get(currency.upper(), 1_000_000)
             
             if side.lower() == "sell":
                 current_price = self.get_latest_price(currency)
@@ -605,8 +595,8 @@ class CoinoneClient:
                     order_value_krw = amount
                     
                     if order_value_krw > max_limit_krw:
-                        # 한도에 맞춰 KRW 금액 조정 (90% 안전 마진)
-                        adjusted_amount_krw = max_limit_krw * 0.9
+                        # 한도에 맞춰 KRW 금액 조정 (안전 마진 적용)
+                        adjusted_amount_krw = max_limit_krw * SAFETY_MARGIN
                         logger.info(f"매도 금액 조정: {amount:,.0f} → {adjusted_amount_krw:,.0f} KRW (한도: {max_limit_krw:,.0f} KRW)")
                         return adjusted_amount_krw
                 else:
@@ -614,15 +604,15 @@ class CoinoneClient:
                     order_value_krw = amount * current_price
                     
                     if order_value_krw > max_limit_krw:
-                        # 한도에 맞춰 수량 조정 (90% 안전 마진)
-                        adjusted_quantity = (max_limit_krw * 0.9) / current_price
+                        # 한도에 맞춰 수량 조정 (안전 마진 적용)
+                        adjusted_quantity = (max_limit_krw * SAFETY_MARGIN) / current_price
                         logger.info(f"매도 수량 조정: {amount:.6f} → {adjusted_quantity:.6f} {currency} (한도: {max_limit_krw:,.0f} KRW)")
                         return adjusted_quantity
                         
             else:  # buy
                 if amount_in_krw and amount > max_limit_krw:
                     # KRW 주문 시 한도 초과 체크
-                    adjusted_amount = max_limit_krw * 0.9
+                    adjusted_amount = max_limit_krw * SAFETY_MARGIN
                     logger.info(f"매수 금액 조정: {amount:,.0f} → {adjusted_amount:,.0f} KRW")
                     return adjusted_amount
                 elif not amount_in_krw:
@@ -631,7 +621,7 @@ class CoinoneClient:
                     order_value_krw = amount * current_price
                     
                     if order_value_krw > max_limit_krw:
-                        adjusted_quantity = (max_limit_krw * 0.9) / current_price
+                        adjusted_quantity = (max_limit_krw * SAFETY_MARGIN) / current_price
                         logger.info(f"매수 수량 조정: {amount:.6f} → {adjusted_quantity:.6f} {currency} (한도: {max_limit_krw:,.0f} KRW)")
                         return adjusted_quantity
             
