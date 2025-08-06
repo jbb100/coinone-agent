@@ -120,14 +120,19 @@ class OrderManager:
             Order 객체 또는 None (실패시)
         """
         try:
-            logger.info(f"시장가 주문 제출: {side} {amount} {currency}")
+            # 로그에 amount 타입을 명확히 표시
+            amount_type = "KRW" if side.lower() == "buy" else currency
+            logger.info(f"시장가 주문 제출: {side} {amount:,.8f} {amount_type}")
             
             # 코인원 API 호출
+            # TWAP에서 매수는 KRW 금액, 매도는 코인 수량으로 전달됨
+            amount_in_krw = (side.lower() == "buy")  # 매수는 True, 매도는 False
             response = self.coinone_client.place_order(
                 currency=currency,
                 side=side,
                 amount=amount,
-                price=None  # 시장가
+                price=None,  # 시장가
+                amount_in_krw=amount_in_krw
             )
             
             if response.get("success", False):
@@ -190,13 +195,18 @@ class OrderManager:
             Order 객체 또는 None (실패시)
         """
         try:
-            logger.info(f"지정가 주문 제출: {side} {amount} {currency} @ {price}")
+            # 로그에 amount 타입을 명확히 표시  
+            amount_type = "KRW" if side.lower() == "buy" else currency
+            logger.info(f"지정가 주문 제출: {side} {amount:,.8f} {amount_type} @ {price}")
             
+            # 지정가 주문도 매수/매도에 따라 amount 타입 구분
+            amount_in_krw = (side.lower() == "buy")  # 매수는 True, 매도는 False
             response = self.coinone_client.place_order(
                 currency=currency,
                 side=side,
                 amount=amount,
-                price=price
+                price=price,
+                amount_in_krw=amount_in_krw
             )
             
             if response.get("result") == "success":
