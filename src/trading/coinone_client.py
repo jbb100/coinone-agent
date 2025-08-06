@@ -380,6 +380,17 @@ class CoinoneClient:
                             logger.error(f"시장가 매수 중 최신 가격 조회 실패: {e}")
                             raise Exception(f"최신 가격 조회 실패로 시장가 매수 불가: {e}")
                     
+                    # 최대 주문 금액 사전 검증
+                    COINONE_MAX_ORDER_AMOUNT_KRW = 500_000_000  # 500M KRW
+                    if total_amount > COINONE_MAX_ORDER_AMOUNT_KRW:
+                        logger.error(f"❌ 주문 금액({total_amount:,.0f} KRW)이 최대 한도({COINONE_MAX_ORDER_AMOUNT_KRW:,.0f} KRW) 초과")
+                        return {
+                            "success": False, 
+                            "error_code": "307", 
+                            "error_msg": f"주문 금액({total_amount:,.0f})이 최대 한도({COINONE_MAX_ORDER_AMOUNT_KRW:,.0f}) 초과",
+                            "response": {"result": "error", "error_code": "307", "error_msg": "Order amount exceeds maximum limit"}
+                        }
+                    
                     params = {
                         "access_token": self.api_key,
                         "nonce": self._generate_nonce(),

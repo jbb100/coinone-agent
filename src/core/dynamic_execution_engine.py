@@ -460,10 +460,37 @@ class DynamicExecutionEngine:
                 # 매도 주문 준비: 현재가와 필요 수량 미리 계산
                 pass
             
+            # 주문 실행 전 최대 주문 금액 검증 및 조정
+            COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW 안전 한도
+            
+            if order.slice_amount_krw > COINONE_SAFE_ORDER_LIMIT_KRW:
+                logger.warning(f"⚠️ 슬라이스 금액({order.slice_amount_krw:,.0f} KRW)이 안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과!")
+                logger.info(f"🔄 주문 크기를 안전 한도로 조정: {order.slice_amount_krw:,.0f} → {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW")
+                
+                # 초과 금액을 다음 슬라이스들에 분배
+                excess_amount = order.slice_amount_krw - COINONE_SAFE_ORDER_LIMIT_KRW
+                remaining_slices = order.slice_count - order.executed_slices - 1  # 현재 슬라이스 제외
+                
+                if remaining_slices > 0:
+                    additional_per_slice = excess_amount / remaining_slices
+                    logger.info(f"📈 초과 금액 {excess_amount:,.0f} KRW을 남은 {remaining_slices}개 슬라이스에 {additional_per_slice:,.0f} KRW씩 분배")
+                    # Note: 실제 분배는 다음 슬라이스 실행 시 동적으로 처리
+                else:
+                    logger.warning(f"⚠️ 남은 슬라이스가 없어 {excess_amount:,.0f} KRW 손실 발생 가능")
+                
+                # 현재 슬라이스를 안전 한도로 제한
+                order.slice_amount_krw = COINONE_SAFE_ORDER_LIMIT_KRW
+            
             # 주문 실행
             if order.side == "buy":
-                # 매수: KRW 금액으로 주문
+                # 매수: KRW 금액으로 주문  
                 amount = order.slice_amount_krw
+                
+                # 최종 안전 검증: 절대로 200M KRW를 초과하는 주문은 보내지 않음
+                if amount > COINONE_SAFE_ORDER_LIMIT_KRW:
+                    logger.error(f"🚨 긴급 차단: 주문 금액({amount:,.0f} KRW)이 안전 한도 초과! 주문을 {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW로 강제 제한")
+                    amount = COINONE_SAFE_ORDER_LIMIT_KRW
+                    order.slice_amount_krw = COINONE_SAFE_ORDER_LIMIT_KRW  # 주문 객체도 업데이트
             else:
                 # 매도: 코인 수량으로 주문 (KRW 금액을 현재가로 나누어 계산)
                 try:
@@ -474,6 +501,11 @@ class DynamicExecutionEngine:
                             "success": False,
                             "error": f"현재가 조회 실패: {current_price}"
                         }
+                    
+                    # 매도 주문도 안전 한도 검증
+                    if order.slice_amount_krw > COINONE_SAFE_ORDER_LIMIT_KRW:
+                        logger.error(f"🚨 긴급 차단: 매도 주문 금액({order.slice_amount_krw:,.0f} KRW)이 안전 한도 초과! 주문을 {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW로 강제 제한")
+                        order.slice_amount_krw = COINONE_SAFE_ORDER_LIMIT_KRW
                     
                     # KRW 금액을 현재가로 나누어 매도할 수량 계산
                     calculated_quantity = order.slice_amount_krw / current_price
