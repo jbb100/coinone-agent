@@ -1108,21 +1108,34 @@ class DynamicExecutionEngine:
                             order_status = status_response.get("status", "").lower()
                             
                             # 이미 체결되었거나 취소된 주문은 건너뜀
-                            if order_status in ["filled", "cancelled"]:
+                            if order_status in ["filled", "cancelled", "not_found"]:
                                 logger.info(f"주문 {order_id} 이미 {order_status} 상태 - 취소 건너뜀")
+                                cancelled_count += 1  # 이미 완료된 주문으로 간주
+                                cancelled_orders.append({
+                                    "order_id": order_id,
+                                    "asset": twap_order.asset,
+                                    "status": order_status
+                                })
                                 continue
                         
                         # 주문 취소 실행
                         cancel_response = self.coinone_client.cancel_order(order_id)
                         
                         if cancel_response.get("result") == "success":
+                            cancel_status = cancel_response.get("status", "cancelled")
+                            
+                            if cancel_status == "not_found":
+                                # 주문이 이미 완료되었거나 존재하지 않음
+                                logger.info(f"✅ 주문 {order_id} 이미 완료됨 (찾을 수 없음)")
+                            else:
+                                logger.info(f"✅ 주문 취소 성공: {order_id}")
+                            
                             cancelled_count += 1
                             cancelled_orders.append({
                                 "order_id": order_id,
                                 "asset": twap_order.asset,
-                                "status": "cancelled"
+                                "status": cancel_status
                             })
-                            logger.info(f"✅ 주문 취소 성공: {order_id}")
                         else:
                             failed_count += 1
                             error_msg = cancel_response.get("error_message", "Unknown error")

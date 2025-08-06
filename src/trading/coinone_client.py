@@ -660,8 +660,17 @@ class CoinoneClient:
             return response
             
         except Exception as e:
-            logger.error(f"주문 상태 조회 실패: {e}")
-            raise
+            # 404 오류는 주문이 존재하지 않음을 의미 (이미 완료되었거나 취소됨)
+            if "404" in str(e) or "Not Found" in str(e):
+                logger.info(f"주문 {order_id}를 찾을 수 없음 (이미 완료되었거나 취소됨)")
+                return {
+                    "result": "success",
+                    "status": "not_found",
+                    "message": "Order not found (likely completed or cancelled)"
+                }
+            else:
+                logger.error(f"주문 상태 조회 실패: {e}")
+                raise
     
     def cancel_order(self, order_id: str) -> Dict:
         """
@@ -687,8 +696,17 @@ class CoinoneClient:
             return response
             
         except Exception as e:
-            logger.error(f"주문 취소 실패: {e}")
-            raise
+            # 404 오류는 주문이 존재하지 않음을 의미 (이미 완료되었거나 취소됨)
+            if "404" in str(e) or "Not Found" in str(e):
+                logger.info(f"주문 {order_id}를 찾을 수 없음 - 이미 완료되었거나 취소된 것으로 간주")
+                return {
+                    "result": "success",
+                    "status": "not_found",
+                    "message": "Order not found (already completed or cancelled)"
+                }
+            else:
+                logger.error(f"주문 취소 실패: {e}")
+                raise
     
     def get_portfolio_value(self) -> Dict[str, float]:
         """
