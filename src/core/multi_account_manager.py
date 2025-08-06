@@ -291,7 +291,7 @@ class MultiAccountManager(BaseService):
                     
                     if config.initial_capital > 0:
                         total_return = Percentage(
-                            float(current_value - config.initial_capital) / float(config.initial_capital)
+                            float(Decimal(str(current_value)) - Decimal(str(config.initial_capital))) / float(config.initial_capital)
                         )
                 except Exception as e:
                     logger.warning(f"⚠️ 계정 {account_id} 잔고 조회 실패: {e}")
@@ -460,7 +460,7 @@ class MultiAccountManager(BaseService):
                         'account_id': account_id,
                         'account_name': config.account_name,
                         'current_value': float(account_value),
-                        'return_rate': float((account_value - config.initial_capital) / config.initial_capital) if config.initial_capital > 0 else 0.0
+                        'return_rate': float((Decimal(str(account_value)) - Decimal(str(config.initial_capital))) / Decimal(str(config.initial_capital))) if config.initial_capital > 0 else 0.0
                     })
                     
                 except Exception as e:

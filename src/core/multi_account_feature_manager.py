@@ -177,20 +177,14 @@ class MultiAccountFeatureManager(BaseService):
                 
                 # 고급 기능들 초기화
                 self.adaptive_managers[account_id] = AdaptivePortfolioManager(
-                    coinone_client=client
+                    base_portfolio_manager=self.portfolio_managers[account_id]
                 )
                 
-                self.dca_strategies[account_id] = DCAPlus(
-                    coinone_client=client
-                )
+                self.dca_strategies[account_id] = DCAPlus()
                 
-                self.risk_parity_models[account_id] = RiskParityModel(
-                    coinone_client=client
-                )
+                self.risk_parity_models[account_id] = RiskParityModel()
                 
-                self.tax_optimizers[account_id] = TaxOptimizationSystem(
-                    coinone_client=client
-                )
+                self.tax_optimizers[account_id] = TaxOptimizationSystem()
                 
                 # DynamicExecutionEngine은 db_manager가 필요함
                 if self.db_manager is not None:
