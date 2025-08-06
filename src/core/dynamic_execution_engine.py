@@ -836,7 +836,21 @@ class DynamicExecutionEngine:
                     import time
                     time.sleep(5)
             
-            # 2. 새로운 TWAP 주문 생성
+            # 2. KRW 전용 리밸런싱 체크 (KRW 주문만 있는 경우)
+            crypto_orders = {k: v for k, v in rebalance_orders.items() if k != "KRW"}
+            krw_order = rebalance_orders.get("KRW")
+            
+            if not crypto_orders and krw_order:
+                # KRW 주문만 있는 경우 - 즉시 완료 처리
+                logger.info(f"KRW 전용 리밸런싱 감지: {krw_order.get('amount_diff_krw', 0):,.0f} KRW")
+                logger.info("✅ KRW 리밸런싱은 현금 보유량 조정으로 즉시 완료됨")
+                return {
+                    "success": True,
+                    "krw_only_rebalancing": True,
+                    "message": "KRW 리밸런싱 완료 - 별도 거래 불필요"
+                }
+            
+            # 3. 새로운 TWAP 주문 생성
             logger.info("새로운 TWAP 주문 생성 시작")
             
             # 시장 상황 정보 설정
