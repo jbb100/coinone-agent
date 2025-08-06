@@ -266,6 +266,11 @@ class DynamicExecutionEngine:
             # 상수 정의
             MIN_ORDER_KRW = 1000  # 코인원 최소 주문 금액 (KRW)
             MIN_ORDER_KRW_BUFFER = 1.05  # 5% 안전 마진
+            
+            # 코인원 거래소 제한사항
+            COINONE_MAX_ORDER_AMOUNT_KRW = 500_000_000  # 500M KRW - 코인원 최대 주문 금액
+            COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW - 안전한 주문 금액 한도
+            MAX_SLICES_PER_ORDER = 24  # 최대 슬라이스 개수
 
             # 암호화폐별 최소 주문 수량 (코인원 기준)
             MIN_ORDER_QUANTITIES = {
@@ -357,6 +362,24 @@ class DynamicExecutionEngine:
                 # 조정된 슬라이스 횟수로 슬라이스당 금액/수량 재계산
                 slice_amount = amount_krw / local_slice_count
                 slice_quantity = 0
+                
+                # 슬라이스당 금액이 코인원 최대 주문 한도를 초과하는지 검증
+                if slice_amount > COINONE_SAFE_ORDER_LIMIT_KRW:
+                    # 안전한 주문 크기로 슬라이스 횟수 재조정
+                    required_slices = math.ceil(amount_krw / COINONE_SAFE_ORDER_LIMIT_KRW)
+                    logger.warning(
+                        f"{asset}: 슬라이스당 주문 금액({slice_amount:,.0f} KRW)이 안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과. "
+                        f"분할 횟수 증가: {local_slice_count} -> {required_slices}"
+                    )
+                    local_slice_count = min(required_slices, MAX_SLICES_PER_ORDER)  # MAX_SLICES_PER_ORDER는 24
+                    slice_amount = amount_krw / local_slice_count
+                    
+                    # 그래도 초과하는 경우 경고
+                    if slice_amount > COINONE_SAFE_ORDER_LIMIT_KRW:
+                        logger.error(
+                            f"{asset}: 최대 분할 후에도 슬라이스당 금액({slice_amount:,.0f} KRW)이 "
+                            f"안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과. 위험한 주문일 수 있음!"
+                        )
                 
                 # TWAP 주문 생성
                 twap_order = TWAPOrder(
@@ -634,8 +657,27 @@ class DynamicExecutionEngine:
                 ]
                 
                 is_retryable = any(err.lower() in error_msg.lower() for err in retryable_errors)
+                error_code = order_result.get('error_code', '')
                 
-                if is_retryable:
+                # 최대 주문 금액 초과 오류 (307)에 대한 특별 처리
+                if error_code == '307' or "exceed the maximum amount" in error_msg:
+                    logger.warning(f"🔄 최대 주문 금액 초과 오류 감지 - 슬라이스 크기 동적 조정: {order.asset}")
+                    
+                    # 현재 슬라이스 크기를 50% 감소
+                    original_amount = order.slice_amount_krw
+                    order.slice_amount_krw = order.slice_amount_krw * 0.5
+                    
+                    # 남은 슬라이스에 추가 금액 분배
+                    remaining_slices = order.slice_count - order.executed_slices
+                    if remaining_slices > 1:
+                        additional_amount_per_slice = (original_amount - order.slice_amount_krw) / (remaining_slices - 1)
+                        logger.info(f"📊 슬라이스 크기 조정: {original_amount:,.0f} → {order.slice_amount_krw:,.0f} KRW")
+                        logger.info(f"📈 남은 {remaining_slices-1}개 슬라이스에 {additional_amount_per_slice:,.0f} KRW씩 분배")
+                    
+                    # 조정된 크기로 재시도하지 않고 다음 슬라이스에서 처리
+                    return order_result
+                
+                elif is_retryable:
                     logger.warning(f"⚠️ 일시적 오류로 판단, 다음 슬라이스에서 재시도: {order.asset}")
                     # 주문 상태는 변경하지 않고 오류만 반환
                     return order_result

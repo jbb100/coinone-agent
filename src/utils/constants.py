@@ -82,7 +82,11 @@ MAX_SLICES_PER_ORDER = 24  # 최대 슬라이스 개수
 
 # TWAP size limits
 MIN_TWAP_AMOUNT_KRW = 50_000  # 50,000 KRW - 최소 TWAP 금액
-MAX_SLICE_AMOUNT_KRW = 1_000_000  # 1,000,000 KRW - 최대 슬라이스 금액
+MAX_SLICE_AMOUNT_KRW = 100_000_000  # 100,000,000 KRW - 최대 슬라이스 금액 (100M KRW)
+
+# Coinone exchange limits
+COINONE_MAX_ORDER_AMOUNT_KRW = 500_000_000  # 500M KRW - 코인원 최대 주문 금액
+COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW - 안전한 주문 금액 한도
 
 # =============================================================================
 # Cryptocurrency Specific Constants

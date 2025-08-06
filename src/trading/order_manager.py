@@ -148,7 +148,9 @@ class OrderManager:
                 return order
             else:
                 error_msg = response.get('error_msg', 'Unknown error')
+                error_code = response.get('error_code', 'unknown')
                 logger.error(f"주문 제출 실패: {error_msg} - {response}")
+                
                 # 상세 오류를 포함하여 반환하도록 수정
                 failed_order = Order(
                     order_id=f"failed_{currency}_{int(time.time())}",
@@ -157,7 +159,11 @@ class OrderManager:
                     order_type="market",
                     amount=amount
                 )
-                failed_order.update_status(OrderStatus.FAILED, error_message=error_msg)
+                failed_order.update_status(OrderStatus.FAILED, error_message=f"[{error_code}] {error_msg}")
+                
+                # 실패한 주문도 response 정보 포함해서 반환 (동적 실행 엔진에서 활용 가능)
+                failed_order.error_code = error_code
+                failed_order.error_response = response
                 return failed_order
                 
         except Exception as e:
