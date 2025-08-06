@@ -1,10 +1,16 @@
 # KAIROS-1: 장기 투자 시스템 (코인원 거래소 맞춤 버전)
 
-**🔄 최신 업데이트 (2025.01)**: 동적 실행 엔진 추가
-- **코인원 공식 API v2/v2.1** 명세 100% 준수
-- **TWAP (시간 가중 평균 가격) 분할 매매** 지원
-- **ATR 기반 변동성 적응형 실행** 
-- **시장 충격 최소화** 알고리즘
+**🚀 최신 업데이트 (2025.01)**: 고급 장기 투자 시스템 추가
+- **10개 고급 분석 시스템** 통합 (멀티 타임프레임, 매크로 경제, 온체인 데이터 등)
+- **멀티 계정 관리 시스템** - 여러 코인원 계정 동시 관리 및 독립적 전략 운용
+- **고급 CLI 도구** - 백테스팅, 포트폴리오 최적화, 성과 분석 등 전문 도구
+- **통합 보안 시스템** - AES-256 암호화, API 키 관리, 접근 감사
+- **심리적 편향 방지 시스템** - FOMO, 패닉셀링 자동 차단
+- **세금 최적화** - 한국 세법(22%) 맞춤 로트 관리
+- **시나리오별 자동 대응** - 블랙스완, 시장 크래시 감지 및 대응
+- **리스크 패리티 모델** - 균등 리스크 기여도 포트폴리오
+- **DCA+ 전략** - 공포/탐욕 지수 기반 적응형 분할매수
+- **기존 TWAP 분할 매매** 및 **동적 실행 엔진** 유지
 - **Reference**: [코인원 공식 API 문서](https://docs.coinone.co.kr/reference)
 
 ## 🎯 핵심 철학: Lean, Smart, and Resilient
@@ -13,13 +19,21 @@
 
 ## 🏗️ 시스템 아키텍처
 
+### 🏦 멀티 계정 관리 시스템 (Multi-Account System) 🆕
+- **다중 계정 지원**: 여러 코인원 계정을 동시에 관리
+- **개별 투자 전략**: 각 계정별 독립적인 리스크 수준 및 투자 전략 (Conservative/Moderate/Aggressive)
+- **통합 모니터링**: 모든 계정의 성과를 통합 조회 및 분석
+- **자동 리밸런싱**: 스케줄 기반 및 조건 기반 자동 실행
+- **멀티 포트폴리오 관리**: 계정별 포트폴리오 최적화 및 리스크 패리티 적용
+- **보안 강화**: 계정별 암호화된 API 키 관리 및 접근 감사
+
 ### 모듈 1: 시장 계절 필터 (Market Season Filter)
 - **주기**: 매주 1회
 - **기준**: BTC 가격 vs 200주 이동평균선 (±5% 완충 밴드)
 - **결과**: 위험자산(암호화폐) vs 안전자산(원화) 비중 결정
 
 ### 모듈 2: 포트폴리오 리밸런싱 (Portfolio Rebalancing)
-- **주기**: 분기별 1회
+- **주기**: 분기별 1회 (멀티 계정에서는 계정별 설정 가능)
 - **범위**: 코인원 상장 암호화폐
 - **구성**: Core(70%) + Satellite(30%)
 
@@ -36,7 +50,14 @@
 
 ## 📊 투자 전략
 
-### 시장 상황별 자산 배분
+### 🏦 멀티 계정 리스크 수준별 전략
+```
+🛡️ Conservative (보수적): KRW 70% / 암호화폐 30%
+⚖️ Moderate (중도적):   KRW 50% / 암호화폐 50%  
+🚀 Aggressive (공격적): KRW 30% / 암호화폐 70%
+```
+
+### 시장 상황별 자산 배분 (단일 계정 기준)
 ```
 📈 강세장 (Risk-On): BTC > 200주 MA × 1.05 → 암호화폐 70% / KRW 30%
 📉 약세장 (Risk-Off): BTC < 200주 MA × 0.95 → 암호화폐 30% / KRW 70%
@@ -63,17 +84,34 @@ python -m venv kairos_env
 source kairos_env/bin/activate  # macOS/Linux
 # kairos_env\Scripts\activate  # Windows
 
-# 의존성 설치
+# 의존성 설치 (멀티 계정 시스템 포함)
 pip install -r requirements.txt
+
+# 추가 의존성 확인
+pip install click croniter tabulate aiohttp
 ```
 
 ### 2. 설정 파일 구성
+
+#### 단일 계정 설정 (기존)
 ```bash
 # 설정 파일 복사
 cp config/config.example.yaml config/config.yaml
 
 # API 키 및 개인 설정 입력
 vim config/config.yaml
+```
+
+#### 멀티 계정 설정 (신규)
+```bash
+# 멀티 계정 시스템 초기화 (자동으로 기본 설정 생성)
+python3 kairos1_multi.py accounts
+
+# 첫 번째 계정 추가
+python3 kairos1_multi.py add my_main "메인 계정" "YOUR_API_KEY" "YOUR_SECRET_KEY" --dry-run
+
+# 보안 마스터 키 설정 (권장)
+export KAIROS_MASTER_KEY="your_secure_master_key_32_chars_long"
 ```
 
 ### 3. 보안 설정 및 API 구성
@@ -85,8 +123,56 @@ vim config/config.yaml
 
 ## 🚀 실행
 
-### 통합 실행 (권장)
-메인 실행 파일 `kairos1_main.py`를 통한 통합 실행:
+### 🏦 멀티 계정 관리 (신규)
+여러 코인원 계정을 동시에 관리하는 통합 시스템:
+
+```bash
+# 계정 목록 확인
+python3 kairos1_multi.py accounts
+
+# 새 계정 추가
+python3 kairos1_multi.py add my_account "내 계정" "API_KEY" "SECRET_KEY"
+
+# 통합 포트폴리오 현황
+python3 kairos1_multi.py portfolio
+
+# 전체 계정 리밸런싱
+python3 kairos1_multi.py rebalance
+
+# 시스템 상태 확인
+python3 kairos1_multi.py health
+
+# 계정 제거
+python3 kairos1_multi.py remove my_account
+
+# 특정 계정 포트폴리오 보기
+python3 kairos1_multi.py portfolio --account my_account
+```
+
+### 🔧 고급 CLI 도구 (신규)
+
+#### 백테스팅 도구
+```bash
+# 백테스팅 명령어들
+python -m src.cli.backtest_cli simple      # 간단한 백테스팅
+python -m src.cli.backtest_cli advanced    # 고급 백테스팅
+python -m src.cli.backtest_cli comparison  # 전략 비교
+python -m src.cli.backtest_cli quick       # 빠른 백테스팅
+python -m src.cli.backtest_cli analyze     # 리포트 분석
+```
+
+#### 포트폴리오 최적화 도구
+```bash
+# 포트폴리오 최적화 명령어들
+python -m src.cli.portfolio_optimizer_cli analyze      # 자산 분석
+python -m src.cli.portfolio_optimizer_cli optimize     # 포트폴리오 최적화
+python -m src.cli.portfolio_optimizer_cli rebalance    # 리밸런싱 필요성 확인
+python -m src.cli.portfolio_optimizer_cli asset BTC    # 개별 자산 분석
+python -m src.cli.portfolio_optimizer_cli status       # 시스템 상태
+```
+
+### 단일 계정 실행 (기존)
+메인 실행 파일 `kairos1_main.py`를 통한 단일 계정 실행:
 
 ```bash
 # 주간 시장 분석
@@ -162,19 +248,63 @@ python scripts/performance_report.py
 # 4. 일일 시스템 모니터링 (매일 09:00, 18:00)
 # 시스템의 전반적인 상태를 점검하고 알림을 보냅니다.
 0 9,18 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --system-status
+
+# --------------------------------------------------------------------------
+# 🆕 고급 장기 투자 시스템 스케줄 (v3.0)
+# --------------------------------------------------------------------------
+
+# 5. 멀티 타임프레임 분석 (매일 08:00, 20:00)
+# 20일/200주/4년 주기 분석으로 투자 시점을 최적화합니다.
+0 8,20 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --multi-timeframe-analysis
+
+# 6. 매크로 경제 지표 분석 (매주 화요일 10:00)
+# 연준 정책, 인플레이션, 달러지수 등을 분석하여 크립토 우호도를 측정합니다.
+0 10 * * 2 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --macro-analysis
+
+# 7. 온체인 데이터 분석 (매일 06:00, 14:00, 22:00)
+# 고래 활동, 거래소 흐름, 장기보유자 패턴을 분석합니다.
+0 6,14,22 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --onchain-analysis
+
+# 8. 시나리오별 대응 시스템 점검 (매시간 정각)
+# 블랙스완, 시장 크래시 등 예외 상황을 감지하고 대응합니다.
+0 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --scenario-check
+
+# 9. DCA+ 스케줄 점검 (매일 07:00)
+# 공포/탐욕 지수 기반 적응형 분할매수 일정을 확인합니다.
+0 7 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --dca-schedule
+
+# 10. 심리적 편향 감지 (매 6시간)
+# FOMO, 패닉셀링 등 감정적 거래 패턴을 모니터링합니다.
+0 */6 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --bias-check
+
+# 11. 세금 최적화 리포트 (매월 1일 09:00)
+# 세금 효율적인 거래 내역과 손익 리포트를 생성합니다.
+0 9 1 * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --tax-report
+
+# 12. 고급 성과 분석 (매주 일요일 21:00)
+# 샤프비율, 최대낙폭, 승률 등 고급 성과 지표를 분석합니다.
+0 21 * * 0 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --advanced-performance-report
 ```
 
-## 📈 모니터링
+## 📈 모니터링 및 알림
 
 ### 3-라인 체크 시스템
 1. **성과 기록**: 포트폴리오 수익률 및 벤치마크 대비 성과
 2. **의사결정 로그**: 모든 거래 및 리밸런싱 결정 기록
 3. **추적오차 알림**: 설정 비중과 실제 비중 간 차이 모니터링
 
+### 📊 고급 모니터링 시스템 🆕
+- **성과 추적기**: 샤프 비율, 최대 낙폭, 변동성 등 포괄적 성과 지표 계산
+- **리스크 평가**: 벤치마크 대비 성과 분석 및 자동 권고사항 생성
+- **실시간 알림**: 다채널 알림 시스템 (이메일, Slack)
+- **일일 요약 리포트**: 성과 및 포트폴리오 상태 자동 보고
+- **멘션 시스템**: 알림 유형별 맞춤형 Slack 멘션
+
 ### 알림 시스템
-- 이메일/슬랙 알림
-- 중요 이벤트 실시간 통지
-- 시스템 오류 및 보안 이슈 알림
+- **다채널 지원**: 이메일, Slack 통합 알림
+- **스마트 멘션**: 알림 중요도별 사용자 멘션 시스템
+- **중요 이벤트**: 실시간 거래, 리밸런싱, 시스템 상태 통지
+- **보안 알림**: API 접근 감사, 시스템 오류, 보안 이슈 즉시 통보
 
 ## 📱 슬랙 알림 설정
 
@@ -255,17 +385,198 @@ mentions:
 python kairos1_main.py --test-alerts
 ```
 
-## ⚠️ 리스크 관리
+## ⚠️ 리스크 관리 및 보안
 
-### 보안
-- API 키 암호화 저장
-- IP 화이트리스트 관리
-- 접근 권한 최소화
+### 🔐 고급 보안 시스템 🆕
+- **암호화 저장**: AES-256 암호화를 통한 API 키 보안 저장
+- **키 관리**: PBKDF2 키 유도 및 안전한 메모리 관리
+- **접근 감사**: 모든 API 접근 기록 및 감사 로그
+- **키 순환**: 자동 API 키 만료 및 갱신 시스템
+- **서비스별 키 관리**: 코인원, 바이낸스 등 거래소별 개별 키 관리
+
+### 기존 보안 기능
+- **API 키 암호화 저장**: 로컬 환경에서 안전한 키 보관
+- **IP 화이트리스트 관리**: 허용된 IP에서만 접근 가능
+- **접근 권한 최소화**: 필요 최소 권한만 부여 (거래, 조회만 활성화)
+- **2FA 필수**: OTP 2채널 인증 시스템
 
 ### 규제 대응
-- 특정금융정보법(특금법) 준수
-- 트래블룰(Travel Rule) 대응
-- 규제 변경사항 모니터링
+- **특정금융정보법(특금법) 준수**: 국내 규제 완전 대응
+- **트래블룰(Travel Rule) 대응**: 거래 추적 및 보고
+- **규제 변경사항 모니터링**: 실시간 규제 업데이트 반영
+- **세법 준수**: 한국 암호화폐 세법(22%) 자동 적용
+
+## 🎯 고급 장기 투자 시스템 상세 가이드
+
+### 1. 멀티 타임프레임 분석 시스템
+```bash
+# 실행 명령어
+python kairos1_main.py --multi-timeframe-analysis
+
+# 분석 타임프레임
+- 단기 (20일): RSI, 볼린저 밴드 기반 단기 트렌드
+- 중기 (200주): 시장 사이클과 장기 트렌드 분석
+- 장기 (4년): 비트코인 반감기 사이클 분석
+
+# 핵심 기능
+- 각 타임프레임별 독립적 신호 생성
+- 타임프레임 간 일치도 분석
+- 투자 시점 최적화 알고리즘
+```
+
+### 2. 적응형 포트폴리오 관리
+```bash
+# 실행: 주간 분석에 자동 포함
+python kairos1_main.py --weekly-analysis
+
+# 시장 성숙도 단계
+- NASCENT (신생): 암호화폐 40%, 원화 60%
+- EMERGING (신흥): 암호화폐 55%, 원화 45%
+- MATURE (성숙): 암호화폐 65%, 원화 35%
+- INSTITUTIONAL (기관): 암호화폐 75%, 원화 25%
+
+# 동적 조정 요소
+- 시장 상관관계 분석
+- 변동성 기반 리스크 패리티
+- 시가총액 및 거래량 트렌드
+```
+
+### 3. DCA+ 전략 (Fear & Greed 적응형)
+```bash
+# DCA 스케줄 확인
+python kairos1_main.py --dca-schedule
+
+# 공포/탐욕 지수별 매수 승수
+- 극도의 공포 (0-25): 2.0배 매수
+- 공포 (25-45): 1.5배 매수
+- 중립 (45-55): 기본 매수
+- 탐욕 (55-75): 0.7배 매수
+- 극도의 탐욕 (75-100): 0.3배 매수
+
+# 추가 조정 요소
+- 변동성 기반 타이밍 조절
+- 계절성 패턴 반영
+- 누적 매수 한도 관리
+```
+
+### 4. 리스크 패리티 모델
+```bash
+# 설정 위치: config/config.yaml
+risk_management:
+  risk_parity:
+    enabled: true
+    optimization_method: "SLSQP"
+    target_risk_contribution: 0.25  # 4개 자산 균등
+
+# 핵심 기능
+- 각 자산의 리스크 기여도 균등화
+- SLSQP 최적화 알고리즘 사용
+- 동적 가중치 재조정
+- 다양화 비율 최대화
+```
+
+### 5. 세금 최적화 시스템
+```bash
+# 세금 리포트 생성
+python kairos1_main.py --tax-report
+
+# 한국 세법 맞춤 기능
+- 암호화폐 양도소득세 22% 적용
+- FIFO, LIFO, HIGHEST_COST, TAX_EFFICIENT 로트 선택
+- 손실 수확 (Loss Harvesting) 자동화
+- 30일 워시세일 룰 적용
+- 분기별/연간 세금 리포트 생성
+```
+
+### 6. 매크로 경제 지표 연동
+```bash
+# 매크로 분석 실행
+python kairos1_main.py --macro-analysis
+
+# 연동 지표
+- 연준 기준금리 (Fed Funds Rate)
+- 인플레이션율 (CPI, PCE)
+- 달러지수 (DXY)
+- 변동성 지수 (VIX)
+- 통화공급량 (M2)
+
+# 암호화폐 우호도 점수
+- -1.0 (매우 부정적) ~ +1.0 (매우 긍정적)
+- 각 지표별 가중치 적용
+- 실시간 정책 변화 반영
+```
+
+### 7. 온체인 데이터 분석
+```bash
+# 온체인 분석 실행
+python kairos1_main.py --onchain-analysis
+
+# 분석 요소
+- 고래 축적/분산 패턴 (>1000 BTC)
+- 거래소 자금 유입/유출 모니터링
+- 장기보유자(LTH) vs 단기보유자(STH) 비율
+- 네트워크 건강도 (해시레이트, 활성주소)
+- 스테이블코인 도미넌스 추적
+
+# 신호 생성
+- 단기 (1-7일), 중기 (1-4주), 장기 (1-6개월)
+- 축적/분산 점수 (0-100)
+- 신뢰도 기반 가중치 적용
+```
+
+### 8. 시나리오별 자동 대응
+```bash
+# 시나리오 감지 및 대응
+python kairos1_main.py --scenario-check
+
+# 감지 시나리오
+- BLACK_SWAN: 24시간 -30% 하락 + 거래량 3배 증가
+- MARKET_CRASH: 7일간 -40% 하락 + 공포지수 <20
+- EUPHORIA: 30일간 +100% 상승 + 극도의 탐욕
+- REGULATION_RISK: 부정적 뉴스 + 1시간 -10% 하락
+
+# 자동 대응 행동
+- 포지션 축소/확대
+- 주문 일시 정지
+- 긴급 알림 발송
+- 냉각 기간 적용
+```
+
+### 9. 심리적 편향 방지
+```bash
+# 편향 감지 및 방지
+python kairos1_main.py --bias-check
+
+# 감지 편향 유형
+- FOMO: 급등 후 충동 매수 감지
+- 패닉 셀링: 급락 후 공포 매도 감지
+- 과신 편향: 연승 후 과도한 포지션 증가
+
+# 방지 조치
+- 주문 지연 (5분-60분)
+- 거래 금액 축소 (10%-60%)
+- 강제 냉각 기간 (1-24시간)
+- 감정 상태 추적 및 알림
+```
+
+### 10. 고급 성과 분석
+```bash
+# 고급 성과 리포트
+python kairos1_main.py --advanced-performance-report
+
+# 고급 지표
+- 샤프 비율 (Sharpe Ratio)
+- 소르티노 비율 (Sortino Ratio)  
+- 최대 낙폭 (Maximum Drawdown)
+- 칼마 비율 (Calmar Ratio)
+- 승률 및 손익비
+- 변동성 조정 수익률
+
+# 벤치마크 비교
+- BTC, ETH 대비 성과
+- 전통 자산 (S&P 500) 대비
+- 무위험 수익률 대비 초과 수익
+```
 
 ## 🔄 TWAP 실행 모니터링
 
@@ -293,6 +604,27 @@ python kairos1_main.py --process-twap
 
 ## 📈 업데이트 내역
 
+### v3.1.0 (2025.02) - Multi-Account & Enterprise Features 🆕
+- ✅ **멀티 계정 관리 시스템**: 여러 코인원 계정 동시 관리
+- ✅ **고급 CLI 도구**: 백테스팅, 포트폴리오 최적화 전문 도구
+- ✅ **통합 보안 시스템**: AES-256 암호화, API 키 관리, 접근 감사
+- ✅ **고급 모니터링**: 성과 추적, 리스크 평가, 다채널 알림
+- ✅ **포괄적 타입 시스템**: 544줄의 완전한 타입 정의
+- ✅ **마켓 데이터 제공자**: 실시간 200주 이동평균 계산 및 캐싱
+- ✅ **자동화 스크립트**: 분기별 리밸런싱, 성과 리포트, 주간 체크
+
+### v3.0.0 (2025.01) - Advanced Long-term Investment Systems
+- ✅ **10개 고급 분석 시스템** 통합
+- ✅ **멀티 타임프레임 분석** (20일/200주/4년 사이클)
+- ✅ **심리적 편향 방지** - FOMO, 패닉셀링 차단
+- ✅ **세금 최적화** - 한국 세법 22% 맞춤
+- ✅ **시나리오별 자동 대응** - 블랙스완 감지
+- ✅ **온체인 데이터 분석** - 고래/거래소 흐름
+- ✅ **매크로 경제 연동** - 연준/인플레이션 지표
+- ✅ **DCA+ 전략** - 공포탐욕 지수 기반
+- ✅ **리스크 패리티** - 균등 리스크 기여도
+- ✅ **고급 성과 측정** - 샤프비율, 드로우다운
+
 ### v2.0.0 (2025.01) - Dynamic Execution Engine
 - ✅ **TWAP 분할 매매 시스템** 추가
 - ✅ **ATR 기반 변동성 적응형 실행**  
@@ -307,9 +639,17 @@ python kairos1_main.py --process-twap
 
 ## 📞 지원 및 문의
 
-- **문서**: `/docs` 폴더 참조
+- **문서**: `/docs` 폴더 참조 (멀티 계정 가이드, 아키텍처 문서 포함)
 - **로그**: `/logs` 폴더에서 시스템 동작 확인
+- **설정**: `config/` 폴더 및 환경 변수 (`.env.example` 참조)
+- **스크립트**: `/scripts` 폴더의 자동화 도구들
 - **이슈**: GitHub Issues 활용
+
+### 📚 주요 문서들
+- **멀티 계정 설정 가이드**: `docs/MULTI_ACCOUNT_GUIDE.md` (295줄 상세 가이드)
+- **시스템 아키텍처**: `docs/ARCHITECTURE.md`
+- **환경 변수 설정**: `.env.example`
+- **계정 설정**: `config/accounts.json`
 
 ---
 

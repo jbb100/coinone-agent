@@ -103,6 +103,84 @@ risk_management:
     # 최대 포지션 크기 (전체 포트폴리오 대비 %)
     max_position_size: 0.50     # 50%
   
+  # 멀티 타임프레임 분석 설정
+  multi_timeframe:
+    enabled: true
+    # 분석 타임프레임들
+    timeframes:
+      short: 20      # 20일 (단기)
+      medium: 200    # 200주 (중기)  
+      long: 1460     # 4년 (장기 - 비트코인 반감기)
+    
+    # RSI 임계값
+    rsi:
+      oversold: 30
+      overbought: 70
+    
+    # 볼린저 밴드 설정
+    bollinger:
+      period: 20
+      std_dev: 2
+    
+    # 트렌드 확인 기간
+    trend_confirmation_days: 7
+  
+  # 적응형 포트폴리오 관리 설정
+  adaptive_portfolio:
+    enabled: true
+    # 시장 성숙도별 배분
+    maturity_allocations:
+      nascent: { crypto: 0.40, krw: 0.60 }    # 신생시장
+      emerging: { crypto: 0.55, krw: 0.45 }  # 신흥시장  
+      mature: { crypto: 0.65, krw: 0.35 }    # 성숙시장
+      institutional: { crypto: 0.75, krw: 0.25 }  # 기관시장
+    
+    # 리밸런싱 주기 (일)
+    rebalancing_frequency: 7
+    
+    # 상관관계 분석 기간 (일)
+    correlation_period: 90
+  
+  # DCA+ 전략 설정
+  dca_plus:
+    enabled: true
+    # 기본 DCA 간격 (일)
+    base_interval: 7
+    
+    # 시장 상황별 승수
+    multipliers:
+      extreme_fear: 2.0      # 극도의 공포 (2배 매수)
+      fear: 1.5             # 공포 (1.5배 매수)  
+      neutral: 1.0          # 중립 (기본)
+      greed: 0.7            # 탐욕 (0.7배 매수)
+      extreme_greed: 0.3    # 극도의 탐욕 (0.3배 매수)
+    
+    # 변동성 조정
+    volatility_adjustment:
+      enabled: true
+      threshold: 0.05       # 5% 이상 변동성
+      multiplier: 1.2       # 변동성 높을때 1.2배
+    
+    # 최대 단일 DCA 금액 (KRW)
+    max_single_dca: 5000000
+  
+  # 리스크 패리티 모델 설정
+  risk_parity:
+    enabled: true
+    # 최적화 알고리즘
+    optimization_method: "SLSQP"
+    
+    # 리스크 기여도 목표 (균등)
+    target_risk_contribution: 0.25  # 4개 자산 기준
+    
+    # 변동성 계산 기간 (일)
+    volatility_window: 60
+    
+    # 최소/최대 가중치 제한
+    weight_bounds:
+      min: 0.05  # 5%
+      max: 0.50  # 50%
+  
   # 손실 제한
   loss_limits:
     # 일일 최대 손실률 (%)
@@ -127,6 +205,164 @@ risk_management:
     
     # 벤치마크 (BTC 기준)
     benchmark: "BTC"
+  
+  # 세금 최적화 설정
+  tax_optimization:
+    enabled: true
+    # 거주 국가 (세법 적용)
+    country: "KR"
+    
+    # 세율 설정 (한국 기준)
+    tax_rates:
+      crypto_gains: 0.22      # 22% (2025년 기준)
+      short_term: 0.22        # 단기매매 22%
+      long_term: 0.22         # 장기보유도 22% (현행법)
+    
+    # 세금 최적화 전략
+    lot_method: "TAX_EFFICIENT"  # FIFO, LIFO, HIGHEST_COST, TAX_EFFICIENT
+    
+    # 손실 수확 설정
+    loss_harvesting:
+      enabled: true
+      min_loss_threshold: 0.05    # 5% 이상 손실시 수확 고려
+      wash_sale_days: 30          # 30일 규칙 (재매수 방지)
+    
+    # 세금 리포트 생성
+    reporting:
+      enabled: true
+      format: ["JSON", "CSV", "PDF"]
+      quarterly: true
+      annual: true
+  
+  # 시나리오 대응 시스템 설정
+  scenario_response:
+    enabled: true
+    # 시나리오별 임계값
+    thresholds:
+      black_swan:
+        price_drop_24h: -0.30     # 24시간 30% 하락
+        volume_surge: 3.0         # 거래량 3배 증가
+      market_crash:
+        price_drop_7d: -0.40      # 7일간 40% 하락  
+        fear_index: 20            # 공포지수 20 미만
+        liquidations_24h: 1000000000  # 청산 10억달러 이상
+      euphoria:
+        price_surge_30d: 1.0      # 30일간 100% 상승
+        fear_greed_index: 80      # 극도의 탐욕
+        funding_rate: 0.01        # 높은 펀딩비율
+      regulation_risk:
+        sentiment_score: -0.7     # 강한 부정적 뉴스
+        price_drop_1h: -0.10      # 1시간 10% 하락
+    
+    # 냉각 기간 (시간)
+    cooldown_periods:
+      black_swan: 48
+      market_crash: 24  
+      euphoria: 48
+      regulation_risk: 12
+  
+  # 심리적 편향 방지 설정
+  bias_prevention:
+    enabled: true
+    # FOMO 방지 설정
+    fomo:
+      price_surge_threshold: 0.15   # 15% 이상 상승시 감지
+      volume_spike_threshold: 3.0   # 거래량 3배 증가시 감지
+      quick_decision_minutes: 5     # 5분 이내 결정시 경고
+    
+    # 패닉 셀링 방지
+    panic_selling:
+      price_drop_threshold: -0.10   # 10% 하락시 감지
+      fear_index_threshold: 25      # 공포지수 25 미만시 감지
+      quick_sell_minutes: 3         # 3분 이내 매도시 경고
+    
+    # 과신 편향 방지
+    overconfidence:
+      win_streak_threshold: 5       # 연속 5회 수익시 경고
+      position_increase_threshold: 0.5  # 포지션 50% 증가시 경고
+      daily_trades_threshold: 10    # 하루 10회 이상 거래시 경고
+    
+    # 방지 조치 강도
+    prevention_actions:
+      delay_minutes: [5, 15, 30, 60]      # 지연 시간 (단계별)
+      amount_reduction: [0.1, 0.25, 0.4, 0.6]  # 금액 축소율 (단계별)
+      cooling_hours: [1, 4, 12, 24]      # 쿨링 기간 (단계별)
+  
+  # 매크로 경제 분석 설정
+  macro_economic:
+    enabled: true
+    # 외부 API 키 (환경변수에서 가져옴)
+    api_keys:
+      fred: "${FRED_API_KEY}"              # 연준 경제 데이터
+      alpha_vantage: "${ALPHAVANTAGE_API_KEY}"  # 주식/경제 데이터
+    
+    # 지표별 업데이트 주기 (시간)
+    update_intervals:
+      fed_funds_rate: 24      # 일 1회
+      inflation_rate: 168     # 주 1회  
+      dxy_index: 4            # 4시간마다
+      vix_index: 1            # 시간마다
+      gold_price: 1           # 시간마다
+    
+    # 영향도 가중치 (-1 ~ 1)
+    impact_weights:
+      fed_rate: -0.3          # 금리 상승 = 암호화폐 부정적
+      inflation: 0.2          # 인플레이션 = 헤지 수요
+      dxy: -0.25             # 달러 강세 = 암호화폐 부정적
+      m2_supply: 0.35        # 통화 공급 증가 = 긍정적
+      vix: -0.15             # 공포 지수 = 부정적
+  
+  # 온체인 데이터 분석 설정
+  onchain_analysis:
+    enabled: true
+    # 데이터 제공자 API 키
+    api_keys:
+      glassnode: "${GLASSNODE_API_KEY}"
+      cryptoquant: "${CRYPTOQUANT_API_KEY}" 
+      santiment: "${SANTIMENT_API_KEY}"
+    
+    # 고래 임계값
+    whale_thresholds:
+      BTC: 1000    # 1000 BTC 이상
+      ETH: 10000   # 10000 ETH 이상
+    
+    # 분석 가중치
+    analysis_weights:
+      whale_activity: 0.25      # 고래 활동
+      exchange_flow: 0.20       # 거래소 흐름
+      lth_behavior: 0.20        # 장기보유자 행동
+      network_health: 0.15      # 네트워크 건강도
+      stablecoin_flow: 0.10     # 스테이블코인 흐름
+      sentiment: 0.10           # 시장 심리
+    
+    # 업데이트 주기 (시간)
+    update_interval: 4        # 4시간마다
+  
+  # 성과 분석 설정
+  performance_analytics:
+    enabled: true
+    # 무위험 수익률 (연율)
+    risk_free_rate: 0.02      # 2%
+    
+    # 벤치마크 설정
+    benchmarks:
+      primary: "BTC"          # 주 벤치마크
+      secondary: "ETH"        # 보조 벤치마크
+      traditional: "SPY"      # 전통자산 벤치마크
+    
+    # 성과 리포트 생성 주기
+    reporting:
+      daily: true             # 일일 성과
+      weekly: true            # 주간 성과
+      monthly: true           # 월간 성과
+      quarterly: true         # 분기 성과
+    
+    # 고급 메트릭 계산
+    advanced_metrics:
+      rolling_window: 252     # 1년 (252 거래일)
+      drawdown_analysis: true # 드로우다운 분석
+      attribution_analysis: true  # 성과 귀인 분석
+      factor_exposure: true   # 팩터 익스포저 분석
 
 # =============================================================================
 # 알림 설정

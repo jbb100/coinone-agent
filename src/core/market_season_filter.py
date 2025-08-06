@@ -48,26 +48,65 @@ class MarketSeasonFilter:
         Returns:
             200주 이동평균값
         """
-        if len(price_data) < 200:
-            logger.warning(f"데이터 부족: {len(price_data)}주 < 200주")
-            fallback_ma = price_data['Close'].mean()
-            if pd.isna(fallback_ma):
-                # 데이터가 전혀 없는 경우 기본값 사용
-                fallback_ma = 50000000.0  # 5천만원 기본값
-            return fallback_ma
+        try:
+            # 데이터 유효성 검증
+            if price_data.empty or 'Close' not in price_data.columns:
+                logger.warning("가격 데이터가 비어있거나 'Close' 컬럼이 없습니다")
+                return 50000000.0  # 5천만원 기본값
             
-        weekly_prices = price_data.resample('W')['Close'].last()
-        ma_200w = weekly_prices.rolling(window=200).mean().iloc[-1]
-        
-        # NaN 체크 및 기본값 처리
-        if pd.isna(ma_200w):
-            logger.warning("200주 이동평균 계산 결과가 NaN입니다. 기본값 사용")
-            ma_200w = price_data['Close'].mean()
-            if pd.isna(ma_200w):
-                ma_200w = 50000000.0  # 5천만원 기본값
-        
-        logger.debug(f"200주 이동평균: {ma_200w:.2f}")
-        return ma_200w
+            # Close 컬럼에서 유효한 데이터만 필터링
+            valid_prices = price_data['Close'].dropna()
+            if len(valid_prices) == 0:
+                logger.warning("유효한 가격 데이터가 없습니다")
+                return 50000000.0
+            
+            # 데이터 길이 체크
+            if len(valid_prices) < 200:
+                logger.warning(f"데이터 부족: {len(valid_prices)}개 < 200개 필요")
+                fallback_ma = valid_prices.mean()
+                return fallback_ma if not pd.isna(fallback_ma) else 50000000.0
+            
+            # 인덱스가 datetime인지 확인
+            if not isinstance(price_data.index, pd.DatetimeIndex):
+                logger.warning("데이터 인덱스가 datetime이 아닙니다. 단순 이동평균 사용")
+                # 단순 200개 이동평균으로 대체
+                ma_200 = valid_prices.rolling(window=200).mean().iloc[-1]
+                return ma_200 if not pd.isna(ma_200) else valid_prices.mean()
+            
+            # 주간 데이터로 리샘플링
+            try:
+                weekly_prices = price_data.resample('W')['Close'].last().dropna()
+                if len(weekly_prices) < 200:
+                    logger.warning(f"주간 데이터 부족: {len(weekly_prices)}주 < 200주")
+                    # 일간 데이터로 200개 이동평균 계산 (대략 200일)
+                    ma_200d = valid_prices.rolling(window=200).mean().iloc[-1]
+                    return ma_200d if not pd.isna(ma_200d) else valid_prices.mean()
+                
+                # 200주 이동평균 계산
+                ma_200w = weekly_prices.rolling(window=200).mean().iloc[-1]
+                
+                # 결과 검증
+                if pd.isna(ma_200w):
+                    logger.warning("200주 이동평균 계산 결과가 NaN입니다. 대체값 사용")
+                    # 더 짧은 기간의 이동평균으로 대체
+                    ma_50w = weekly_prices.rolling(window=50).mean().iloc[-1]
+                    if not pd.isna(ma_50w):
+                        return ma_50w
+                    else:
+                        return valid_prices.mean()
+                
+                logger.debug(f"200주 이동평균: {ma_200w:.2f}")
+                return ma_200w
+                
+            except Exception as resample_error:
+                logger.warning(f"리샘플링 실패: {resample_error}. 단순 이동평균 사용")
+                ma_200 = valid_prices.rolling(window=200).mean().iloc[-1]
+                return ma_200 if not pd.isna(ma_200) else valid_prices.mean()
+                
+        except Exception as e:
+            logger.error(f"200주 이동평균 계산 중 오류: {e}")
+            # 최종 fallback - BTC 대략적 평균가
+            return 50000000.0  # 5천만원
     
     def determine_market_season(
         self, 
