@@ -440,7 +440,7 @@ python scripts/performance_report.py
 
 # 12. 포트폴리오 최적화 (매일 09:00)
 # 현재 시장 상황에 맞는 최적 포트폴리오 비중을 계산합니다.
-0 9 * * * /path/to/kairos_env/bin/python -m /path/to/kairos-1/src.cli.portfolio_optimizer_cli optimize
+0 9 * * * /path/to/kairos_env/bin/python -m src.cli.portfolio_optimizer_cli optimize-portfolio
 
 # 13. 고급 성과 분석 (매주 일요일 21:00)
 # 샤프비율, 최대낙폭, 승률 등 고급 성과 지표를 분석합니다.
