@@ -655,7 +655,7 @@ class CoinoneClient:
             # Private API v2.1: 특정 주문 정보 조회
             params = {"order_id": order_id}
             
-            response = self._make_request("POST", "/private/v2.1/order/info", params, is_public=False)
+            response = self._make_request("POST", "/v2.1/order/info", params, is_public=False)
             logger.debug(f"주문 상태 조회: {order_id}")
             return response
             
@@ -686,7 +686,7 @@ class CoinoneClient:
             # Private API v2.1: 개별 주문 취소
             params = {"order_id": order_id}
             
-            response = self._make_request("POST", "/private/v2.1/order/cancel", params, is_public=False)
+            response = self._make_request("POST", "/v2.1/order/cancel", params, is_public=False)
             
             if response.get("result") == "success":
                 logger.info(f"주문 취소 성공: {order_id}")
