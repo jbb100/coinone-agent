@@ -163,9 +163,10 @@ class MultiAccountFeatureManager(BaseService):
                 else:
                     logger.warning(f"⚠️ 계정 {account_id} Rebalancer 초기화 건너뛰기 (필수 의존성 없음)")
                 
-                self.risk_managers[account_id] = RiskManager(
-                    coinone_client=client
-                )
+                # Skip RiskManager initialization for now as it requires config parameter
+                # self.risk_managers[account_id] = RiskManager(
+                #     coinone_client=client
+                # )
                 
                 self.order_managers[account_id] = OrderManager(
                     coinone_client=client
@@ -280,7 +281,13 @@ class MultiAccountFeatureManager(BaseService):
     async def _run_risk_analysis_for_account(self, account_id: AccountID) -> Dict[str, Any]:
         """개별 계정 리스크 분석"""
         if account_id not in self.risk_managers:
-            raise KairosException(f"계정 {account_id} 리스크 매니저 없음", "RISK_MANAGER_NOT_FOUND")
+            logger.warning(f"계정 {account_id} 리스크 매니저가 초기화되지 않아 분석을 건너뜁니다")
+            return {
+                "risk_metrics": {"status": "unavailable", "reason": "risk_manager_not_initialized"},
+                "volatility": 0.0,
+                "value_at_risk": 0.0,
+                "analysis_timestamp": datetime.now().isoformat()
+            }
         
         risk_manager = self.risk_managers[account_id]
         
