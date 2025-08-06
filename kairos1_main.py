@@ -888,7 +888,7 @@ class KairosSystem:
     def _send_twap_start_notification(self, execution_result):
         """TWAP 실행 시작 알림"""
         try:
-            execution_plan = execution_result.get("execution_plan", {})
+            execution_params = execution_result.get("execution_params", {})
             twap_orders = execution_result.get("twap_orders", [])
             
             message = f"""
@@ -896,9 +896,9 @@ class KairosSystem:
 
 **실행 계획**:
 • 주문 개수: {len(twap_orders)}개
-• 실행 시간: {execution_plan.get('total_execution_hours', 0)}시간
-• 분할 간격: {execution_plan.get('slice_interval_minutes', 0)}분
-• 시작 시간: {execution_plan.get('start_time', datetime.now()).strftime('%Y-%m-%d %H:%M:%S')}
+• 실행 시간: {execution_params.get('execution_hours', 0)}시간
+• 분할 간격: {execution_params.get('slice_interval_minutes', 0)}분
+• 시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 **TWAP 주문 목록**:
             """.strip()
@@ -922,7 +922,7 @@ class KairosSystem:
         try:
             market_season = analysis_result.get("market_season", "Unknown")
             twap_orders = rebalance_result.get("twap_orders", [])
-            execution_plan = rebalance_result.get("execution_plan", {})
+            execution_params = rebalance_result.get("execution_params", {})
             
             message = f"""
 🚨 **시장 계절 변화로 즉시 리밸런싱 시작**
@@ -932,8 +932,8 @@ class KairosSystem:
 
 **즉시 시작된 TWAP 리밸런싱**:
 • 주문 개수: {len(twap_orders)}개
-• 예상 실행 시간: {execution_plan.get('total_execution_hours', 0)}시간
-• 분할 간격: {execution_plan.get('slice_interval_minutes', 0)}분
+• 예상 실행 시간: {execution_params.get('execution_hours', 0)}시간
+• 분할 간격: {execution_params.get('slice_interval_minutes', 0)}분
 
 **TWAP 주문 목록**:
             """.strip()
