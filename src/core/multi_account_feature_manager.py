@@ -128,7 +128,7 @@ class MultiAccountFeatureManager(BaseService):
         accounts = await self.multi_account_manager.get_all_accounts()
         
         for account_info in accounts:
-            account_id = account_info.account_id
+            account_id = account_info["account_id"]
             client = self.multi_account_manager.clients.get(account_id)
             
             if not client:
@@ -367,7 +367,7 @@ class MultiAccountFeatureManager(BaseService):
         # 대상 계정 결정
         if target_accounts is None:
             all_accounts = await self.multi_account_manager.get_all_accounts()
-            target_accounts = [acc.account_id for acc in all_accounts if acc.status.value == "active"]
+            target_accounts = [acc["account_id"] for acc in all_accounts if acc["status"].value == "active"]
         
         # 동시성 제어
         operation_key = f"{operation_name}_{int(start_time.timestamp())}"
