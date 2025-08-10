@@ -295,6 +295,10 @@ class ConfigLoader:
             logger.error(f"설정 파일 다시 로드 실패: {e}")
             raise
     
+    def get_config(self) -> Dict[str, Any]:
+        """전체 설정 데이터 반환"""
+        return self._config_data
+    
     def to_dict(self) -> Dict[str, Any]:
         """설정을 딕셔너리로 반환 (민감한 정보 제외)"""
         config_copy = self._config_data.copy()

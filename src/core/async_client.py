@@ -49,10 +49,18 @@ class AsyncCache:
         self.max_memory_items = max_memory_items
         self.memory_cache: Dict[str, CacheEntry] = {}
         self.access_times: Dict[str, datetime] = {}
-        self._lock = asyncio.Lock()
+        self._lock = None  # 이벤트 루프에서 초기화됨
+        self._initialized = False
+    
+    async def _ensure_initialized(self):
+        """이벤트 루프에서 초기화"""
+        if not self._initialized:
+            self._lock = asyncio.Lock()
+            self._initialized = True
     
     async def get(self, key: str) -> Optional[Any]:
         """캐시에서 데이터 조회"""
+        await self._ensure_initialized()
         async with self._lock:
             # 메모리 캐시 확인
             if key in self.memory_cache:
@@ -73,6 +81,7 @@ class AsyncCache:
     
     async def set(self, key: str, data: Any, ttl: int = 300):
         """캐시에 데이터 저장"""
+        await self._ensure_initialized()
         async with self._lock:
             # 메모리 한도 확인 및 LRU 삭제
             if len(self.memory_cache) >= self.max_memory_items:
@@ -107,6 +116,7 @@ class AsyncCache:
     
     async def clear_expired(self):
         """만료된 캐시 정리"""
+        await self._ensure_initialized()
         async with self._lock:
             expired_keys = [
                 key for key, entry in self.memory_cache.items()
@@ -184,13 +194,21 @@ class RequestBatcher:
         self.batch_size = batch_size
         self.batch_timeout = batch_timeout
         self.pending_requests: List[Tuple[Callable, asyncio.Future]] = []
-        self._batch_lock = asyncio.Lock()
+        self._batch_lock = None  # 이벤트 루프에서 초기화됨
+        self._initialized = False
         self._batch_task: Optional[asyncio.Task] = None
+    
+    async def _ensure_batch_initialized(self):
+        """이벤트 루프에서 초기화"""
+        if not self._initialized:
+            self._batch_lock = asyncio.Lock()
+            self._initialized = True
     
     async def add_request(self, request_func: Callable) -> Any:
         """배치에 요청 추가"""
         future = asyncio.Future()
         
+        await self._ensure_batch_initialized()
         async with self._batch_lock:
             self.pending_requests.append((request_func, future))
             
@@ -208,6 +226,7 @@ class RequestBatcher:
     async def _wait_and_process_batch(self):
         """타임아웃 후 배치 처리"""
         await asyncio.sleep(self.batch_timeout)
+        await self._ensure_batch_initialized()
         async with self._batch_lock:
             await self._process_batch()
     

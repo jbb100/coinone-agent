@@ -34,6 +34,7 @@ from src.core.behavioral_bias_prevention import BehavioralBiasPrevention
 from src.core.advanced_performance_analytics import AdvancedPerformanceAnalytics
 
 from src.trading.coinone_client import CoinoneClient
+from src.trading.rate_limited_client import create_rate_limited_client
 from src.trading.order_manager import OrderManager
 from src.risk.risk_manager import RiskManager
 from src.monitoring.alert_system import AlertSystem
@@ -42,6 +43,7 @@ from src.utils.config_loader import ConfigLoader, REQUIRED_CONFIG_KEYS
 from src.utils.database_manager import DatabaseManager
 from src.utils.market_data_provider import MarketDataProvider
 from src.core.multi_account_manager import MultiAccountManager
+from src.core.system_integration_helper import get_system_status
 
 
 class KairosSystem:
@@ -219,8 +221,10 @@ class KairosSystem:
                         primary_account_id = list(self.multi_account_manager.accounts.keys())[0]
                     
                     if primary_account_id in self.multi_account_manager.clients:
-                        self.coinone_client = self.multi_account_manager.clients[primary_account_id]
-                        logger.info(f"멀티 계정 관리자 사용: {primary_account_id} 계정")
+                        # 원본 클라이언트에 속도 제한 적용
+                        original_client = self.multi_account_manager.clients[primary_account_id]
+                        self.coinone_client = create_rate_limited_client(original_client)
+                        logger.info(f"멀티 계정 관리자 사용 (속도 제한 적용): {primary_account_id} 계정")
                     else:
                         raise ValueError(f"계정 {primary_account_id}의 클라이언트 초기화 실패")
                 else:
@@ -1247,10 +1251,35 @@ def main():
             print("📋 시스템 상태 조회...")
             status = kairos.get_system_status()
             if "error" not in status:
-                print("✅ 시스템 상태:")
+                print("✅ 기본 시스템 상태:")
                 print(f"포트폴리오 가치: {status['portfolio']['total_value_krw']:,.0f} KRW")
                 print(f"현재 시장 계절: {status['market_analysis']['current_season'] or 'N/A'}")
                 print(f"리스크 수준: {status['risk']['risk_level']}")
+                
+                # 시스템 조정자 상태 추가
+                coord_status = get_system_status()
+                print("\n🔧 시스템 조정자 상태:")
+                print(f"활성 작업: {coord_status['active_operations']}개")
+                if coord_status['active_operations'] > 0:
+                    print("작업별 현황:")
+                    for op_type, count in coord_status['operations_by_type'].items():
+                        if count > 0:
+                            print(f"  • {op_type}: {count}개")
+                
+                locked_assets = coord_status['locked_assets']
+                if locked_assets:
+                    print(f"락된 자산: {', '.join(locked_assets)}")
+                else:
+                    print("락된 자산: 없음")
+                
+                api_info = coord_status['api_rate_limit']
+                print(f"API 호출: {api_info['recent_calls']}/{api_info['max_calls_per_second']:.0f}/초")
+                
+                stats = coord_status['stats']
+                print(f"\n📊 조정자 통계:")
+                print(f"총 작업 수행: {stats['total_operations']}회")
+                print(f"충돌 방지: {stats['conflicts_prevented']}회")
+                print(f"중복 알림 제거: {stats['alerts_deduplicated']}회")
             else:
                 print("❌ 시스템 상태 조회 실패")
                 

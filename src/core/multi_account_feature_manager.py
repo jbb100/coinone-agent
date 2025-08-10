@@ -18,6 +18,7 @@ from .base_service import BaseService, ServiceConfig
 from .exceptions import KairosException, ConfigurationException
 from .multi_account_manager import MultiAccountManager, get_multi_account_manager
 from .market_season_filter import MarketSeasonFilter
+from .system_coordinator import get_system_coordinator, OperationType
 from ..utils.database_manager import DatabaseManager
 
 # 기존 단일 계정 매니저들 import
@@ -111,6 +112,9 @@ class MultiAccountFeatureManager(BaseService):
         # 동시성 제어
         self.operation_locks: Dict[str, asyncio.Lock] = {}
         self.max_concurrent_operations = 5
+        
+        # 시스템 조정자 초기화
+        self.system_coordinator = get_system_coordinator()
     
     async def initialize(self):
         """멀티 계정 기능 관리자 초기화"""

@@ -101,12 +101,20 @@ class MultiAccountCoordinator(BaseService):
         
         # 작업 관리
         self.scheduled_tasks: Dict[str, ScheduledTask] = {}
-        self.task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        self.task_queue = None  # 이벤트 루프에서 초기화됨
         self.running_tasks: Dict[str, asyncio.Task] = {}
         
         # 리소스 관리
         self.resource_pool = ResourcePool()
-        self.resource_lock = asyncio.Lock()
+        self.resource_lock = None  # 이벤트 루프에서 초기화됨
+        self._initialized = False
+        
+    async def _ensure_initialized(self):
+        """이벤트 루프에서 초기화"""
+        if not self._initialized:
+            self.task_queue = asyncio.PriorityQueue()
+            self.resource_lock = asyncio.Lock()
+            self._initialized = True
         
         # 스케줄 관리
         self.scheduler_task: Optional[asyncio.Task] = None
@@ -204,6 +212,7 @@ class MultiAccountCoordinator(BaseService):
         timeout_seconds: int = 300
     ) -> str:
         """단일 작업 스케줄링"""
+        await self._ensure_initialized()
         
         task_id = f"{name}_{uuid.uuid4().hex[:8]}"
         

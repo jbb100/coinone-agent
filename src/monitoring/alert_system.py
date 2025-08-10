@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from loguru import logger
 
+from ..core.system_coordinator import get_system_coordinator
+
 
 class AlertSystem:
     """
@@ -34,6 +36,9 @@ class AlertSystem:
         self.slack_config = self.notification_config.get("slack", {})
         self.alert_levels = self.notification_config.get("alert_levels", {})
         
+        # 시스템 조정자 (중복 알림 제거용)
+        self.system_coordinator = get_system_coordinator()
+        
         logger.info("AlertSystem 초기화 완료")
     
     def send_alert(
@@ -44,7 +49,7 @@ class AlertSystem:
         channels: Optional[List[str]] = None
     ) -> Dict[str, bool]:
         """
-        알림 발송
+        알림 발송 (중복 제거 적용)
         
         Args:
             title: 알림 제목
@@ -55,6 +60,12 @@ class AlertSystem:
         Returns:
             채널별 발송 결과
         """
+        # 중복 알림 체크
+        alert_key = f"{alert_type}:{title}"
+        if not self.system_coordinator.should_send_alert(alert_key, message):
+            logger.debug(f"중복 알림 필터링됨: {title}")
+            return {"filtered": True}
+        
         results = {}
         
         # 채널 목록 결정

@@ -1,11 +1,12 @@
 # KAIROS-1: 장기 투자 시스템 (코인원 거래소 맞춤 버전)
 
-**🚀 최신 업데이트 (2025.02)**: Enhanced Multi-Account System 🆕
-- **🎯 Enhanced Multi-Account Manager** - 핵심 기능을 멀티 계정에서 제공 (일부 제한사항 있음)
+**🚀 최신 업데이트 (2025.02)**: Opportunistic Buying System 🆕
+- **💰 기회적 매수 시스템** - RSI 과매도, 시장 하락 시 현금 활용한 추가 매수
+- **📉 5단계 매수 레벨** - MINOR(5-10%), MODERATE(10-20%), MAJOR(20-30%), EXTREME(30%+)
+- **🔄 공포탐욕 지수 연동** - 시장 심리에 따른 현금 활용 비율 자동 조정
+- **🎯 Enhanced Multi-Account Manager** - 핵심 기능을 멀티 계정에서 제공
 - **🎬 Multi-Account Coordinator** - 병렬 작업 실행 및 자동 스케줄링 시스템
-- **⚡ Unified Feature Management** - 주요 기능의 멀티 계정 확장 (TWAP 등 일부 미지원)
 - **📊 Advanced Analytics** - 포트폴리오 최적화, 리스크 분석, 성과 추적 통합
-- **🚀 Smart CLI Interface** - 주요 기능을 직관적인 명령어로 제공
 - **10개 고급 분석 시스템** 통합 (멀티 타임프레임, 매크로 경제, 온체인 데이터 등)
 - **멀티 계정 관리 시스템** - 여러 코인원 계정 동시 관리 및 독립적 전략 운용
 - **고급 CLI 도구** - 백테스팅, 포트폴리오 최적화, 성과 분석 등 전문 도구
@@ -371,6 +372,10 @@ python scripts/performance_report.py
 # 모든 계정의 통합 현황을 병렬로 수집하여 리포트를 생성합니다.
 0 21 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_multi.py portfolio
 
+# 🆕 4. 기회적 매수 시스템 (30분마다)
+# 시장 하락 시 현금을 활용한 추가 매수 기회를 탐색합니다.
+*/30 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/execute_opportunistic_buy.py
+
 # --------------------------------------------------------------------------
 # 선택: 계정별 개별 스케줄이 필요한 경우 추가
 # --------------------------------------------------------------------------
@@ -446,6 +451,18 @@ python scripts/performance_report.py
 # 샤프비율, 최대낙폭, 승률 등 고급 성과 지표를 분석합니다.
 # 파라미터: 분석할 기간(일수) - 예: 30일간 분석
 0 21 * * 0 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --advanced-performance-report 30
+
+# --------------------------------------------------------------------------
+# 🆕 기회적 매수 시스템 (Opportunistic Buying)
+# --------------------------------------------------------------------------
+
+# 14. 기회적 매수 기회 탐색 (30분마다)
+# RSI 과매도, 급락 구간에서 현금 보유분을 활용한 추가 매수를 실행합니다.
+# 시장 하락을 수익 기회로 전환하는 핵심 전략입니다.
+*/30 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/execute_opportunistic_buy.py
+
+# 선택: 더 빈번한 기회 탐색이 필요한 경우 (매 15분)
+# */15 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/execute_opportunistic_buy.py
 ```
 
 ## 📈 모니터링 및 알림
@@ -786,7 +803,15 @@ python kairos1_main.py --process-twap
 
 ## 📈 업데이트 내역
 
-### v3.2.0 (2025.02) - Enhanced Multi-Account System 🆕
+### v3.3.0 (2025.02) - Opportunistic Buying System 🆕
+- ✅ **💰 기회적 매수 시스템**: RSI 과매도 구간에서 현금 활용한 추가 매수
+- ✅ **📉 다층적 기회 판단**: 7일/30일 하락률, RSI, 공포탐욕 지수 종합 분석
+- ✅ **🎯 5단계 매수 레벨**: MINOR(5-10%), MODERATE(10-20%), MAJOR(20-30%), EXTREME(30%+)
+- ✅ **🔄 시장 상황별 전략**: 공포지수 연동 현금 활용 비율 자동 조정
+- ✅ **⚡ 리스크 관리**: 동일 자산 4시간 간격, 신뢰도 점수 기반 우선순위
+- ✅ **📊 데이터베이스 기록**: 모든 기회적 매수 이력 추적 및 분석
+
+### v3.2.0 (2025.02) - Enhanced Multi-Account System
 - ✅ **🎯 Enhanced Multi-Account Manager**: 모든 기능을 멀티 계정에서 동일하게 제공
 - ✅ **🎬 Multi-Account Coordinator**: 병렬 작업 실행, 우선순위 관리, 자동 스케줄링
 - ✅ **⚡ Unified Feature Management**: 단일 계정 모든 기능의 멀티 계정 확장

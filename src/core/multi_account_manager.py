@@ -67,7 +67,7 @@ class MultiAccountManager(BaseService):
         # 성과 추적
         self.performance_data: Dict[AccountID, Dict[str, Any]] = {}
         
-        # 동시성 제어
+        # 동시성 제어 (initialize()에서 생성됨)
         self.account_locks: Dict[AccountID, asyncio.Lock] = {}
         
     async def initialize(self):
@@ -103,6 +103,7 @@ class MultiAccountManager(BaseService):
             for account_data in config_data.get('accounts', []):
                 account_config = AccountConfig(**account_data)
                 self.accounts[account_config.account_id] = account_config
+                # asyncio.Lock() 생성은 이벤트 루프가 있는 환경에서만 가능
                 self.account_locks[account_config.account_id] = asyncio.Lock()
             
             logger.info(f"📋 {len(self.accounts)}개 계정 설정 로드 완료")
@@ -191,6 +192,7 @@ class MultiAccountManager(BaseService):
             
             # 계정 설정 추가
             self.accounts[account_config.account_id] = account_config
+            # asyncio.Lock()은 이벤트 루프가 실행 중일 때만 생성 가능
             self.account_locks[account_config.account_id] = asyncio.Lock()
             
             # 클라이언트 생성

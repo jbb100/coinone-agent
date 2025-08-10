@@ -20,6 +20,8 @@ from ..trading.coinone_client import CoinoneClient
 from ..trading.order_manager import OrderStatus
 from ..utils.database_manager import DatabaseManager
 from ..utils.constants import MIN_ORDER_AMOUNTS_KRW
+from .system_coordinator import get_system_coordinator, OperationType
+from .system_integration_helper import with_asset_protection, check_api_rate_limit
 
 
 class MarketVolatility(Enum):
@@ -127,6 +129,9 @@ class DynamicExecutionEngine:
         # 실행 중인 TWAP 주문들
         self.active_twap_orders: List[TWAPOrder] = []
         self.current_execution_id = None  # 현재 활성 실행 ID
+        
+        # 시스템 조정자 초기화
+        self.system_coordinator = get_system_coordinator()
         
         # 데이터베이스에서 활성 TWAP 주문들 복원
         self._load_active_twap_orders()
@@ -411,15 +416,52 @@ class DynamicExecutionEngine:
             logger.error(f"TWAP 주문 생성 실패: {e}")
             return []
     
+    def execute_twap_slice_sync(self, order: TWAPOrder) -> Dict:
+        """
+        TWAP 주문의 한 슬라이스 실행 (동기 버전, 기존 호환성 유지)
+        """
+        try:
+            # 시스템 조정자를 통한 충돌 감지만 수행 (락은 생략)
+            operation_id = f"twap_slice_{order.asset}_{datetime.now().timestamp()}"
+            assets = [order.asset, "KRW"]
+            
+            # 충돌하는 작업이 있는지만 체크
+            try:
+                # 동기적으로 충돌 체크만 수행
+                conflicting_ops = []
+                for op_id, op in self.system_coordinator.active_operations.items():
+                    if op.assets.intersection(set(assets)):
+                        conflicting_ops.append(op_id)
+                
+                if conflicting_ops:
+                    logger.warning(f"TWAP 슬라이스 실행 지연: {order.asset} (충돌: {conflicting_ops})")
+                    return {
+                        "success": False,
+                        "error": "resource_conflict",
+                        "message": f"자산 {order.asset} 사용 중 - 다음 실행에서 재시도",
+                        "conflicting_operations": conflicting_ops
+                    }
+            except Exception as e:
+                logger.warning(f"충돌 체크 실패, 계속 진행: {e}")
+            
+            return self._execute_twap_slice_internal(order)
+            
+        except Exception as e:
+            logger.error(f"TWAP 슬라이스 실행 중 오류: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
     def execute_twap_slice(self, order: TWAPOrder) -> Dict:
         """
-        TWAP 주문의 한 슬라이스 실행
-        
-        Args:
-            order: TWAP 주문 정보
-            
-        Returns:
-            실행 결과
+        TWAP 주문의 한 슬라이스 실행 (기존 인터페이스 유지)
+        """
+        return self.execute_twap_slice_sync(order)
+    
+    def _execute_twap_slice_internal(self, order: TWAPOrder) -> Dict:
+        """
+        TWAP 주문의 한 슬라이스 실행 (내부 구현)
         """
         try:
             # 1. 포트폴리오 상태 확인
@@ -457,17 +499,18 @@ class DynamicExecutionEngine:
                             "error": "insufficient_balance",
                             "message": f"KRW 잔고가 최소 주문 금액({min_amount_krw:,.0f} KRW)보다 작습니다"
                         }
+                
+                else:  # sell
+                    # 매도 주문 준비: 현재가와 필요 수량 미리 계산
+                    pass
+                
+                # 주문 실행 전 최대 주문 금액 검증 및 조정
+                COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW 안전 한도
             
-            else:  # sell
-                # 매도 주문 준비: 현재가와 필요 수량 미리 계산
-                pass
-            
-            # 주문 실행 전 최대 주문 금액 검증 및 조정
-            COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW 안전 한도
-            
-            if order.slice_amount_krw > COINONE_SAFE_ORDER_LIMIT_KRW:
-                logger.warning(f"⚠️ 슬라이스 금액({order.slice_amount_krw:,.0f} KRW)이 안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과!")
-                logger.info(f"🔄 주문 크기를 안전 한도로 조정: {order.slice_amount_krw:,.0f} → {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW")
+                
+                if order.slice_amount_krw > COINONE_SAFE_ORDER_LIMIT_KRW:
+                    logger.warning(f"⚠️ 슬라이스 금액({order.slice_amount_krw:,.0f} KRW)이 안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과!")
+                    logger.info(f"🔄 주문 크기를 안전 한도로 조정: {order.slice_amount_krw:,.0f} → {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW")
                 
                 # 초과 금액을 다음 슬라이스들에 분배
                 excess_amount = order.slice_amount_krw - COINONE_SAFE_ORDER_LIMIT_KRW
@@ -974,6 +1017,12 @@ class DynamicExecutionEngine:
                 if current_time >= next_execution_time:
                     logger.info(f"TWAP 슬라이스 실행 시간: {twap_order.asset} "
                               f"({twap_order.executed_slices + 1}/{twap_order.slice_count})")
+                    
+                    # API 속도 제한 체크
+                    if not check_api_rate_limit():
+                        logger.warning(f"API 속도 제한으로 TWAP 실행 지연: {twap_order.asset}")
+                        continue
+                    
                     result = self.execute_twap_slice(twap_order)
                     processed_orders.append({
                         "asset": twap_order.asset,

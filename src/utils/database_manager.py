@@ -7,6 +7,7 @@ SQLite 데이터베이스 관리를 담당하는 모듈
 import os
 import json
 import sqlite3
+import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
@@ -895,4 +896,122 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"최근 리밸런싱 기록 조회 실패: {e}")
-            return None 
+            return None
+    
+    def save_opportunistic_buy_record(self, record: Dict):
+        """기회적 매수 기록 저장"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 테이블이 없으면 생성
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS opportunistic_buys (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        asset TEXT NOT NULL,
+                        amount_krw REAL NOT NULL,
+                        price REAL NOT NULL,
+                        opportunity_level TEXT,
+                        price_drop_7d REAL,
+                        price_drop_30d REAL,
+                        rsi REAL,
+                        fear_greed_index REAL,
+                        confidence_score REAL,
+                        order_id TEXT,
+                        status TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # 기록 저장
+                cursor.execute("""
+                    INSERT INTO opportunistic_buys (
+                        timestamp, asset, amount_krw, price, opportunity_level,
+                        price_drop_7d, price_drop_30d, rsi, fear_greed_index,
+                        confidence_score, order_id, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record["timestamp"].isoformat(),
+                    record["asset"],
+                    record["amount_krw"],
+                    record["price"],
+                    record.get("opportunity_level"),
+                    record.get("price_drop_7d"),
+                    record.get("price_drop_30d"),
+                    record.get("rsi"),
+                    record.get("fear_greed_index"),
+                    record.get("confidence_score"),
+                    record.get("order_id"),
+                    record.get("status", "executed")
+                ))
+                
+                conn.commit()
+                logger.info(f"기회적 매수 기록 저장 완료: {record['asset']} - {record['amount_krw']:,.0f} KRW")
+                
+        except Exception as e:
+            logger.error(f"기회적 매수 기록 저장 실패: {e}")
+    
+    def get_market_data(self, asset: str, days: int = 30) -> pd.DataFrame:
+        """
+        시장 데이터 조회 (가격 데이터)
+        
+        Args:
+            asset: 자산 심볼 (BTC, ETH 등)
+            days: 조회 기간 (일)
+            
+        Returns:
+            pandas DataFrame with columns: Close, High, Low, Open, Volume
+            빈 DataFrame 반환 시 실제 가격 데이터가 없음을 의미
+        """
+        try:
+            import yfinance as yf
+            from datetime import datetime, timedelta
+            
+            # Yahoo Finance 심볼 매핑
+            symbol_map = {
+                'BTC': 'BTC-USD',
+                'ETH': 'ETH-USD',
+                'XRP': 'XRP-USD',
+                'ADA': 'ADA-USD',
+                'DOT': 'DOT-USD',
+                'MATIC': 'MATIC-USD'
+            }
+            
+            yahoo_symbol = symbol_map.get(asset.upper())
+            if not yahoo_symbol:
+                logger.warning(f"get_market_data: {asset} 심볼을 찾을 수 없습니다.")
+                return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume'])
+            
+            # 실시간 데이터 가져오기 시도
+            try:
+                ticker = yf.Ticker(yahoo_symbol)
+                period_str = f"{days}d"
+                price_data = ticker.history(period=period_str)
+                
+                if not price_data.empty:
+                    # 컬럼명 통일 (Yahoo Finance는 대문자 사용)
+                    price_data = price_data.rename(columns={
+                        'Open': 'Open',
+                        'High': 'High', 
+                        'Low': 'Low',
+                        'Close': 'Close',
+                        'Volume': 'Volume'
+                    })
+                    
+                    # 필요한 컬럼만 선택
+                    price_data = price_data[['Open', 'High', 'Low', 'Close', 'Volume']]
+                    
+                    logger.info(f"get_market_data: {asset}의 {len(price_data)}일 실시간 데이터 조회 완료")
+                    return price_data
+                    
+            except Exception as api_error:
+                logger.warning(f"실시간 데이터 조회 실패 ({asset}): {api_error}")
+            
+            # 실시간 데이터 실패 시 빈 DataFrame 반환
+            logger.warning(f"get_market_data: {asset}의 {days}일 시장 데이터를 가져올 수 없습니다. 빈 DataFrame을 반환합니다.")
+            return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume'])
+            
+        except Exception as e:
+            logger.error(f"시장 데이터 조회 실패: {asset}, {days}일 - {e}")
+            return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume']) 
