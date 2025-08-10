@@ -111,7 +111,8 @@ class DatabaseManager:
                         target_allocation TEXT,
                         twap_orders_detail TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TEXT
                     )
                 """)
 
@@ -159,6 +160,48 @@ class DatabaseManager:
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+
+                # 리밸런싱 결과 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS rebalance_results (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        success INTEGER NOT NULL DEFAULT 0,
+                        orders_executed INTEGER DEFAULT 0,
+                        orders_failed INTEGER DEFAULT 0,
+                        total_value_before REAL,
+                        total_value_after REAL,
+                        market_season TEXT,
+                        rebalance_data TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                # 리밸런싱 히스토리 테이블 (save_rebalance_result 메서드용)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS rebalance_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        rebalance_date TEXT NOT NULL,
+                        market_season TEXT,
+                        success INTEGER NOT NULL DEFAULT 0,
+                        total_value_before REAL,
+                        total_value_after REAL,
+                        value_change REAL,
+                        orders_executed INTEGER DEFAULT 0,
+                        orders_failed INTEGER DEFAULT 0,
+                        rebalance_data TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # 기존 테이블에 completed_at 컬럼이 없으면 추가
+                try:
+                    cursor.execute("ALTER TABLE twap_executions ADD COLUMN completed_at TEXT")
+                    logger.info("twap_executions 테이블에 completed_at 컬럼 추가")
+                except Exception as e:
+                    # 컬럼이 이미 존재하는 경우 무시
+                    if "duplicate column name" not in str(e).lower():
+                        logger.debug(f"completed_at 컬럼 추가 시도 중 오류 (무시됨): {e}")
                 
                 conn.commit()
                 logger.info("데이터베이스 테이블 초기화 완료")
@@ -799,4 +842,57 @@ class DatabaseManager:
                 logger.info(f"TWAP 실행 계획 업데이트 완료: {execution_id}")
         except Exception as e:
             logger.error(f"TWAP 실행 계획 업데이트 실패: {e}")
-            raise 
+            raise
+    
+    def get_latest_rebalance_record(self) -> Optional[Dict]:
+        """
+        가장 최근 리밸런싱 기록 조회
+        
+        Returns:
+            최근 리밸런싱 기록 또는 None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 먼저 rebalance_results 테이블에서 조회
+                cursor.execute("""
+                    SELECT timestamp, success, orders_executed, total_value_before, total_value_after
+                    FROM rebalance_results 
+                    WHERE success = 1
+                    ORDER BY timestamp DESC 
+                    LIMIT 1
+                """)
+                
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "timestamp": row["timestamp"],
+                        "success": bool(row["success"]),
+                        "orders_executed": row["orders_executed"],
+                        "total_value_before": row["total_value_before"],
+                        "total_value_after": row["total_value_after"]
+                    }
+                
+                # rebalance_results가 없으면 twap_executions에서 완료된 것 조회
+                cursor.execute("""
+                    SELECT start_time, completed_at, status
+                    FROM twap_executions 
+                    WHERE status = 'completed'
+                    ORDER BY completed_at DESC 
+                    LIMIT 1
+                """)
+                
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "timestamp": row["completed_at"] or row["start_time"],
+                        "success": True,
+                        "type": "twap_rebalance"
+                    }
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"최근 리밸런싱 기록 조회 실패: {e}")
+            return None 

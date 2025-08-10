@@ -89,7 +89,7 @@ class AlertSystem:
         error_type: str = "system_error"
     ) -> Dict[str, bool]:
         """
-        오류 알림 발송
+        오류 알림 발송 (민감한 멘션 포함)
         
         Args:
             title: 알림 제목
@@ -108,9 +108,10 @@ class AlertSystem:
 **내용**:
 {message}
 
-**조치**: 시스템 관리자에게 문의하시기 바랍니다.
+**조치**: 시스템 관리자에게 즉시 문의하시기 바랍니다.
         """.strip()
         
+        # 에러는 민감하므로 강제로 error alert_type 사용하여 멘션 트리거
         return self.send_alert(title, formatted_message, "error")
     
     def send_warning_alert(
@@ -323,7 +324,15 @@ class AlertSystem:
             
             # 전체 채널 멘션이 필요한 유형인지 확인
             channel_mention_types = mentions_config.get("channel_mention_types", [])
-            if alert_type in channel_mention_types:
+            
+            # 에러 유형은 자동으로 민감하게 처리
+            if alert_type == "error" or alert_type == "system_error":
+                # error 알림에 대한 특별 처리: 기본 사용자 + @here 추가
+                if not mention_users:  # 설정된 사용자가 없다면 기본값 사용
+                    mention_users = mentions_config.get("default_users", [])
+                mention_users.append("@here")  # 민감한 알림이므로 @here 추가
+                logger.info(f"[멘션] 에러 알림 - @here 자동 추가: {mention_users}")
+            elif alert_type in channel_mention_types:
                 mention_users.append("@channel")
                 logger.info(f"[멘션] 채널 멘션 추가됨: {mention_users}")
             

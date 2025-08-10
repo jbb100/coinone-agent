@@ -19,6 +19,7 @@ import uuid
 from ..trading.coinone_client import CoinoneClient
 from ..trading.order_manager import OrderStatus
 from ..utils.database_manager import DatabaseManager
+from ..utils.constants import MIN_ORDER_AMOUNTS_KRW
 
 
 class MarketVolatility(Enum):
@@ -266,6 +267,11 @@ class DynamicExecutionEngine:
             # 상수 정의
             MIN_ORDER_KRW = 1000  # 코인원 최소 주문 금액 (KRW)
             MIN_ORDER_KRW_BUFFER = 1.05  # 5% 안전 마진
+            
+            # 코인원 거래소 제한사항
+            COINONE_MAX_ORDER_AMOUNT_KRW = 500_000_000  # 500M KRW - 코인원 최대 주문 금액
+            COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW - 안전한 주문 금액 한도
+            MAX_SLICES_PER_ORDER = 24  # 최대 슬라이스 개수
 
             # 암호화폐별 최소 주문 수량 (코인원 기준)
             MIN_ORDER_QUANTITIES = {
@@ -358,6 +364,24 @@ class DynamicExecutionEngine:
                 slice_amount = amount_krw / local_slice_count
                 slice_quantity = 0
                 
+                # 슬라이스당 금액이 코인원 최대 주문 한도를 초과하는지 검증
+                if slice_amount > COINONE_SAFE_ORDER_LIMIT_KRW:
+                    # 안전한 주문 크기로 슬라이스 횟수 재조정
+                    required_slices = math.ceil(amount_krw / COINONE_SAFE_ORDER_LIMIT_KRW)
+                    logger.warning(
+                        f"{asset}: 슬라이스당 주문 금액({slice_amount:,.0f} KRW)이 안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과. "
+                        f"분할 횟수 증가: {local_slice_count} -> {required_slices}"
+                    )
+                    local_slice_count = min(required_slices, MAX_SLICES_PER_ORDER)  # MAX_SLICES_PER_ORDER는 24
+                    slice_amount = amount_krw / local_slice_count
+                    
+                    # 그래도 초과하는 경우 경고
+                    if slice_amount > COINONE_SAFE_ORDER_LIMIT_KRW:
+                        logger.error(
+                            f"{asset}: 최대 분할 후에도 슬라이스당 금액({slice_amount:,.0f} KRW)이 "
+                            f"안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과. 위험한 주문일 수 있음!"
+                        )
+                
                 # TWAP 주문 생성
                 twap_order = TWAPOrder(
                     asset=asset,
@@ -421,26 +445,54 @@ class DynamicExecutionEngine:
                         }
                     
                     # KRW가 있지만 부족한 경우 주문 크기 조정
+                    min_amount_krw = MIN_ORDER_AMOUNTS_KRW.get(order.asset.upper(), 5000)
                     adjusted_amount = min(balance * 0.99, order.slice_amount_krw)  # 1% 마진
-                    if adjusted_amount >= 1000:  # 최소 주문 금액
+                    if adjusted_amount >= min_amount_krw:  # 최소 주문 금액 확인
                         logger.warning(f"잔고 부족으로 주문 크기 조정: {order.slice_amount_krw:,.0f} → {adjusted_amount:,.0f} KRW")
                         order.slice_amount_krw = adjusted_amount
                     else:
-                        logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset}")
+                        logger.error(f"💥 TWAP 주문 실패 - 잔고 부족: {order.asset} (조정된 금액 {adjusted_amount:,.0f} KRW < 최소 금액 {min_amount_krw:,.0f} KRW)")
                         return {
                             "success": False,
                             "error": "insufficient_balance",
-                            "message": "KRW 잔고가 최소 주문 금액보다 작습니다"
+                            "message": f"KRW 잔고가 최소 주문 금액({min_amount_krw:,.0f} KRW)보다 작습니다"
                         }
             
             else:  # sell
                 # 매도 주문 준비: 현재가와 필요 수량 미리 계산
                 pass
             
+            # 주문 실행 전 최대 주문 금액 검증 및 조정
+            COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW 안전 한도
+            
+            if order.slice_amount_krw > COINONE_SAFE_ORDER_LIMIT_KRW:
+                logger.warning(f"⚠️ 슬라이스 금액({order.slice_amount_krw:,.0f} KRW)이 안전 한도({COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW) 초과!")
+                logger.info(f"🔄 주문 크기를 안전 한도로 조정: {order.slice_amount_krw:,.0f} → {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW")
+                
+                # 초과 금액을 다음 슬라이스들에 분배
+                excess_amount = order.slice_amount_krw - COINONE_SAFE_ORDER_LIMIT_KRW
+                remaining_slices = order.slice_count - order.executed_slices - 1  # 현재 슬라이스 제외
+                
+                if remaining_slices > 0:
+                    additional_per_slice = excess_amount / remaining_slices
+                    logger.info(f"📈 초과 금액 {excess_amount:,.0f} KRW을 남은 {remaining_slices}개 슬라이스에 {additional_per_slice:,.0f} KRW씩 분배")
+                    # Note: 실제 분배는 다음 슬라이스 실행 시 동적으로 처리
+                else:
+                    logger.warning(f"⚠️ 남은 슬라이스가 없어 {excess_amount:,.0f} KRW 손실 발생 가능")
+                
+                # 현재 슬라이스를 안전 한도로 제한
+                order.slice_amount_krw = COINONE_SAFE_ORDER_LIMIT_KRW
+            
             # 주문 실행
             if order.side == "buy":
-                # 매수: KRW 금액으로 주문
+                # 매수: KRW 금액으로 주문  
                 amount = order.slice_amount_krw
+                
+                # 최종 안전 검증: 절대로 200M KRW를 초과하는 주문은 보내지 않음
+                if amount > COINONE_SAFE_ORDER_LIMIT_KRW:
+                    logger.error(f"🚨 긴급 차단: 주문 금액({amount:,.0f} KRW)이 안전 한도 초과! 주문을 {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW로 강제 제한")
+                    amount = COINONE_SAFE_ORDER_LIMIT_KRW
+                    order.slice_amount_krw = COINONE_SAFE_ORDER_LIMIT_KRW  # 주문 객체도 업데이트
             else:
                 # 매도: 코인 수량으로 주문 (KRW 금액을 현재가로 나누어 계산)
                 try:
@@ -451,6 +503,11 @@ class DynamicExecutionEngine:
                             "success": False,
                             "error": f"현재가 조회 실패: {current_price}"
                         }
+                    
+                    # 매도 주문도 안전 한도 검증
+                    if order.slice_amount_krw > COINONE_SAFE_ORDER_LIMIT_KRW:
+                        logger.error(f"🚨 긴급 차단: 매도 주문 금액({order.slice_amount_krw:,.0f} KRW)이 안전 한도 초과! 주문을 {COINONE_SAFE_ORDER_LIMIT_KRW:,.0f} KRW로 강제 제한")
+                        order.slice_amount_krw = COINONE_SAFE_ORDER_LIMIT_KRW
                     
                     # KRW 금액을 현재가로 나누어 매도할 수량 계산
                     calculated_quantity = order.slice_amount_krw / current_price
@@ -634,8 +691,77 @@ class DynamicExecutionEngine:
                 ]
                 
                 is_retryable = any(err.lower() in error_msg.lower() for err in retryable_errors)
+                error_code = order_result.get('error_code', '')
                 
-                if is_retryable:
+                # 최소 주문 금액 미만 오류 (306)에 대한 특별 처리  
+                if error_code == '306' or "below the minimum amount" in error_msg:
+                    logger.warning(f"💰 최소 주문 금액 미만 감지 - 남은 전체 금액을 한 번에 주문: {order.asset}")
+                    
+                    # 남은 전체 금액으로 한 번에 주문 시도
+                    total_remaining_amount = order.remaining_amount_krw
+                    logger.info(f"🔄 슬라이싱 없이 남은 전체 금액으로 주문: {total_remaining_amount:,.0f} KRW")
+                    
+                    # 전체 남은 금액으로 주문 제출
+                    full_order_result_obj = self.rebalancer.order_manager.submit_market_order(
+                        currency=order.asset,
+                        side=order.side,
+                        amount=total_remaining_amount
+                    )
+                    
+                    # Order 객체를 딕셔너리로 변환
+                    if full_order_result_obj:
+                        full_order_result = {
+                            "success": full_order_result_obj.status != OrderStatus.FAILED,
+                            "order_id": full_order_result_obj.order_id,
+                            "status": full_order_result_obj.status.value,
+                            "error": full_order_result_obj.error_message if full_order_result_obj.status == OrderStatus.FAILED else None
+                        }
+                    else:
+                        full_order_result = {
+                            "success": False,
+                            "error": "Order submission returned None"
+                        }
+                    
+                    if full_order_result.get("success"):
+                        # 전체 주문 성공시 TWAP 완료 처리
+                        order.exchange_order_ids.append(full_order_result.get("order_id"))
+                        order.executed_slices = order.slice_count  # 모든 슬라이스 완료로 처리
+                        order.remaining_amount_krw = 0
+                        order.status = "completed"
+                        order.last_execution_time = datetime.now()
+                        
+                        logger.info(f"✅ 전체 주문 성공으로 TWAP 완료: {order.asset}")
+                        return {
+                            "success": True,
+                            "order_id": full_order_result.get("order_id"),
+                            "executed_slices": order.executed_slices,
+                            "remaining_slices": 0,
+                            "full_amount_executed": True
+                        }
+                    else:
+                        logger.error(f"💥 전체 금액 주문도 실패: {full_order_result.get('error')}")
+                        order.status = "failed"
+                        return full_order_result
+                
+                # 최대 주문 금액 초과 오류 (307)에 대한 특별 처리
+                elif error_code == '307' or "exceed the maximum amount" in error_msg:
+                    logger.warning(f"🔄 최대 주문 금액 초과 오류 감지 - 슬라이스 크기 동적 조정: {order.asset}")
+                    
+                    # 현재 슬라이스 크기를 50% 감소
+                    original_amount = order.slice_amount_krw
+                    order.slice_amount_krw = order.slice_amount_krw * 0.5
+                    
+                    # 남은 슬라이스에 추가 금액 분배
+                    remaining_slices = order.slice_count - order.executed_slices
+                    if remaining_slices > 1:
+                        additional_amount_per_slice = (original_amount - order.slice_amount_krw) / (remaining_slices - 1)
+                        logger.info(f"📊 슬라이스 크기 조정: {original_amount:,.0f} → {order.slice_amount_krw:,.0f} KRW")
+                        logger.info(f"📈 남은 {remaining_slices-1}개 슬라이스에 {additional_amount_per_slice:,.0f} KRW씩 분배")
+                    
+                    # 조정된 크기로 재시도하지 않고 다음 슬라이스에서 처리
+                    return order_result
+                
+                elif is_retryable:
                     logger.warning(f"⚠️ 일시적 오류로 판단, 다음 슬라이스에서 재시도: {order.asset}")
                     # 주문 상태는 변경하지 않고 오류만 반환
                     return order_result
@@ -710,7 +836,21 @@ class DynamicExecutionEngine:
                     import time
                     time.sleep(5)
             
-            # 2. 새로운 TWAP 주문 생성
+            # 2. KRW 전용 리밸런싱 체크 (KRW 주문만 있는 경우)
+            crypto_orders = {k: v for k, v in rebalance_orders.items() if k != "KRW"}
+            krw_order = rebalance_orders.get("KRW")
+            
+            if not crypto_orders and krw_order:
+                # KRW 주문만 있는 경우 - 즉시 완료 처리
+                logger.info(f"KRW 전용 리밸런싱 감지: {krw_order.get('amount_diff_krw', 0):,.0f} KRW")
+                logger.info("✅ KRW 리밸런싱은 현금 보유량 조정으로 즉시 완료됨")
+                return {
+                    "success": True,
+                    "krw_only_rebalancing": True,
+                    "message": "KRW 리밸런싱 완료 - 별도 거래 불필요"
+                }
+            
+            # 3. 새로운 TWAP 주문 생성
             logger.info("새로운 TWAP 주문 생성 시작")
             
             # 시장 상황 정보 설정

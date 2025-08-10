@@ -355,8 +355,8 @@ def main():
             output_file = generator.save_report_to_file(report)
             print(f"📄 보고서 저장: {output_file}")
         
-        # 알림 발송
-        if args.send_alert:
+        # 알림 발송 (기본적으로 항상 발송)
+        if args.send_alert or True:  # 항상 알림 발송
             generator.send_performance_alerts(report)
             print("📧 성과 알림 발송 완료")
         

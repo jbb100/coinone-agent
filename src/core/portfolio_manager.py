@@ -2,12 +2,15 @@
 Portfolio Manager
 
 포트폴리오 구성 및 자산 배분 관리를 담당하는 모듈
+동적 포트폴리오 최적화 기능 포함
 """
 
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from loguru import logger
+
+from .dynamic_portfolio_optimizer import DynamicPortfolioOptimizer, PortfolioWeights, AssetMetrics
 
 
 @dataclass
@@ -40,12 +43,23 @@ class PortfolioManager:
     Core/Satellite 구조의 포트폴리오 구성 및 목표 비중 계산을 담당합니다.
     """
     
-    def __init__(self, asset_allocation: Optional[AssetAllocation] = None):
+    def __init__(
+        self, 
+        asset_allocation: Optional[AssetAllocation] = None,
+        coinone_client=None,
+        use_dynamic_optimization: bool = False,
+        risk_level: str = "moderate"
+    ):
         """
         Args:
             asset_allocation: 자산 배분 설정 (기본값: 표준 배분)
+            coinone_client: 코인원 클라이언트 (동적 최적화에 필요)
+            use_dynamic_optimization: 동적 포트폴리오 최적화 사용 여부
+            risk_level: 리스크 수준 (conservative/moderate/aggressive)
         """
         self.asset_allocation = asset_allocation or AssetAllocation()
+        self.coinone_client = coinone_client
+        self.use_dynamic_optimization = use_dynamic_optimization
         
         if not self.asset_allocation.validate_weights():
             raise ValueError("자산 배분 비중의 합이 100%가 아닙니다.")
@@ -56,9 +70,30 @@ class PortfolioManager:
         self.core_weight = 0.70
         self.satellite_weight = 0.30
         
+        # 동적 포트폴리오 최적화기 초기화
+        self.dynamic_optimizer = None
+        if use_dynamic_optimization and coinone_client:
+            try:
+                self.dynamic_optimizer = DynamicPortfolioOptimizer(
+                    coinone_client=coinone_client,
+                    risk_level=risk_level,
+                    max_assets=6,
+                    min_market_cap_usd=1e9
+                )
+                logger.info(f"동적 포트폴리오 최적화기 활성화 (리스크: {risk_level})")
+            except Exception as e:
+                logger.warning(f"동적 포트폴리오 최적화기 초기화 실패: {e}")
+                self.use_dynamic_optimization = False
+        
+        # 마지막 최적화 시간 추적
+        self.last_optimization_time = None
+        self.optimization_cache = None
+        
         logger.info("PortfolioManager 초기화 완료")
         logger.info(f"Core Assets: {self.core_assets} ({self.core_weight*100}%)")
         logger.info(f"Satellite Assets: {self.satellite_assets} ({self.satellite_weight*100}%)")
+        if use_dynamic_optimization:
+            logger.info("동적 포트폴리오 최적화 모드 활성화")
     
     def calculate_target_weights(
         self, 
@@ -298,6 +333,235 @@ class PortfolioManager:
                 logger.debug(f"{asset}: 리밸런싱 가능 ({amount:,.0f} KRW)")
         
         return validation_results
+    
+    def get_optimal_portfolio_weights(self, force_optimization: bool = False) -> Dict[str, float]:
+        """
+        최적 포트폴리오 비중 조회
+        
+        동적 최적화가 활성화된 경우 최적화된 비중 반환,
+        그렇지 않으면 기본 자산 배분 비중 반환
+        
+        Args:
+            force_optimization: 강제 최적화 실행 여부
+            
+        Returns:
+            자산별 최적 비중 딕셔너리
+        """
+        try:
+            if not self.use_dynamic_optimization or not self.dynamic_optimizer:
+                # 동적 최적화 비활성화 시 기본 비중 사용
+                return self.asset_allocation.get_crypto_weights()
+            
+            # 캐시 확인 (30분 이내면 재사용)
+            if (not force_optimization and 
+                self.optimization_cache and 
+                self.last_optimization_time and
+                datetime.now() - self.last_optimization_time < timedelta(minutes=30)):
+                
+                logger.info("최적화 캐시 사용 (30분 이내)")
+                return self.optimization_cache.weights
+            
+            # 새로운 최적화 실행
+            logger.info("포트폴리오 최적화 실행")
+            optimal_portfolio = self.dynamic_optimizer.generate_optimal_portfolio()
+            
+            if optimal_portfolio and optimal_portfolio.weights:
+                self.optimization_cache = optimal_portfolio
+                self.last_optimization_time = datetime.now()
+                
+                logger.info("최적화 완료:")
+                for asset, weight in optimal_portfolio.weights.items():
+                    logger.info(f"  {asset}: {weight:.1%}")
+                logger.info(f"예상 수익률: {optimal_portfolio.expected_return:.1%}, "
+                          f"리스크: {optimal_portfolio.expected_risk:.1%}")
+                
+                return optimal_portfolio.weights
+            else:
+                logger.warning("최적화 실패 - 기본 비중 사용")
+                return self.asset_allocation.get_crypto_weights()
+                
+        except Exception as e:
+            logger.error(f"포트폴리오 최적화 실패: {e}")
+            return self.asset_allocation.get_crypto_weights()
+    
+    def should_rebalance_portfolio(
+        self, 
+        current_portfolio: Dict,
+        rebalance_threshold: float = 0.05
+    ) -> Tuple[bool, Dict]:
+        """
+        포트폴리오 리밸런싱 필요 여부 판단
+        
+        Args:
+            current_portfolio: 현재 포트폴리오 정보
+            rebalance_threshold: 리밸런싱 임계값 (5% 기본)
+            
+        Returns:
+            (리밸런싱 필요 여부, 편차 정보)
+        """
+        try:
+            current_weights = self.get_current_weights(current_portfolio)
+            optimal_weights = self.get_optimal_portfolio_weights()
+            
+            # 현재 비중과 최적 비중 비교
+            deviations = {}
+            max_deviation = 0
+            total_deviation = 0
+            
+            # 모든 자산에 대해 편차 계산
+            all_assets = set(list(current_weights.keys()) + list(optimal_weights.keys()))
+            
+            for asset in all_assets:
+                if asset == "KRW":  # KRW는 별도 처리
+                    continue
+                    
+                current_weight = current_weights.get(asset, 0)
+                optimal_weight = optimal_weights.get(asset, 0)
+                deviation = abs(current_weight - optimal_weight)
+                
+                deviations[asset] = {
+                    "current_weight": current_weight,
+                    "optimal_weight": optimal_weight,
+                    "deviation": deviation
+                }
+                
+                max_deviation = max(max_deviation, deviation)
+                total_deviation += deviation
+            
+            # 리밸런싱 필요 여부 판단
+            needs_rebalancing = max_deviation > rebalance_threshold
+            
+            rebalance_info = {
+                "needs_rebalancing": needs_rebalancing,
+                "max_deviation": max_deviation,
+                "total_deviation": total_deviation,
+                "threshold": rebalance_threshold,
+                "deviations": deviations,
+                "recommendation": "리밸런싱 필요" if needs_rebalancing else "리밸런싱 불필요"
+            }
+            
+            logger.info(f"리밸런싱 검토: 최대 편차 {max_deviation:.1%} "
+                       f"(임계값: {rebalance_threshold:.1%}) "
+                       f"-> {rebalance_info['recommendation']}")
+            
+            return needs_rebalancing, rebalance_info
+            
+        except Exception as e:
+            logger.error(f"리밸런싱 판단 실패: {e}")
+            return False, {"error": str(e)}
+    
+    def calculate_dynamic_target_weights(
+        self, 
+        crypto_allocation: float, 
+        krw_allocation: float,
+        use_optimization: bool = True
+    ) -> Dict[str, float]:
+        """
+        동적 최적화를 고려한 목표 비중 계산
+        
+        Args:
+            crypto_allocation: 암호화폐 전체 비중
+            krw_allocation: 원화 비중
+            use_optimization: 동적 최적화 사용 여부
+            
+        Returns:
+            자산별 목표 비중 딕셔너리
+        """
+        try:
+            if abs(crypto_allocation + krw_allocation - 1.0) > 0.001:
+                raise ValueError("암호화폐와 원화 비중의 합이 100%가 아닙니다.")
+            
+            target_weights = {"KRW": krw_allocation}
+            
+            # 동적 최적화 사용 시 최적화된 비중 적용
+            if use_optimization and self.use_dynamic_optimization:
+                optimal_weights = self.get_optimal_portfolio_weights()
+                
+                # 암호화폐 전체 비중을 최적화된 비중에 따라 분배
+                for asset, weight in optimal_weights.items():
+                    target_weights[asset] = crypto_allocation * weight
+                    
+                logger.info(f"동적 최적화 목표 비중 적용: crypto {crypto_allocation*100}%")
+            else:
+                # 기본 자산 배분 사용
+                crypto_weights = self.asset_allocation.get_crypto_weights()
+                for asset, weight in crypto_weights.items():
+                    target_weights[asset] = crypto_allocation * weight
+                    
+                logger.info(f"기본 목표 비중 적용: crypto {crypto_allocation*100}%")
+            
+            logger.debug(f"최종 목표 비중: {target_weights}")
+            return target_weights
+            
+        except Exception as e:
+            logger.error(f"동적 목표 비중 계산 실패: {e}")
+            # 오류 시 기본 방식으로 폴백
+            return self.calculate_target_weights(crypto_allocation, krw_allocation)
+    
+    def get_portfolio_optimization_status(self) -> Dict:
+        """
+        포트폴리오 최적화 상태 정보 조회
+        
+        Returns:
+            최적화 상태 정보 딕셔너리
+        """
+        try:
+            status = {
+                "dynamic_optimization_enabled": self.use_dynamic_optimization,
+                "optimizer_available": self.dynamic_optimizer is not None,
+                "last_optimization_time": self.last_optimization_time,
+                "cache_available": self.optimization_cache is not None,
+                "time_since_last_optimization": None
+            }
+            
+            if self.last_optimization_time:
+                time_diff = datetime.now() - self.last_optimization_time
+                status["time_since_last_optimization"] = {
+                    "minutes": int(time_diff.total_seconds() / 60),
+                    "is_fresh": time_diff < timedelta(minutes=30)
+                }
+            
+            if self.optimization_cache:
+                status["cached_portfolio"] = {
+                    "weights": self.optimization_cache.weights,
+                    "risk_level": self.optimization_cache.risk_level,
+                    "expected_return": self.optimization_cache.expected_return,
+                    "expected_risk": self.optimization_cache.expected_risk,
+                    "sharpe_ratio": self.optimization_cache.sharpe_ratio
+                }
+            
+            return status
+            
+        except Exception as e:
+            logger.error(f"최적화 상태 조회 실패: {e}")
+            return {"error": str(e)}
+    
+    def force_portfolio_optimization(self) -> PortfolioWeights:
+        """
+        포트폴리오 강제 최적화 실행
+        
+        Returns:
+            최적화된 포트폴리오 비중
+        """
+        try:
+            if not self.use_dynamic_optimization or not self.dynamic_optimizer:
+                raise ValueError("동적 포트폴리오 최적화가 활성화되지 않았습니다.")
+            
+            logger.info("포트폴리오 강제 최적화 실행")
+            optimal_portfolio = self.dynamic_optimizer.generate_optimal_portfolio()
+            
+            if optimal_portfolio:
+                self.optimization_cache = optimal_portfolio
+                self.last_optimization_time = datetime.now()
+                
+                logger.info("강제 최적화 완료")
+                return optimal_portfolio
+            else:
+                raise ValueError("최적화 실행 실패")
+                
+        except Exception as e:
+            logger.error(f"강제 최적화 실패: {e}")
+            raise
     
     def get_portfolio_metrics(self, current_portfolio: Dict) -> Dict:
         """

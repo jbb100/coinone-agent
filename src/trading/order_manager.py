@@ -120,14 +120,19 @@ class OrderManager:
             Order 객체 또는 None (실패시)
         """
         try:
-            logger.info(f"시장가 주문 제출: {side} {amount} {currency}")
+            # 로그에 amount 타입을 명확히 표시
+            amount_type = "KRW" if side.lower() == "buy" else currency
+            logger.info(f"시장가 주문 제출: {side} {amount:,.8f} {amount_type}")
             
             # 코인원 API 호출
+            # TWAP에서 매수는 KRW 금액, 매도는 코인 수량으로 전달됨
+            amount_in_krw = (side.lower() == "buy")  # 매수는 True, 매도는 False
             response = self.coinone_client.place_order(
                 currency=currency,
                 side=side,
                 amount=amount,
-                price=None  # 시장가
+                price=None,  # 시장가
+                amount_in_krw=amount_in_krw
             )
             
             if response.get("success", False):
@@ -148,7 +153,9 @@ class OrderManager:
                 return order
             else:
                 error_msg = response.get('error_msg', 'Unknown error')
+                error_code = response.get('error_code', 'unknown')
                 logger.error(f"주문 제출 실패: {error_msg} - {response}")
+                
                 # 상세 오류를 포함하여 반환하도록 수정
                 failed_order = Order(
                     order_id=f"failed_{currency}_{int(time.time())}",
@@ -157,7 +164,11 @@ class OrderManager:
                     order_type="market",
                     amount=amount
                 )
-                failed_order.update_status(OrderStatus.FAILED, error_message=error_msg)
+                failed_order.update_status(OrderStatus.FAILED, error_message=f"[{error_code}] {error_msg}")
+                
+                # 실패한 주문도 response 정보 포함해서 반환 (동적 실행 엔진에서 활용 가능)
+                failed_order.error_code = error_code
+                failed_order.error_response = response
                 return failed_order
                 
         except Exception as e:
@@ -184,13 +195,18 @@ class OrderManager:
             Order 객체 또는 None (실패시)
         """
         try:
-            logger.info(f"지정가 주문 제출: {side} {amount} {currency} @ {price}")
+            # 로그에 amount 타입을 명확히 표시  
+            amount_type = "KRW" if side.lower() == "buy" else currency
+            logger.info(f"지정가 주문 제출: {side} {amount:,.8f} {amount_type} @ {price}")
             
+            # 지정가 주문도 매수/매도에 따라 amount 타입 구분
+            amount_in_krw = (side.lower() == "buy")  # 매수는 True, 매도는 False
             response = self.coinone_client.place_order(
                 currency=currency,
                 side=side,
                 amount=amount,
-                price=price
+                price=price,
+                amount_in_krw=amount_in_krw
             )
             
             if response.get("result") == "success":

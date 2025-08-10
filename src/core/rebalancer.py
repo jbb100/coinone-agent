@@ -12,6 +12,12 @@ from ..trading.coinone_client import CoinoneClient
 from ..trading.order_manager import OrderManager
 from .portfolio_manager import PortfolioManager
 from .market_season_filter import MarketSeasonFilter, MarketSeason
+from .smart_execution_engine import SmartExecutionEngine, SmartOrderParams, ExecutionStrategy, MarketCondition
+from ..utils.constants import (
+    REBALANCE_THRESHOLD, MAX_SLIPPAGE, ORDER_TIMEOUT_SECONDS,
+    SAFETY_MARGIN, MA_CALCULATION_FALLBACK_RATIO, MARKET_ANALYSIS_MAX_AGE_DAYS
+)
+from ..utils.market_data_provider import MarketDataProvider
 
 
 class RebalanceResult:
@@ -54,7 +60,13 @@ class Rebalancer:
         portfolio_manager: PortfolioManager,
         market_season_filter: MarketSeasonFilter,
         db_manager: "DatabaseManager",
-        order_manager: Optional[OrderManager] = None
+        order_manager: Optional[OrderManager] = None,
+        # 고급 분석 시스템들 (선택적)
+        multi_timeframe_analyzer=None,
+        onchain_analyzer=None,
+        macro_analyzer=None,
+        bias_prevention=None,
+        scenario_response=None
     ):
         """
         Args:
@@ -63,17 +75,34 @@ class Rebalancer:
             market_season_filter: 시장 계절 필터
             db_manager: 데이터베이스 관리자
             order_manager: 주문 관리자
+            multi_timeframe_analyzer: 멀티 타임프레임 분석기
+            onchain_analyzer: 온체인 데이터 분석기
+            macro_analyzer: 매크로 경제 분석기
+            bias_prevention: 심리적 편향 방지 시스템
+            scenario_response: 시나리오 대응 시스템
         """
         self.coinone_client = coinone_client
         self.portfolio_manager = portfolio_manager
         self.market_season_filter = market_season_filter
         self.db_manager = db_manager
         self.order_manager = order_manager or OrderManager(coinone_client)
+        self.market_data_provider = MarketDataProvider(db_manager)
+        
+        # 스마트 실행 엔진 초기화
+        self.smart_execution_engine = SmartExecutionEngine(
+            coinone_client=coinone_client,
+            order_manager=self.order_manager,
+            multi_timeframe_analyzer=multi_timeframe_analyzer,
+            onchain_analyzer=onchain_analyzer,
+            macro_analyzer=macro_analyzer,
+            bias_prevention=bias_prevention,
+            scenario_response=scenario_response
+        )
         
         # 리밸런싱 설정
-        self.min_rebalance_threshold = 0.01  # 1%
-        self.max_slippage = 0.005  # 0.5%
-        self.order_timeout = 300  # 5분
+        self.min_rebalance_threshold = REBALANCE_THRESHOLD
+        self.max_slippage = MAX_SLIPPAGE
+        self.order_timeout = ORDER_TIMEOUT_SECONDS
         
         logger.info("Rebalancer 초기화 완료")
     
@@ -126,9 +155,10 @@ class Rebalancer:
             allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
             logger.info(f"시장 계절별 배분: 암호화폐 {allocation_weights['crypto']:.1%}, KRW {allocation_weights['krw']:.1%}")
             
-            target_weights = self.portfolio_manager.calculate_target_weights(
+            target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
                 allocation_weights["crypto"],
-                allocation_weights["krw"]
+                allocation_weights["krw"],
+                use_optimization=True
             )
             
             logger.info(f"=== 목표 자산 비중 ===")
@@ -231,9 +261,10 @@ class Rebalancer:
             
             # 3. 목표 자산 배분 계산
             allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
-            target_weights = self.portfolio_manager.calculate_target_weights(
+            target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
                 allocation_weights["crypto"],
-                allocation_weights["krw"]
+                allocation_weights["krw"],
+                use_optimization=True
             )
             
             # 4. 리밸런싱 필요 금액 계산
@@ -294,7 +325,7 @@ class Rebalancer:
         validation_results: Dict[str, bool]
     ) -> Dict[str, List]:
         """
-        리밸런싱 주문 실행
+        🚀 스마트 리밸런싱 주문 실행 (개선된 버전)
         
         Args:
             rebalance_info: 리밸런싱 정보
@@ -306,294 +337,118 @@ class Rebalancer:
         executed_orders = []
         failed_orders = []
         
-        # 우선순위 순으로 정렬
+        logger.info("🎯 스마트 리밸런싱 주문 실행 시작")
+        
+        # 1. 시장 상황 분석
+        market_condition = self._analyze_current_market_condition()
+        market_signals = self._collect_market_signals()
+        
+        # 2. 우선순위 순으로 정렬
         rebalance_orders = rebalance_info.get("rebalance_orders", {})
         sorted_orders = sorted(
             rebalance_orders.items(), 
             key=lambda x: x[1]["priority"]
         )
         
-        # KRW 비율이 심각하게 낮은지 확인
+        # 3. KRW 비율 확인 및 매도 우선 실행 결정
         current_portfolio = self.coinone_client.get_portfolio_value()
         total_value = current_portfolio.get("total_krw", 0)
-        krw_balance = current_portfolio.get("KRW", {}).get("amount_krw", 0)
+        krw_balance = current_portfolio.get("assets", {}).get("KRW", {}).get("value_krw", 0)
         krw_ratio = krw_balance / total_value if total_value > 0 else 0
         
         # KRW 비율이 1% 미만이면 매도 주문 우선 실행
         if krw_ratio < 0.01:
-            logger.warning(f"KRW 비율이 심각하게 낮음: {krw_ratio:.1%}")
-            # 매도 주문을 먼저 처리하도록 재정렬
+            logger.warning(f"🔴 KRW 비율 위험 수준: {krw_ratio:.1%} - 매도 주문 우선 실행")
             sorted_orders = sorted(
                 sorted_orders,
                 key=lambda x: 0 if x[1]["action"] == "sell" else 1
             )
         
+        # 4. 각 자산별 스마트 주문 실행
         for asset, order_info in sorted_orders:
             if not validation_results.get(asset, False):
-                logger.warning(f"{asset}: 검증 실패로 건너뜀")
-                continue
-            
-            try:
-                amount = abs(order_info["amount_diff_krw"])
-                side = order_info["action"]
-                
-                # 매도 주문 실행
-                if side == "sell":
-                    logger.info(f"{asset} 매도 주문 시작: {amount:,.0f} KRW")
-                    order_result = self.order_manager.place_market_order(
-                        asset, "sell", amount
-                    )
-                    if order_result.get("success"):
-                        executed_orders.append(order_result)
-                        logger.info(f"{asset} 매도 주문 성공")
-                    else:
-                        failed_orders.append({
-                            "asset": asset,
-                            "side": "sell",
-                            "amount": amount,
-                            "error": order_result.get("error")
-                        })
-                        logger.error(f"{asset} 매도 주문 실패: {order_result.get('error')}")
-                
-                # 매수 주문 실행 (KRW 잔고 확인 후)
-                elif side == "buy":
-                    # KRW 잔고 재확인
-                    current_krw = self.coinone_client.get_balances().get("KRW", 0)
-                    if current_krw < amount:
-                        logger.warning(f"{asset} 매수 주문 연기 - KRW 잔고 부족: {current_krw:,.0f} < {amount:,.0f}")
-                        failed_orders.append({
-                            "asset": asset,
-                            "side": "buy",
-                            "amount": amount,
-                            "error": "insufficient_krw",
-                            "retry_needed": True
-                        })
-                        continue
-                    
-                    logger.info(f"{asset} 매수 주문 시작: {amount:,.0f} KRW")
-                    order_result = self.order_manager.place_market_order(
-                        asset, "buy", amount
-                    )
-                    if order_result.get("success"):
-                        executed_orders.append(order_result)
-                        logger.info(f"{asset} 매수 주문 성공")
-                    else:
-                        failed_orders.append({
-                            "asset": asset,
-                            "side": "buy",
-                            "amount": amount,
-                            "error": order_result.get("error")
-                        })
-                        logger.error(f"{asset} 매수 주문 실패: {order_result.get('error')}")
-                
-            except Exception as e:
-                logger.error(f"{asset} 주문 처리 중 오류 발생: {e}")
+                logger.warning(f"⚠️ {asset}: 검증 실패로 건너뜀")
                 failed_orders.append({
                     "asset": asset,
                     "side": order_info["action"],
-                    "amount": amount,
+                    "amount": abs(order_info["amount_diff_krw"]),
+                    "error": "validation_failed"
+                })
+                continue
+            
+            try:
+                amount_krw = abs(order_info["amount_diff_krw"])
+                side = order_info["action"]
+                
+                logger.info(f"🎯 {asset} 스마트 주문 준비: {side} {amount_krw:,.0f} KRW")
+                
+                # 5. 스마트 주문 파라미터 생성
+                smart_params = self._create_smart_order_params(
+                    asset=asset,
+                    side=side,
+                    amount_krw=amount_krw,
+                    market_condition=market_condition,
+                    market_signals=market_signals,
+                    order_priority=order_info.get("priority", 5)
+                )
+                
+                # 6. 스마트 실행 엔진을 통한 주문 실행
+                execution_result = self.smart_execution_engine.execute_smart_order(smart_params)
+                
+                if execution_result.success:
+                    executed_orders.append({
+                        "asset": asset,
+                        "side": side,
+                        "requested_amount_krw": amount_krw,
+                        "executed_amount_krw": execution_result.executed_amount_krw,
+                        "executed_quantity": execution_result.executed_quantity,
+                        "average_price": execution_result.average_price,
+                        "slippage": execution_result.slippage,
+                        "fees": execution_result.fees,
+                        "order_ids": execution_result.order_ids,
+                        "execution_time": execution_result.execution_time
+                    })
+                    
+                    logger.info(f"✅ {asset} 주문 성공: {execution_result.executed_amount_krw:,.0f} KRW "
+                              f"(슬리피지: {execution_result.slippage:.3%})")
+                else:
+                    failed_orders.append({
+                        "asset": asset,
+                        "side": side,
+                        "amount": amount_krw,
+                        "error": execution_result.error_message
+                    })
+                    
+                    logger.error(f"❌ {asset} 주문 실패: {execution_result.error_message}")
+                
+            except Exception as e:
+                logger.error(f"💥 {asset} 주문 처리 중 예외: {e}")
+                failed_orders.append({
+                    "asset": asset,
+                    "side": order_info["action"],
+                    "amount": abs(order_info["amount_diff_krw"]),
                     "error": str(e)
                 })
         
+        # 7. 실행 결과 요약
+        success_count = len(executed_orders)
+        failure_count = len(failed_orders)
+        total_executed_amount = sum(order.get("executed_amount_krw", 0) for order in executed_orders)
+        average_slippage = sum(order.get("slippage", 0) for order in executed_orders) / success_count if success_count > 0 else 0
+        
+        logger.info(f"🎉 스마트 리밸런싱 완료: 성공 {success_count}개, 실패 {failure_count}개")
+        logger.info(f"📊 총 실행금액: {total_executed_amount:,.0f} KRW, 평균 슬리피지: {average_slippage:.3%}")
+        
         return {
             "executed": executed_orders,
-            "failed": failed_orders
+            "failed": failed_orders,
+            "summary": {
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "total_executed_amount_krw": total_executed_amount,
+                "average_slippage": average_slippage
+            }
         }
-    
-    def _execute_sell_order(self, asset: str, order_info: Dict) -> Dict:
-        """
-        매도 주문 실행
-        
-        Args:
-            asset: 자산명
-            order_info: 주문 정보
-            
-        Returns:
-            주문 결과
-        """
-        try:
-            # 현재 잔고 확인
-            balances = self.coinone_client.get_balances()
-            current_balance = balances.get(asset, 0)
-            
-            if current_balance <= 0:
-                return {
-                    "asset": asset,
-                    "action": "sell", 
-                    "error": "잔고 부족",
-                    "success": False
-                }
-            
-            # 매도할 수량 계산 - 안전한 현재가 조회 사용
-            try:
-                current_price = self.coinone_client.get_latest_price(asset)
-                logger.info(f"{asset} 매도 현재가: {current_price:,.0f} KRW")
-                
-                if current_price <= 0:
-                    raise ValueError(f"현재가 조회 실패: {current_price}")
-                    
-            except Exception as price_error:
-                logger.error(f"{asset} 현재가 조회 실패: {price_error}")
-                # 폴백: ticker API 사용하되 더 안전하게
-                try:
-                    ticker = self.coinone_client.get_ticker(asset)
-                    logger.debug(f"{asset} ticker 응답 타입: {type(ticker)}, 내용: {ticker}")
-                    
-                    # ticker가 딕셔너리가 아닌 경우 처리
-                    if not isinstance(ticker, dict):
-                        logger.error(f"{asset} ticker 응답이 딕셔너리가 아님: {type(ticker)}")
-                        return {
-                            "asset": asset,
-                            "action": "sell",
-                            "error": f"ticker 응답 형식 오류: {type(ticker)}",
-                            "success": False
-                        }
-                    
-                    ticker_data = ticker.get("data", {})
-                    if not isinstance(ticker_data, dict):
-                        logger.error(f"{asset} ticker data가 딕셔너리가 아님: {type(ticker_data)}")
-                        return {
-                            "asset": asset,
-                            "action": "sell",
-                            "error": f"ticker data 형식 오류: {type(ticker_data)}",
-                            "success": False
-                        }
-                    
-                    current_price = (
-                        float(ticker_data.get("last", 0)) or
-                        float(ticker_data.get("close_24h", 0)) or
-                        float(ticker_data.get("close", 0))
-                    )
-                    
-                    if current_price <= 0:
-                        return {
-                            "asset": asset,
-                            "action": "sell",
-                            "error": f"현재가 조회 실패: ticker_data={ticker_data}",
-                            "success": False
-                        }
-                        
-                    logger.warning(f"{asset} 폴백 가격 사용: {current_price:,.0f} KRW")
-                    
-                except Exception as ticker_error:
-                    logger.error(f"{asset} ticker 조회도 실패: {ticker_error}")
-                    return {
-                        "asset": asset,
-                        "action": "sell",
-                        "error": f"모든 가격 조회 방법 실패: {ticker_error}",
-                        "success": False
-                    }
-            
-            target_sell_amount_krw = abs(order_info["amount_diff_krw"])
-            
-            # 안전한 매도 수량 계산 (추가 검증)
-            calculated_quantity = target_sell_amount_krw / current_price
-            safe_balance = current_balance * 0.99  # 수수료 고려하여 99%만 매도
-            
-            sell_quantity = min(calculated_quantity, safe_balance)
-            
-            # 최종 검증: 매도 수량이 잔고보다 크면 오류
-            if sell_quantity > current_balance:
-                logger.error(f"{asset} 매도 수량 오류: 계산된 수량({sell_quantity:.6f}) > 잔고({current_balance:.6f})")
-                return {
-                    "asset": asset,
-                    "action": "sell",
-                    "error": f"매도 수량 계산 오류: {sell_quantity:.6f} > {current_balance:.6f}",
-                    "success": False
-                }
-            
-            # 최소 거래 단위 확인 (너무 작은 수량 방지)
-            estimated_krw = sell_quantity * current_price
-            if estimated_krw < 1000:  # 1천원 미만 거래 방지
-                logger.warning(f"{asset} 매도 금액이 너무 작음: {estimated_krw:,.0f} KRW")
-                return {
-                    "asset": asset,
-                    "action": "sell",
-                    "error": f"매도 금액이 너무 작음: {estimated_krw:,.0f} KRW",
-                    "success": False
-                }
-            
-            logger.info(f"{asset} 매도 계산: {target_sell_amount_krw:,.0f} KRW ÷ {current_price:,.0f} = {calculated_quantity:.6f} 개")
-            logger.info(f"{asset} 실제 매도량: {sell_quantity:.6f} 개 (잔고: {current_balance:.6f} 개)")
-            
-            # 시장가 매도 주문 실행 (안전한 방법 사용)
-            order_result = self.coinone_client.place_safe_order(
-                currency=asset,
-                side="sell",
-                amount=sell_quantity,
-                max_retries=2
-            )
-            
-            return {
-                "asset": asset,
-                "action": "sell",
-                "quantity": sell_quantity,
-                "estimated_krw": sell_quantity * current_price,
-                "order_id": order_result.get("order_id"),
-                "success": order_result.get("success", False)
-            }
-            
-        except Exception as e:
-            logger.error(f"{asset} 매도 주문 실행 중 예외: {e}")
-            return {
-                "asset": asset,
-                "action": "sell",
-                "error": str(e),
-                "success": False
-            }
-    
-    def _execute_buy_order(self, asset: str, order_info: Dict) -> Dict:
-        """
-        매수 주문 실행
-        
-        Args:
-            asset: 자산명
-            order_info: 주문 정보
-            
-        Returns:
-            주문 결과
-        """
-        try:
-            # KRW 잔고 확인
-            balances = self.coinone_client.get_balances()
-            krw_balance = balances.get("KRW", 0)
-            
-            target_buy_amount_krw = order_info["amount_diff_krw"]
-            
-            if krw_balance < target_buy_amount_krw:
-                return {
-                    "asset": asset,
-                    "action": "buy",
-                    "error": f"KRW 잔고 부족: {krw_balance:,.0f} < {target_buy_amount_krw:,.0f}",
-                    "success": False
-                }
-            
-            # 시장가 매수 주문 실행 (KRW 금액 기준, 안전한 방법 사용)
-            buy_amount_krw = min(target_buy_amount_krw, krw_balance * 0.99)  # 수수료 고려
-            
-            order_result = self.coinone_client.place_safe_order(
-                currency=asset,
-                side="buy", 
-                amount=buy_amount_krw,  # KRW 금액
-                amount_in_krw=True,  # KRW 금액으로 처리
-                max_retries=2
-            )
-            
-            return {
-                "asset": asset,
-                "action": "buy",
-                "amount_krw": buy_amount_krw,
-                "order_id": order_result.get("order_id"),
-                "success": order_result.get("success", False)
-            }
-            
-        except Exception as e:
-            return {
-                "asset": asset,
-                "action": "buy",
-                "error": str(e),
-                "success": False
-            }
     
     def _get_current_market_season(self) -> MarketSeason:
         """
@@ -619,7 +474,7 @@ class Rebalancer:
                         
                         days_old = (datetime.now() - analysis_date.replace(tzinfo=None)).days
                         
-                        if days_old <= 7:  # 7일 이내 데이터
+                        if days_old <= MARKET_ANALYSIS_MAX_AGE_DAYS:  # 설정된 일수 이내 데이터
                             season_str = latest_analysis.get("market_season", "neutral")
                             season_map = {
                                 "risk_on": MarketSeason.RISK_ON,
@@ -662,13 +517,25 @@ class Rebalancer:
             
             logger.info(f"BTC 현재가: {current_price:,.0f} KRW")
             
-            # 실제 구현에서는 데이터베이스나 외부 API에서 200주 데이터를 가져와야 함
-            # 현재는 임시로 200주 이동평균을 현재가의 90%로 가정
-            # TODO: 실제 200주 가격 데이터 수집 및 계산 로직 구현 필요
-            ma_200w = current_price * 0.9  # 임시값 (실제로는 DB에서 계산된 값 사용)
-            
-            logger.warning(f"⚠️  임시 200주 이동평균 사용: {ma_200w:,.0f} KRW")
-            logger.warning("💡 정확한 분석을 위해 주간 분석 스크립트를 먼저 실행하세요: python scripts/weekly_check.py")
+            # 실제 200주 이동평균 계산
+            try:
+                ma_200w_usd, data_source = self.market_data_provider.get_btc_200w_ma()
+                
+                # USD to KRW 환산 (대략적인 환율 적용, 실제로는 환율 API 사용 권장)
+                usd_to_krw = current_price / self._get_btc_price_usd()
+                ma_200w = ma_200w_usd * usd_to_krw
+                
+                if data_source == "yfinance":
+                    logger.info(f"✅ 실제 200주 이동평균 사용: {ma_200w:,.0f} KRW (소스: {data_source})")
+                elif data_source == "cache":
+                    logger.info(f"📋 캐시된 200주 이동평균 사용: {ma_200w:,.0f} KRW")
+                else:
+                    logger.warning(f"⚠️ Fallback 200주 이동평균 사용: {ma_200w:,.0f} KRW (소스: {data_source})")
+                    
+            except Exception as e:
+                logger.error(f"200주 이동평균 계산 실패, 임시값 사용: {e}")
+                ma_200w = current_price * MA_CALCULATION_FALLBACK_RATIO
+                logger.warning(f"🚨 비상 임시값 사용: {ma_200w:,.0f} KRW")
             
             # market_season_filter의 올바른 로직 사용
             market_season, analysis_info = self.market_season_filter.determine_market_season(
@@ -687,6 +554,27 @@ class Rebalancer:
         except Exception as e:
             logger.error(f"시장 계절 판단 실패: {e}")
             return MarketSeason.NEUTRAL  # 기본값 반환
+    
+    def _get_btc_price_usd(self) -> float:
+        """
+        BTC USD 가격 조회 (환율 계산용)
+        
+        Returns:
+            BTC USD 가격
+        """
+        try:
+            import yfinance as yf
+            btc = yf.Ticker("BTC-USD")
+            hist = btc.history(period="1d")
+            if not hist.empty:
+                return float(hist['Close'].iloc[-1])
+            
+            # Fallback
+            return 50000.0  # 대략적인 평균 BTC 가격
+            
+        except Exception as e:
+            logger.warning(f"BTC USD 가격 조회 실패: {e}")
+            return 50000.0  # Fallback
     
     def check_rebalance_needed(
         self, 
@@ -742,6 +630,230 @@ class Rebalancer:
             schedule.append(first_monday.replace(hour=9, minute=0, second=0))
         
         return schedule
+    
+    def _analyze_current_market_condition(self) -> MarketCondition:
+        """현재 시장 상황 분석"""
+        try:
+            # 시장 계절 기반으로 시장 상황 판단
+            current_season = self._get_current_market_season()
+            
+            # 추가적인 변동성 및 트렌드 분석 가능
+            # 현재는 시장 계절을 기준으로 간단히 매핑
+            if current_season == MarketSeason.RISK_ON:
+                return MarketCondition.BULLISH
+            elif current_season == MarketSeason.RISK_OFF:
+                return MarketCondition.BEARISH
+            else:
+                return MarketCondition.NEUTRAL
+                
+        except Exception as e:
+            logger.error(f"시장 상황 분석 실패: {e}")
+            return MarketCondition.NEUTRAL
+    
+    def check_portfolio_optimization_status(self) -> Dict:
+        """
+        포트폴리오 최적화 상태 확인
+        
+        Returns:
+            최적화 상태 정보
+        """
+        try:
+            return self.portfolio_manager.get_portfolio_optimization_status()
+        except Exception as e:
+            logger.error(f"포트폴리오 최적화 상태 확인 실패: {e}")
+            return {"error": str(e)}
+    
+    def force_portfolio_optimization(self) -> Dict:
+        """
+        포트폴리오 강제 최적화 실행
+        
+        Returns:
+            최적화 결과
+        """
+        try:
+            logger.info("포트폴리오 강제 최적화 실행 요청")
+            optimal_portfolio = self.portfolio_manager.force_portfolio_optimization()
+            
+            return {
+                "success": True,
+                "optimal_weights": optimal_portfolio.weights,
+                "risk_level": optimal_portfolio.risk_level,
+                "expected_return": optimal_portfolio.expected_return,
+                "expected_risk": optimal_portfolio.expected_risk,
+                "sharpe_ratio": optimal_portfolio.sharpe_ratio,
+                "diversification_score": optimal_portfolio.diversification_score,
+                "timestamp": datetime.now()
+            }
+            
+        except Exception as e:
+            logger.error(f"포트폴리오 강제 최적화 실패: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def should_rebalance_with_optimization(self) -> Dict:
+        """
+        동적 최적화를 고려한 리밸런싱 필요 여부 확인
+        
+        Returns:
+            리밸런싱 판단 결과
+        """
+        try:
+            logger.info("동적 최적화 기반 리밸런싱 필요 여부 확인")
+            
+            # 현재 포트폴리오 조회
+            current_portfolio = self.coinone_client.get_portfolio_value()
+            
+            # 리밸런싱 필요 여부 확인
+            needs_rebalancing, rebalance_info = self.portfolio_manager.should_rebalance_portfolio(
+                current_portfolio, rebalance_threshold=0.05  # 5% 임계값
+            )
+            
+            # 결과 구성
+            result = {
+                "needs_rebalancing": needs_rebalancing,
+                "rebalance_info": rebalance_info,
+                "current_portfolio_value": current_portfolio.get("total_krw", 0),
+                "optimization_status": self.check_portfolio_optimization_status(),
+                "timestamp": datetime.now()
+            }
+            
+            if needs_rebalancing:
+                logger.info(f"🔄 리밸런싱 필요: 최대 편차 {rebalance_info.get('max_deviation', 0):.1%}")
+            else:
+                logger.info("✅ 리밸런싱 불필요: 포트폴리오가 최적화 상태 유지")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"동적 최적화 리밸런싱 판단 실패: {e}")
+            return {"error": str(e)}
+    
+    def _collect_market_signals(self) -> Dict:
+        """시장 신호 수집"""
+        try:
+            signals = {
+                "multi_timeframe": 0.0,
+                "onchain": 0.0,
+                "macro": 0.0,
+                "sentiment": 0.0
+            }
+            
+            # 멀티 타임프레임 신호 (있는 경우)
+            if hasattr(self.smart_execution_engine, 'multi_timeframe_analyzer') and \
+               self.smart_execution_engine.multi_timeframe_analyzer:
+                try:
+                    # 실제로는 분석기의 최신 신호를 가져와야 함
+                    # signals["multi_timeframe"] = self.smart_execution_engine.multi_timeframe_analyzer.get_latest_signal()
+                    pass
+                except:
+                    pass
+            
+            # 온체인 신호
+            if hasattr(self.smart_execution_engine, 'onchain_analyzer') and \
+               self.smart_execution_engine.onchain_analyzer:
+                try:
+                    # 온체인 분석기의 최신 신호를 가져옴
+                    onchain_result = self.smart_execution_engine.onchain_analyzer.get_latest_signal()
+                    if onchain_result and 'market_signal' in onchain_result:
+                        signals["onchain"] = onchain_result['market_signal']
+                        logger.debug(f"온체인 신호 수집: {signals['onchain']:.3f}")
+                except Exception as e:
+                    logger.warning(f"온체인 신호 수집 실패: {e}")
+                    pass
+            
+            # 매크로 경제 신호
+            if hasattr(self.smart_execution_engine, 'macro_analyzer') and \
+               self.smart_execution_engine.macro_analyzer:
+                try:
+                    # 매크로 분석기의 최신 신호를 가져옴
+                    macro_result = self.smart_execution_engine.macro_analyzer.get_latest_signal()
+                    if macro_result and 'market_signal' in macro_result:
+                        signals["macro"] = macro_result['market_signal']
+                        logger.debug(f"매크로 신호 수집: {signals['macro']:.3f}")
+                except Exception as e:
+                    logger.warning(f"매크로 신호 수집 실패: {e}")
+                    pass
+            
+            return signals
+            
+        except Exception as e:
+            logger.error(f"시장 신호 수집 실패: {e}")
+            return {
+                "multi_timeframe": 0.0,
+                "onchain": 0.0,
+                "macro": 0.0,
+                "sentiment": 0.0
+            }
+    
+    def _create_smart_order_params(
+        self,
+        asset: str,
+        side: str,
+        amount_krw: float,
+        market_condition: MarketCondition,
+        market_signals: Dict,
+        order_priority: int = 5
+    ) -> SmartOrderParams:
+        """스마트 주문 파라미터 생성"""
+        try:
+            # 기본 전략 결정
+            strategy = self.smart_execution_engine.get_optimal_strategy(
+                asset=asset,
+                side=side,
+                amount_krw=amount_krw,
+                market_signals=market_signals
+            )
+            
+            # 긴급도 계산 (우선순위 기반)
+            urgency_score = max(0.1, min(1.0, (10 - order_priority) / 10))
+            
+            # 신뢰도 계산 (신호 강도 기반)
+            signal_strength = abs(market_signals.get("multi_timeframe", 0)) + \
+                            abs(market_signals.get("onchain", 0)) + \
+                            abs(market_signals.get("macro", 0)) + \
+                            abs(market_signals.get("sentiment", 0))
+            confidence_score = min(1.0, signal_strength / 2.0) if signal_strength > 0 else 0.5
+            
+            # 스마트 주문 파라미터 생성
+            params = SmartOrderParams(
+                asset=asset,
+                side=side,
+                amount_krw=amount_krw,
+                strategy=strategy,
+                market_condition=market_condition,
+                urgency_score=urgency_score,
+                confidence_score=confidence_score,
+                max_slippage=self.max_slippage,
+                timeout_minutes=self.order_timeout // 60,
+                
+                # 시장 신호들
+                multi_timeframe_signal=market_signals.get("multi_timeframe", 0),
+                onchain_signal=market_signals.get("onchain", 0),
+                macro_signal=market_signals.get("macro", 0),
+                sentiment_signal=market_signals.get("sentiment", 0),
+                
+                # 리스크 관리
+                max_position_size=0.15,  # 전체 포트폴리오의 15%로 증가
+                stop_loss=None,
+                take_profit=None
+            )
+            
+            logger.info(f"스마트 주문 파라미터: {asset} {side} - 전략: {strategy.value}, "
+                       f"긴급도: {urgency_score:.2f}, 신뢰도: {confidence_score:.2f}")
+            
+            return params
+            
+        except Exception as e:
+            logger.error(f"스마트 주문 파라미터 생성 실패: {e}")
+            # 기본 파라미터 반환
+            return SmartOrderParams(
+                asset=asset,
+                side=side,
+                amount_krw=amount_krw,
+                strategy=ExecutionStrategy.MARKET,
+                market_condition=MarketCondition.NEUTRAL,
+                urgency_score=0.5,
+                confidence_score=0.5
+            )
 
 
 # 설정 상수
