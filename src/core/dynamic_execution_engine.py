@@ -19,7 +19,7 @@ import uuid
 from ..trading.coinone_client import CoinoneClient
 from ..trading.order_manager import OrderStatus
 from ..utils.database_manager import DatabaseManager
-from ..utils.constants import MIN_ORDER_AMOUNTS_KRW
+from ..utils.constants import MIN_ORDER_AMOUNTS_KRW, COINONE_SAFE_ORDER_LIMIT_KRW
 from .system_coordinator import get_system_coordinator, OperationType
 from .system_integration_helper import with_asset_protection, check_api_rate_limit
 
@@ -275,7 +275,6 @@ class DynamicExecutionEngine:
             
             # 코인원 거래소 제한사항
             COINONE_MAX_ORDER_AMOUNT_KRW = 500_000_000  # 500M KRW - 코인원 최대 주문 금액
-            COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW - 안전한 주문 금액 한도
             MAX_SLICES_PER_ORDER = 24  # 최대 슬라이스 개수
 
             # 암호화폐별 최소 주문 수량 (코인원 기준)
@@ -505,7 +504,6 @@ class DynamicExecutionEngine:
                     pass
                 
                 # 주문 실행 전 최대 주문 금액 검증 및 조정
-                COINONE_SAFE_ORDER_LIMIT_KRW = 200_000_000  # 200M KRW 안전 한도
             
                 
                 if order.slice_amount_krw > COINONE_SAFE_ORDER_LIMIT_KRW:

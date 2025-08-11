@@ -85,9 +85,9 @@ class RateLimitedCoinoneClient:
     def get_portfolio_value(self) -> Dict[str, Any]:
         """포트폴리오 가치 조회"""
         return self.original_client.get_portfolio_value()
-    def place_order(self, order_data: Dict[str, Any]) -> Dict[str, Any]:
+    def place_order(self, *args, **kwargs) -> Dict[str, Any]:
         """주문 실행"""
-        return self.original_client.place_order(order_data)
+        return self.original_client.place_order(*args, **kwargs)
     def get_latest_price(self, currency: str) -> float:
         """최신 가격 조회"""
         return self.original_client.get_latest_price(currency)
