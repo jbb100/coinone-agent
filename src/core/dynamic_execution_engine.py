@@ -716,7 +716,9 @@ class DynamicExecutionEngine:
                     "success": True,
                     "order_id": order_result.get("order_id"),
                     "executed_slices": order.executed_slices,
-                    "remaining_slices": order.slice_count - order.executed_slices
+                    "remaining_slices": order.slice_count - order.executed_slices,
+                    "amount_krw": order.slice_amount_krw,
+                    "remaining_amount": order.remaining_amount_krw
                 }
             else:
                 error_msg = order_result.get('error', 'Unknown error')
@@ -777,7 +779,9 @@ class DynamicExecutionEngine:
                             "order_id": full_order_result.get("order_id"),
                             "executed_slices": order.executed_slices,
                             "remaining_slices": 0,
-                            "full_amount_executed": True
+                            "full_amount_executed": True,
+                            "amount_krw": total_remaining_amount,
+                            "remaining_amount": 0
                         }
                     else:
                         logger.error(f"💥 전체 금액 주문도 실패: {full_order_result.get('error')}")
