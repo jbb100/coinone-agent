@@ -433,9 +433,10 @@ class KairosSystem:
             logger.info(f"주간 시장 분석 실행 {'(DRY RUN)' if dry_run else ''}")
             
             # BTC 가격 데이터 수집 (실제로는 외부 API에서)
+            # 200주 이동평균 계산을 위해 5년치 데이터 수집
             import yfinance as yf
             btc_ticker = yf.Ticker("BTC-USD")
-            price_data = btc_ticker.history(period="3y")
+            price_data = btc_ticker.history(period="5y")
             
             # 시장 분석 실행
             analysis_result = self.market_filter.analyze_weekly(price_data)
@@ -1334,9 +1335,10 @@ def main():
             if kairos.multi_timeframe_analyzer:
                 try:
                     # BTC 가격 데이터 수집 (실제로는 더 정교한 데이터 소스 사용)
+                    # 멀티 타임프레임 분석을 위해 충분한 데이터 수집
                     import yfinance as yf
                     btc_ticker = yf.Ticker("BTC-USD")
-                    price_data = btc_ticker.history(period="2y")
+                    price_data = btc_ticker.history(period="3y")
                     
                     analysis = kairos.multi_timeframe_analyzer.analyze_multi_timeframe(
                         "BTC", price_data["Close"]
