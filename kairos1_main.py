@@ -522,21 +522,56 @@ class KairosSystem:
         try:
             logger.info(f"매수 기회 탐지 시작... (드라이런: {dry_run})")
             
-            # 현재 포트폴리오에 있는 자산들 가져오기
-            portfolio = self.portfolio_manager.get_current_allocations()
-            assets = list(portfolio.keys())
+            # 포트폴리오 설정에서 정의된 자산들만 분석 대상으로 설정
+            core_assets = list(self.config.get("strategy.portfolio.core", {}).keys())
+            satellite_assets = list(self.config.get("strategy.portfolio.satellite", {}).keys())
+            portfolio_assets = core_assets + satellite_assets
             
-            # 추가로 관심 자산들도 포함 (설정에서 가져오기)
-            watch_list = self.config.get("trading.watch_list", [])
-            if watch_list:
-                assets.extend([asset for asset in watch_list if asset not in assets])
+            logger.info(f"설정된 포트폴리오 자산들:")
+            logger.info(f"  Core: {core_assets}")
+            logger.info(f"  Satellite: {satellite_assets}")
+            
+            # 잔고 확인 (로깅 목적)
+            balances = self.coinone_client.get_balances()
+            logger.info(f"현재 잔고가 있는 자산들:")
+            for asset, balance in balances.items():
+                if asset.upper() != "KRW" and balance > 0:
+                    logger.info(f"  {asset.upper()}: {balance:.8f}")
+            
+            # 포트폴리오 자산들을 분석 대상으로 설정 (잔고 유무와 관계없이)
+            assets = portfolio_assets
+            logger.info("=" * 60)
             
             # 매수 기회 탐지
-            opportunities = self.opportunistic_buyer.identify_opportunities(assets)
+            opportunities, no_opportunity_reasons = self.opportunistic_buyer.identify_opportunities(assets)
+            
+            # 각 자산별로 매수 기회 분석 결과 로깅
+            logger.info("📊 자산별 매수 기회 분석 결과:")
+            opportunity_assets = {opp.asset for opp in opportunities}
+            
+            for asset in assets:
+                if asset in opportunity_assets:
+                    # 해당 자산의 매수 기회 정보 찾기
+                    asset_opportunities = [opp for opp in opportunities if opp.asset == asset]
+                    for opp in asset_opportunities:
+                        logger.info(f"✅ {asset}: 매수 기회 발견!")
+                        logger.info(f"   └ 수준: {opp.opportunity_level.value}")
+                        logger.info(f"   └ 현재가: {opp.current_price:,.0f} KRW")
+                        logger.info(f"   └ RSI: {opp.rsi:.1f}")
+                        logger.info(f"   └ 7일 하락률: {opp.price_drop_7d:.1%}")
+                        logger.info(f"   └ 신뢰도: {opp.confidence_score:.2f}")
+                else:
+                    reason = no_opportunity_reasons.get(asset, "알 수 없는 이유")
+                    logger.info(f"❌ {asset}: 매수 기회 없음")
+                    logger.info(f"   └ 이유: {reason}")
+            
+            logger.info("=" * 60)
             
             if not opportunities:
-                logger.info("현재 매수 기회가 없습니다.")
+                logger.info("📝 결론: 현재 전체적으로 매수 기회가 없습니다.")
                 return {"success": True, "opportunities": [], "message": "No opportunities found"}
+            else:
+                logger.info(f"📝 결론: 총 {len(opportunities)}개 자산에서 매수 기회 발견!")
             
             # 매수 기회가 있으면 Slack 알림 발송
             for opportunity in opportunities:
@@ -548,8 +583,7 @@ class KairosSystem:
             execution_result = None
             if opportunities:
                 # 사용 가능한 현금 확인
-                balance = self.coinone_client.get_balance()
-                available_cash = balance.get("krw", {}).get("available", 0)
+                available_cash = balances.get("KRW", 0)
                 
                 logger.info(f"사용 가능한 현금: {available_cash:,.0f} KRW")
                 

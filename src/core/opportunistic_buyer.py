@@ -142,7 +142,7 @@ class OpportunisticBuyer:
             logger.error(f"공포탐욕 지수 조회 실패: {e}")
             return 50.0
     
-    def identify_opportunities(self, assets: List[str]) -> List[BuyOpportunity]:
+    def identify_opportunities(self, assets: List[str]) -> tuple[List[BuyOpportunity], Dict[str, str]]:
         """
         매수 기회 식별
         
@@ -150,9 +150,10 @@ class OpportunisticBuyer:
             assets: 분석할 자산 목록
             
         Returns:
-            매수 기회 목록
+            튜플: (매수 기회 목록, 기회가 없는 자산의 이유)
         """
         opportunities = []
+        no_opportunity_reasons = {}
         
         for asset in assets:
             if asset == "KRW":
@@ -164,6 +165,7 @@ class OpportunisticBuyer:
                 price_data_30d = self.db_manager.get_market_data(asset, days=30)
                 
                 if price_data_7d.empty or price_data_30d.empty:
+                    no_opportunity_reasons[asset] = "가격 데이터 없음"
                     continue
                 
                 current_price = price_data_7d['Close'].iloc[-1]
@@ -209,21 +211,30 @@ class OpportunisticBuyer:
                     )
                     
                     opportunities.append(opportunity)
+                else:
+                    # 매수 기회가 없는 이유 분석
+                    reasons = []
+                    if price_drop_7d > -0.05:  # 7일간 5% 이상 하락하지 않음
+                        reasons.append(f"7일 하락률 부족 ({price_drop_7d:.1%})")
+                    if rsi > 30:  # RSI가 과매도 구간이 아님
+                        reasons.append(f"RSI 과매도 아님 ({rsi:.1f})")
+                    if fear_greed > 25:  # 공포 지수가 충분히 낮지 않음
+                        reasons.append(f"공포지수 높음 ({fear_greed:.0f})")
                     
-                    logger.info(f"📉 매수 기회 발견: {asset}")
-                    logger.info(f"  - 7일 하락률: {price_drop_7d:.1%}")
-                    logger.info(f"  - RSI: {rsi:.1f}")
-                    logger.info(f"  - 기회 수준: {opportunity_level.value}")
-                    logger.info(f"  - 추천 매수 비율: {buy_ratio:.1%}")
+                    if not reasons:
+                        reasons.append("기타 조건 미충족")
+                    
+                    no_opportunity_reasons[asset] = ", ".join(reasons)
                     
             except Exception as e:
                 logger.error(f"{asset} 기회 분석 실패: {e}")
+                no_opportunity_reasons[asset] = f"분석 오류: {str(e)}"
                 continue
         
         # 신뢰도 점수 기준 정렬
         opportunities.sort(key=lambda x: x.confidence_score, reverse=True)
         
-        return opportunities
+        return opportunities, no_opportunity_reasons
     
     def _determine_opportunity_level(
         self, 
