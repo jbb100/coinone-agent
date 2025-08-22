@@ -461,6 +461,11 @@ class KairosSystem:
                 else:
                     logger.info("시장 계절에 변화가 없습니다. 기존 전략을 유지합니다.")
                 
+                # Slack으로 분석 보고서 전송
+                if self.alert_system:
+                    logger.info("주간 분석 보고서를 Slack으로 전송합니다.")
+                    self.alert_system.send_weekly_analysis_report(analysis_result)
+                
                 logger.info("주간 시장 분석 완료")
             
             return analysis_result
@@ -1324,6 +1329,12 @@ def main():
                     print(f"비트코인 사이클: {analysis['cycle_phase']}")
                     print(f"신뢰도: {analysis['confidence']:.1%}")
                     print(f"권장 배분 - 암호화폐: {analysis['recommended_allocation']['crypto']}, KRW: {analysis['recommended_allocation']['krw']}")
+                    
+                    # Slack으로 분석 보고서 전송
+                    if kairos.alert_system:
+                        print("📤 멀티 타임프레임 분석 보고서를 Slack으로 전송합니다...")
+                        kairos.alert_system.send_multi_timeframe_analysis_report(analysis)
+                        print("✅ Slack 보고서 전송 완료")
                 except Exception as e:
                     print(f"❌ 멀티 타임프레임 분석 실패: {e}")
             else:
@@ -1341,6 +1352,18 @@ def main():
                     print(f"금리 환경: {analysis.rate_environment.value}")
                     print(f"암호화폐 우호도: {analysis.crypto_favorability:.3f}")
                     print(f"권장 암호화폐 비중: {analysis.recommended_allocation.get('crypto', 0.5):.1%}")
+                    
+                    # Slack으로 분석 보고서 전송
+                    if kairos.alert_system:
+                        print("📤 매크로 경제 분석 보고서를 Slack으로 전송합니다...")
+                        macro_report_data = {
+                            "indicators": indicators,
+                            "risk_score": analysis.crypto_favorability,
+                            "crypto_correlation": 0.65,  # 예시 값
+                            "market_outlook": analysis.economic_regime.value
+                        }
+                        kairos.alert_system.send_macro_analysis_report(macro_report_data)
+                        print("✅ Slack 보고서 전송 완료")
                 except Exception as e:
                     print(f"❌ 매크로 경제 분석 실패: {e}")
             else:
