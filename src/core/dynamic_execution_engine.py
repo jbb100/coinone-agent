@@ -1369,9 +1369,31 @@ class DynamicExecutionEngine:
         try:
             # 1. BTC 시장 데이터 수집 (ATR 계산용)
             try:
-                import yfinance as yf
-                btc_ticker = yf.Ticker("BTC-USD")
-                market_data = btc_ticker.history(period="30d")  # 30일 데이터
+                from ..utils.binance_data_provider import BinanceDataProvider
+                from datetime import datetime, timedelta
+                
+                provider = BinanceDataProvider()
+                market_data = provider.get_historical_klines(
+                    symbol="BTCUSDT",
+                    interval="1d",
+                    start_date=datetime.now() - timedelta(days=30),
+                    limit=30
+                )
+                
+                # KRW 변환
+                try:
+                    import yaml
+                    with open('config/config.yaml', 'r', encoding='utf-8') as f:
+                        config = yaml.safe_load(f)
+                    usd_krw_rate = config.get('market_data', {}).get('usd_krw_rate', 1400.0)
+                except Exception:
+                    usd_krw_rate = 1400.0
+                
+                if not market_data.empty:
+                    market_data = provider.convert_usdt_to_krw(market_data, usd_krw_rate)
+                else:
+                    market_data = None
+                    
             except Exception as e:
                 logger.warning(f"시장 데이터 수집 실패: {e}")
                 market_data = None

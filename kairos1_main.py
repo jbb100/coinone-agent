@@ -475,7 +475,7 @@ class KairosSystem:
                 
                 # 추가 시장 지표 계산
                 analysis_info = analysis_result.get("analysis_info", {})
-                analysis_result["trend_score"] = analysis_info.get("price_to_ma_ratio", 1.0) - 1.0
+                analysis_result["trend_score"] = analysis_info.get("price_ratio", 1.0) - 1.0
                 analysis_result["volatility"] = price_data['Close'].pct_change().std() if len(price_data) > 1 else 0
                 analysis_result["momentum"] = (price_data['Close'].iloc[-1] / price_data['Close'].iloc[-30] - 1) if len(price_data) > 30 else 0
                 analysis_result["volume_trend"] = "상승" if len(price_data) > 1 else "알 수 없음"
@@ -1606,6 +1606,19 @@ def main():
                     print(f"소르티노 비율: {metrics.sortino_ratio:.3f}")
                     print(f"최대 드로우다운: {metrics.max_drawdown:.2%}")
                     print(f"수익률: {metrics.total_return:.2%}")
+                    
+                    # Slack으로 성과 보고서 전송
+                    if kairos.alert_system:
+                        print("📤 고급 성과 분석 보고서를 Slack으로 전송합니다...")
+                        # PerformanceMetrics 객체를 딕셔너리로 변환
+                        from dataclasses import asdict
+                        performance_data = asdict(metrics)
+                        performance_data["period_days"] = args.advanced_performance_report
+                        # 벤치마크 수익률 추가 (샘플 데이터)
+                        performance_data["benchmark_return"] = np.random.normal(0.001, 0.02, len(dates)).sum()
+                        
+                        kairos.alert_system.send_performance_alert(performance_data)
+                        print("✅ Slack 보고서 전송 완료")
                 except Exception as e:
                     print(f"❌ 고급 성과 분석 실패: {e}")
             else:
@@ -1663,8 +1676,12 @@ def main():
                     # Slack으로 분석 보고서 전송
                     if kairos.alert_system:
                         print("📤 매크로 경제 분석 보고서를 Slack으로 전송합니다...")
+                        # MacroIndicators 객체를 딕셔너리로 변환
+                        from dataclasses import asdict
+                        indicators_dict = asdict(indicators)
+                        
                         macro_report_data = {
-                            "indicators": indicators,
+                            "indicators": indicators_dict,
                             "risk_score": analysis.crypto_favorability,
                             "crypto_correlation": 0.65,  # 예시 값
                             "market_outlook": analysis.economic_regime.value

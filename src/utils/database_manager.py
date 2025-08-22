@@ -954,7 +954,7 @@ class DatabaseManager:
     
     def get_market_data(self, asset: str, days: int = 30) -> pd.DataFrame:
         """
-        시장 데이터 조회 (가격 데이터)
+        시장 데이터 조회 (가격 데이터) - Binance 데이터 사용
         
         Args:
             asset: 자산 심볼 (BTC, ETH 등)
@@ -965,51 +965,57 @@ class DatabaseManager:
             빈 DataFrame 반환 시 실제 가격 데이터가 없음을 의미
         """
         try:
-            import yfinance as yf
             from datetime import datetime, timedelta
+            from .binance_data_provider import BinanceDataProvider
             
-            # Yahoo Finance 심볼 매핑
+            # Binance 심볼 매핑
             symbol_map = {
-                'BTC': 'BTC-USD',
-                'ETH': 'ETH-USD',
-                'XRP': 'XRP-USD',
-                'SOL': 'SOL-USD',
-                'ADA': 'ADA-USD',
-                'DOT': 'DOT-USD',
-                'MATIC': 'MATIC-USD'
+                'BTC': 'BTCUSDT',
+                'ETH': 'ETHUSDT', 
+                'XRP': 'XRPUSDT',
+                'SOL': 'SOLUSDT',
+                'ADA': 'ADAUSDT',
+                'DOT': 'DOTUSDT',
+                'MATIC': 'MATICUSDT'
             }
             
-            yahoo_symbol = symbol_map.get(asset.upper())
-            if not yahoo_symbol:
+            binance_symbol = symbol_map.get(asset.upper())
+            if not binance_symbol:
                 logger.warning(f"get_market_data: {asset} 심볼을 찾을 수 없습니다.")
                 return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume'])
             
-            # 실시간 데이터 가져오기 시도
+            # Binance 데이터 제공자 인스턴스 생성
+            provider = BinanceDataProvider()
+            
+            # 데이터 조회
             try:
-                ticker = yf.Ticker(yahoo_symbol)
-                period_str = f"{days}d"
-                price_data = ticker.history(period=period_str)
+                start_date = datetime.now() - timedelta(days=days)
+                price_data = provider.get_historical_klines(
+                    symbol=binance_symbol,
+                    interval="1d",
+                    start_date=start_date,
+                    limit=days
+                )
                 
                 if not price_data.empty:
-                    # 컬럼명 통일 (Yahoo Finance는 대문자 사용)
-                    price_data = price_data.rename(columns={
-                        'Open': 'Open',
-                        'High': 'High', 
-                        'Low': 'Low',
-                        'Close': 'Close',
-                        'Volume': 'Volume'
-                    })
+                    # USD -> KRW 변환 (설정에서 환율 가져오기)
+                    try:
+                        import yaml
+                        with open('config/config.yaml', 'r', encoding='utf-8') as f:
+                            config = yaml.safe_load(f)
+                        usd_krw_rate = config.get('market_data', {}).get('usd_krw_rate', 1400.0)
+                    except Exception:
+                        usd_krw_rate = 1400.0  # 기본값
                     
-                    # 필요한 컬럼만 선택
-                    price_data = price_data[['Open', 'High', 'Low', 'Close', 'Volume']]
+                    price_data = provider.convert_usdt_to_krw(price_data, usd_krw_rate)
                     
-                    logger.info(f"get_market_data: {asset}의 {len(price_data)}일 실시간 데이터 조회 완료")
+                    logger.info(f"get_market_data: {asset}의 {len(price_data)}일 Binance 데이터 조회 완료")
                     return price_data
                     
             except Exception as api_error:
-                logger.warning(f"실시간 데이터 조회 실패 ({asset}): {api_error}")
+                logger.warning(f"Binance 데이터 조회 실패 ({asset}): {api_error}")
             
-            # 실시간 데이터 실패 시 빈 DataFrame 반환
+            # 데이터 조회 실패 시 빈 DataFrame 반환
             logger.warning(f"get_market_data: {asset}의 {days}일 시장 데이터를 가져올 수 없습니다. 빈 DataFrame을 반환합니다.")
             return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume'])
             

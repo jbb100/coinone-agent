@@ -725,10 +725,11 @@ class AlertSystem:
 📅 분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 📊 **주요 경제 지표**
-• 미국 금리: {indicators.get('us_interest_rate', 0):.2%}
-• 달러 인덱스: {indicators.get('dxy', 0):.2f}
-• S&P 500: {indicators.get('sp500_change', 0):+.2%}
-• VIX: {indicators.get('vix', 0):.2f}
+• 연준 기준금리: {indicators.get('fed_funds_rate', 0):.2f}%
+• 달러 인덱스: {indicators.get('dxy_index', 0):.2f}
+• 인플레이션율: {indicators.get('inflation_rate', 0):+.2f}%
+• VIX 지수: {indicators.get('vix_index', 0):.2f}
+• 10년 국채 수익률: {indicators.get('bond_yield_10y', 0):.2f}%
 
 💹 **암호화폐 영향**
 • BTC 상관관계: {crypto_correlation:.2f}
