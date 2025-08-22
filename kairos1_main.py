@@ -444,8 +444,28 @@ class KairosSystem:
                 # 데이터베이스에 저장
                 self.db_manager.save_market_analysis(analysis_result)
                 
+                # 이전 시장 계절 확인 (캐시 또는 DB에서)
+                previous_season = getattr(self, '_previous_market_season', None)
+                current_season = analysis_result.get("market_season", "NEUTRAL")
+                season_changed = previous_season and previous_season != current_season
+                
+                # 현재 시장 계절을 캐시에 저장
+                self._previous_market_season = current_season
+                
+                # 분석 결과에 추가 정보 포함
+                analysis_result["current_season"] = current_season
+                analysis_result["previous_season"] = previous_season or current_season
+                analysis_result["season_changed"] = season_changed
+                
+                # 추가 시장 지표 계산
+                analysis_info = analysis_result.get("analysis_info", {})
+                analysis_result["trend_score"] = analysis_info.get("price_to_ma_ratio", 1.0) - 1.0
+                analysis_result["volatility"] = price_data['Close'].pct_change().std() if len(price_data) > 1 else 0
+                analysis_result["momentum"] = (price_data['Close'].iloc[-1] / price_data['Close'].iloc[-30] - 1) if len(price_data) > 30 else 0
+                analysis_result["volume_trend"] = "상승" if len(price_data) > 1 else "알 수 없음"
+                
                 # 시장 계절 변화 시 알림 및 즉시 리밸런싱
-                if analysis_result.get("season_changed"):
+                if season_changed:
                     logger.info("시장 계절 변화 감지! 전략적 자산 재배치를 시작합니다.")
                     self._send_season_change_notification(analysis_result, immediate_rebalance=True)
                     
