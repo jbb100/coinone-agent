@@ -973,6 +973,7 @@ class DatabaseManager:
                 'BTC': 'BTC-USD',
                 'ETH': 'ETH-USD',
                 'XRP': 'XRP-USD',
+                'SOL': 'SOL-USD',
                 'ADA': 'ADA-USD',
                 'DOT': 'DOT-USD',
                 'MATIC': 'MATIC-USD'
