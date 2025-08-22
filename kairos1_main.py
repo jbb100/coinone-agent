@@ -432,11 +432,15 @@ class KairosSystem:
         try:
             logger.info(f"주간 시장 분석 실행 {'(DRY RUN)' if dry_run else ''}")
             
-            # BTC 가격 데이터 수집 (실제로는 외부 API에서)
-            # 200주 이동평균 계산을 위해 최대 기간 데이터 수집
-            import yfinance as yf
-            btc_ticker = yf.Ticker("BTC-USD")
-            price_data = btc_ticker.history(period="max")  # 최대 가능한 기간의 데이터
+            # BTC 가격 데이터 수집 - Binance API 사용
+            # 200주 이동평균 계산을 위해 충분한 데이터 수집
+            from src.utils.binance_data_provider import BinanceDataProvider
+            binance_provider = BinanceDataProvider()
+            price_data = binance_provider.get_btc_price_data_for_analysis(weeks_required=210)
+            
+            # USDT를 KRW로 변환 (환율 적용)
+            usd_krw_rate = self.config.get("market_data.usd_krw_rate", 1400.0)
+            price_data = binance_provider.convert_usdt_to_krw(price_data, usd_krw_rate)
             
             # 시장 분석 실행
             analysis_result = self.market_filter.analyze_weekly(price_data)
@@ -1334,11 +1338,15 @@ def main():
             print("📈 멀티 타임프레임 분석 실행...")
             if kairos.multi_timeframe_analyzer:
                 try:
-                    # BTC 가격 데이터 수집 (실제로는 더 정교한 데이터 소스 사용)
+                    # BTC 가격 데이터 수집 - Binance API 사용
                     # 멀티 타임프레임 분석을 위해 충분한 데이터 수집
-                    import yfinance as yf
-                    btc_ticker = yf.Ticker("BTC-USD")
-                    price_data = btc_ticker.history(period="3y")
+                    from src.utils.binance_data_provider import BinanceDataProvider
+                    binance_provider = BinanceDataProvider()
+                    price_data = binance_provider.get_btc_price_data_for_analysis(weeks_required=210)
+                    
+                    # USDT를 KRW로 변환
+                    usd_krw_rate = kairos.config.get("market_data.usd_krw_rate", 1400.0)
+                    price_data = binance_provider.convert_usdt_to_krw(price_data, usd_krw_rate)
                     
                     analysis = kairos.multi_timeframe_analyzer.analyze_multi_timeframe(
                         "BTC", price_data["Close"]
