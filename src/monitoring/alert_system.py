@@ -680,8 +680,8 @@ class AlertSystem:
 • 신뢰도: {confidence:.1%}
 
 💼 **권장 자산 배분**
-• 암호화폐: {recommended_allocation.get('crypto', 0):.1%}
-• 현금(KRW): {recommended_allocation.get('krw', 0):.1%}
+• 암호화폐: {recommended_allocation.get('crypto', 'N/A')}
+• 현금(KRW): {recommended_allocation.get('krw', 'N/A')}
             """.strip()
             
             return self.send_info_alert(

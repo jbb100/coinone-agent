@@ -433,10 +433,10 @@ class KairosSystem:
             logger.info(f"주간 시장 분석 실행 {'(DRY RUN)' if dry_run else ''}")
             
             # BTC 가격 데이터 수집 (실제로는 외부 API에서)
-            # 200주 이동평균 계산을 위해 5년치 데이터 수집
+            # 200주 이동평균 계산을 위해 최대 기간 데이터 수집
             import yfinance as yf
             btc_ticker = yf.Ticker("BTC-USD")
-            price_data = btc_ticker.history(period="5y")
+            price_data = btc_ticker.history(period="max")  # 최대 가능한 기간의 데이터
             
             # 시장 분석 실행
             analysis_result = self.market_filter.analyze_weekly(price_data)
