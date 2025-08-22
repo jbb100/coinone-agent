@@ -57,6 +57,7 @@ class OpportunisticBuyer:
         self,
         coinone_client: CoinoneClient,
         db_manager: DatabaseManager,
+        order_manager = None,  # 추가: OrderManager 의존성
         cash_reserve_ratio: float = 0.15,  # 기본 현금 보유 비율
         min_opportunity_threshold: float = 0.05,  # 최소 기회 임계값 (5% 하락)
         max_buy_per_opportunity: float = 0.3  # 기회당 최대 매수 비율
@@ -65,12 +66,14 @@ class OpportunisticBuyer:
         Args:
             coinone_client: 코인원 API 클라이언트
             db_manager: 데이터베이스 매니저
+            order_manager: 주문 관리자 (없으면 coinone_client 직접 사용)
             cash_reserve_ratio: 현금 보유 비율
             min_opportunity_threshold: 최소 매수 기회 임계값
             max_buy_per_opportunity: 기회당 최대 매수 비율
         """
         self.coinone_client = coinone_client
         self.db_manager = db_manager
+        self.order_manager = order_manager
         self.cash_reserve_ratio = cash_reserve_ratio
         self.min_opportunity_threshold = min_opportunity_threshold
         self.max_buy_per_opportunity = max_buy_per_opportunity
@@ -399,14 +402,61 @@ class OpportunisticBuyer:
                 continue
             
             try:
-                # 매수 주문 실행
-                order_result = self.coinone_client.place_limit_order(
-                    currency=opportunity.asset,
-                    side="buy",
-                    price=opportunity.current_price,
-                    amount=buy_amount / opportunity.current_price,
-                    order_type="limit"
-                )
+                # 매수 수량 계산 (분할 매수와 동일한 방식)
+                calculated_quantity = buy_amount / opportunity.current_price
+                
+                # 최소/최대 주문량 검증 (분할 매수와 동일)
+                min_order_quantities = {
+                    "BTC": 0.0001,    "ETH": 0.001,     "XRP": 1.0,       "SOL": 0.01,      
+                    "ADA": 2.0,       "DOT": 1.0,       "DOGE": 10.0,     "TRX": 10.0,      
+                    "XLM": 10.0,      "ATOM": 0.2,      "ALGO": 5.0,      "VET": 50.0,
+                }
+                max_order_limits = {
+                    "BTC": 10.0,      "ETH": 100.0,     "XRP": 10000.0,   "SOL": 100.0,     
+                    "ADA": 50000.0,   "DOT": 1000.0,    "DOGE": 100000.0, "TRX": 100000.0,  
+                    "XLM": 50000.0,   "ATOM": 1000.0,   "ALGO": 10000.0,  "VET": 100000.0,
+                }
+                
+                min_limit = min_order_quantities.get(opportunity.asset, 0.0001)
+                max_limit = max_order_limits.get(opportunity.asset, 1.0)
+                
+                # 수량 조정
+                final_quantity = max(min_limit, min(calculated_quantity, max_limit))
+                
+                if final_quantity != calculated_quantity:
+                    logger.info(f"📊 {opportunity.asset} 주문량 조정: {calculated_quantity:.8f} → {final_quantity:.8f}")
+                
+                # 매수 주문 실행 (분할 매수와 동일한 방식)
+                if self.order_manager:
+                    # OrderManager 사용하여 분할 매수와 일관성 유지
+                    order_result_obj = self.order_manager.submit_market_order(
+                        currency=opportunity.asset,
+                        side="buy",
+                        amount=final_quantity
+                    )
+                    
+                    # Order 객체를 딕셔너리로 변환 (분할 매수와 동일한 방식)
+                    if order_result_obj:
+                        order_result = {
+                            "success": order_result_obj.status.value != "FAILED",
+                            "order_id": order_result_obj.order_id,
+                            "status": order_result_obj.status.value,
+                            "error": order_result_obj.error_message if order_result_obj.status.value == "FAILED" else None
+                        }
+                    else:
+                        order_result = {
+                            "success": False,
+                            "error": "Order submission returned None"
+                        }
+                else:
+                    # Fallback: coinone_client 직접 사용 (기존 방식)
+                    order_result = self.coinone_client.place_limit_order(
+                        currency=opportunity.asset,
+                        side="buy",
+                        price=opportunity.current_price,
+                        amount=final_quantity,
+                        order_type="limit"
+                    )
                 
                 if order_result.get("success"):
                     results["executed_orders"].append({

@@ -288,6 +288,7 @@ class KairosSystem:
             self.opportunistic_buyer = OpportunisticBuyer(
                 coinone_client=self.coinone_client,
                 db_manager=self.db_manager,
+                order_manager=self.order_manager,  # 분할 매수와 동일한 OrderManager 사용
                 cash_reserve_ratio=self.config.get("trading.cash_reserve_ratio", 0.15),
                 min_opportunity_threshold=self.config.get("trading.min_opportunity_threshold", 0.05)
             )
