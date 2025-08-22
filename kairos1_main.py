@@ -44,6 +44,7 @@ from src.utils.database_manager import DatabaseManager
 from src.utils.market_data_provider import MarketDataProvider
 from src.core.multi_account_manager import MultiAccountManager
 from src.core.system_integration_helper import get_system_status
+from src.core.opportunistic_buyer import OpportunisticBuyer
 
 
 class KairosSystem:
@@ -86,6 +87,7 @@ class KairosSystem:
         self.scenario_response_system = None
         self.bias_prevention_system = None
         self.advanced_performance_analytics = None
+        self.opportunistic_buyer = None
         
         # 시그널 핸들러 설정
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -280,6 +282,14 @@ class KairosSystem:
                 db_manager=self.db_manager,
                 rebalancer=self.rebalancer,  # Add rebalancer instance
                 alert_system=self.alert_system
+            )
+            
+            # OpportunisticBuyer 초기화
+            self.opportunistic_buyer = OpportunisticBuyer(
+                coinone_client=self.coinone_client,
+                db_manager=self.db_manager,
+                cash_reserve_ratio=self.config.get("trading.cash_reserve_ratio", 0.15),
+                min_opportunity_threshold=self.config.get("trading.min_opportunity_threshold", 0.05)
             )
             
             # 고급 시스템 컴포넌트 초기화
@@ -498,6 +508,237 @@ class KairosSystem:
         except Exception as e:
             logger.error(f"주간 시장 분석 실패: {e}")
             return {"success": False, "error": str(e)}
+    
+    def check_buy_opportunities(self, dry_run: bool = False) -> dict:
+        """
+        매수 기회 탐지, Slack 알림 발송 및 자동 매수 실행
+        
+        Args:
+            dry_run: True면 시뮬레이션만 실행
+            
+        Returns:
+            매수 기회 분석 및 실행 결과
+        """
+        try:
+            logger.info(f"매수 기회 탐지 시작... (드라이런: {dry_run})")
+            
+            # 현재 포트폴리오에 있는 자산들 가져오기
+            portfolio = self.portfolio_manager.get_current_allocations()
+            assets = list(portfolio.keys())
+            
+            # 추가로 관심 자산들도 포함 (설정에서 가져오기)
+            watch_list = self.config.get("trading.watch_list", [])
+            if watch_list:
+                assets.extend([asset for asset in watch_list if asset not in assets])
+            
+            # 매수 기회 탐지
+            opportunities = self.opportunistic_buyer.identify_opportunities(assets)
+            
+            if not opportunities:
+                logger.info("현재 매수 기회가 없습니다.")
+                return {"success": True, "opportunities": [], "message": "No opportunities found"}
+            
+            # 매수 기회가 있으면 Slack 알림 발송
+            for opportunity in opportunities:
+                self._send_buy_opportunity_notification(opportunity)
+            
+            logger.info(f"총 {len(opportunities)}개의 매수 기회 탐지 완료")
+            
+            # 기회가 있으면 자동으로 매수 실행
+            execution_result = None
+            if opportunities:
+                # 사용 가능한 현금 확인
+                balance = self.coinone_client.get_balance()
+                available_cash = balance.get("krw", {}).get("available", 0)
+                
+                logger.info(f"사용 가능한 현금: {available_cash:,.0f} KRW")
+                
+                if available_cash > 0:
+                    # 실제 매수 실행 또는 시뮬레이션
+                    if dry_run:
+                        logger.info("🔧 드라이런 모드: 실제 매수하지 않고 시뮬레이션")
+                        execution_result = self._simulate_opportunistic_buys(
+                            opportunities, available_cash
+                        )
+                    else:
+                        logger.info("💰 매수 기회 포착! 자동으로 매수를 실행합니다...")
+                        execution_result = self.opportunistic_buyer.execute_opportunistic_buys(
+                            opportunities=opportunities,
+                            available_cash=available_cash,
+                            max_total_buy=available_cash * self.config.get("trading.max_opportunistic_buy_ratio", 0.3)
+                        )
+                    
+                    # 실행 결과 알림
+                    if execution_result:
+                        self._send_execution_result_notification(execution_result)
+                else:
+                    logger.warning("사용 가능한 현금이 없어 매수를 실행할 수 없습니다.")
+                    self._send_no_cash_notification(opportunities)
+            
+            return {
+                "success": True,
+                "opportunities": opportunities,
+                "count": len(opportunities),
+                "execution_result": execution_result,
+                "timestamp": datetime.now()
+            }
+            
+        except Exception as e:
+            logger.error(f"매수 기회 탐지 실패: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _simulate_opportunistic_buys(self, opportunities, available_cash):
+        """매수 시뮬레이션"""
+        results = {
+            "executed_orders": [],
+            "failed_orders": [],
+            "total_invested": 0,
+            "remaining_cash": available_cash
+        }
+        
+        remaining_budget = available_cash * self.config.get("trading.max_opportunistic_buy_ratio", 0.3)
+        
+        for opportunity in opportunities:
+            buy_amount = min(
+                remaining_budget * opportunity.recommended_buy_ratio,
+                remaining_budget
+            )
+            
+            if buy_amount > 5000:  # 최소 주문 금액
+                results["executed_orders"].append({
+                    "asset": opportunity.asset,
+                    "amount": buy_amount,
+                    "price": opportunity.current_price,
+                    "status": "SIMULATED"
+                })
+                results["total_invested"] += buy_amount
+                remaining_budget -= buy_amount
+        
+        results["remaining_cash"] = available_cash - results["total_invested"]
+        return results
+    
+    def _send_execution_result_notification(self, execution_result):
+        """매수 실행 결과 알림"""
+        try:
+            executed = execution_result.get("executed_orders", [])
+            failed = execution_result.get("failed_orders", [])
+            total_invested = execution_result.get("total_invested", 0)
+            remaining_cash = execution_result.get("remaining_cash", 0)
+            
+            message = f"""
+💰 **기회적 매수 실행 결과**
+
+**성공한 주문**: {len(executed)}건
+**실패한 주문**: {len(failed)}건
+**총 투자 금액**: {total_invested:,.0f} KRW
+**남은 현금**: {remaining_cash:,.0f} KRW
+"""
+            
+            if executed:
+                message += "\n\n✅ **성공한 주문**:"
+                for order in executed:
+                    message += f"\n• {order.get('asset')}: {order.get('amount', 0):,.0f} KRW"
+            
+            if failed:
+                message += "\n\n❌ **실패한 주문**:"
+                for order in failed:
+                    message += f"\n• {order.get('asset')}: {order.get('error', 'Unknown error')}"
+            
+            message += f"\n\n⏰ 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            
+            self.alert_system.send_alert(
+                "기회적 매수 실행 완료",
+                message,
+                "info"
+            )
+            
+            logger.info("매수 실행 결과 알림 발송 완료")
+            
+        except Exception as e:
+            logger.error(f"매수 실행 결과 알림 발송 실패: {e}")
+    
+    def _send_no_cash_notification(self, opportunities):
+        """현금 부족 알림"""
+        try:
+            message = f"""
+⚠️ **매수 기회 포착했으나 현금 부족**
+
+**발견된 기회**: {len(opportunities)}개
+
+매수 기회를 포착했지만 사용 가능한 현금이 없어 매수를 실행할 수 없습니다.
+
+**놓친 기회들**:
+"""
+            for opp in opportunities[:3]:  # 상위 3개만 표시
+                message += f"\n• {opp.asset}: {opp.opportunity_level.value.upper()} (신뢰도 {opp.confidence_score:.1%})"
+            
+            if len(opportunities) > 3:
+                message += f"\n• ... 외 {len(opportunities)-3}개"
+            
+            message += "\n\n💡 **제안**: 현금 비중을 늘리거나 일부 자산을 매도하여 현금을 확보하세요."
+            
+            self.alert_system.send_alert(
+                "매수 기회 - 현금 부족",
+                message,
+                "warning"
+            )
+            
+        except Exception as e:
+            logger.error(f"현금 부족 알림 발송 실패: {e}")
+    
+    def _send_buy_opportunity_notification(self, opportunity):
+        """매수 기회 알림 발송"""
+        try:
+            # 기회 레벨에 따른 이모지 설정
+            level_emojis = {
+                "extreme": "🚨",
+                "major": "⚠️",
+                "moderate": "📊",
+                "minor": "💡",
+                "none": "ℹ️"
+            }
+            
+            emoji = level_emojis.get(opportunity.opportunity_level.value, "📢")
+            
+            # 메시지 생성
+            message = f"""
+{emoji} **매수 기회 포착!**
+
+**자산**: {opportunity.asset}
+**현재가**: {opportunity.current_price:,.0f} KRW
+**기회 수준**: {opportunity.opportunity_level.value.upper()}
+**신뢰도**: {opportunity.confidence_score:.1%}
+
+📊 **가격 분석**:
+• 7일 대비: {opportunity.price_drop_7d:.1%}
+• 30일 대비: {opportunity.price_drop_30d:.1%}
+
+📈 **기술적 지표**:
+• RSI: {opportunity.rsi:.1f}
+• 공포탐욕 지수: {opportunity.fear_greed_index:.1f}
+
+💰 **추천 매수 비율**: 보유 현금의 {opportunity.recommended_buy_ratio:.1%}
+
+⏰ 탐지 시각: {opportunity.timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            
+            # 기회 수준에 따른 알림 타입 설정
+            if opportunity.opportunity_level.value in ["extreme", "major"]:
+                alert_type = "warning"
+            else:
+                alert_type = "info"
+            
+            # Slack 알림 발송
+            self.alert_system.send_alert(
+                f"매수 기회 - {opportunity.asset}",
+                message,
+                alert_type
+            )
+            
+            logger.info(f"매수 기회 알림 발송 완료: {opportunity.asset} ({opportunity.opportunity_level.value})")
+            
+        except Exception as e:
+            logger.error(f"매수 기회 알림 발송 실패: {e}")
     
     def run_quarterly_rebalance(self, dry_run: bool = False, use_twap: bool = False) -> dict:
         """분기별 리밸런싱 실행"""
@@ -1133,6 +1374,7 @@ def main():
     parser.add_argument("--system-status", action="store_true", help="시스템 상태 조회")
     parser.add_argument("--dry-run", action="store_true", help="실제 거래 없이 시뮬레이션")
     parser.add_argument("--test-alerts", action="store_true", help="알림 시스템 테스트")
+    parser.add_argument("--check-opportunities", action="store_true", help="매수 기회 탐지 및 자동 매수 실행")
     
     # 멀티 계정 관리 명령어들
     parser.add_argument("--multi-accounts", action="store_true", help="멀티 계정 관리 CLI 실행")
@@ -1572,6 +1814,49 @@ def main():
             for channel, success in results.items():
                 status = "✅" if success else "❌"
                 print(f"{status} {channel} 알림 테스트")
+        
+        elif args.check_opportunities:
+            print(f"🔍 매수 기회 탐지 중... {'(시뮬레이션)' if args.dry_run else '(실제 매수 자동 실행)'}")
+            
+            result = kairos.check_buy_opportunities(dry_run=args.dry_run)
+            
+            if result.get("success"):
+                opportunities = result.get("opportunities", [])
+                if opportunities:
+                    print(f"\n✅ {len(opportunities)}개의 매수 기회를 발견했습니다!")
+                    print("📢 Slack 알림이 발송되었습니다.")
+                    
+                    for opp in opportunities:
+                        print(f"\n{'='*50}")
+                        print(f"자산: {opp.asset}")
+                        print(f"현재가: {opp.current_price:,.0f} KRW")
+                        print(f"기회 수준: {opp.opportunity_level.value.upper()}")
+                        print(f"신뢰도: {opp.confidence_score:.1%}")
+                        print(f"7일 하락률: {opp.price_drop_7d:.1%}")
+                        print(f"30일 하락률: {opp.price_drop_30d:.1%}")
+                        print(f"RSI: {opp.rsi:.1f}")
+                        print(f"추천 매수 비율: {opp.recommended_buy_ratio:.1%}")
+                    
+                    # 실행 결과 출력
+                    execution_result = result.get("execution_result")
+                    if execution_result:
+                        print(f"\n{'='*50}")
+                        print("💰 자동 매수 실행 결과:")
+                        print(f"성공한 주문: {len(execution_result.get('executed_orders', []))}건")
+                        print(f"실패한 주문: {len(execution_result.get('failed_orders', []))}건")
+                        print(f"총 투자 금액: {execution_result.get('total_invested', 0):,.0f} KRW")
+                        print(f"남은 현금: {execution_result.get('remaining_cash', 0):,.0f} KRW")
+                        
+                        if args.dry_run:
+                            print("\n⚠️ 드라이런 모드: 실제 매수는 실행되지 않았습니다.")
+                        else:
+                            print("\n✅ 매수 주문이 자동으로 실행되었습니다!")
+                    else:
+                        print("\n⚠️ 사용 가능한 현금이 없어 매수를 실행하지 못했습니다.")
+                else:
+                    print("ℹ️ 현재 매수 기회가 없습니다.")
+            else:
+                print(f"❌ 매수 기회 탐지 실패: {result.get('error')}")
                 
         elif args.multi_accounts:
             print("🏦 멀티 계정 관리 CLI 실행...")
