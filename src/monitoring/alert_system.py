@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from loguru import logger
 
+from ..core.system_coordinator import get_system_coordinator
+
 
 class AlertSystem:
     """
@@ -34,6 +36,9 @@ class AlertSystem:
         self.slack_config = self.notification_config.get("slack", {})
         self.alert_levels = self.notification_config.get("alert_levels", {})
         
+        # 시스템 조정자 (중복 알림 제거용)
+        self.system_coordinator = get_system_coordinator()
+        
         logger.info("AlertSystem 초기화 완료")
     
     def send_alert(
@@ -44,7 +49,7 @@ class AlertSystem:
         channels: Optional[List[str]] = None
     ) -> Dict[str, bool]:
         """
-        알림 발송
+        알림 발송 (중복 제거 적용)
         
         Args:
             title: 알림 제목
@@ -55,6 +60,12 @@ class AlertSystem:
         Returns:
             채널별 발송 결과
         """
+        # 중복 알림 체크
+        alert_key = f"{alert_type}:{title}"
+        if not self.system_coordinator.should_send_alert(alert_key, message):
+            logger.debug(f"중복 알림 필터링됨: {title}")
+            return {"filtered": True}
+        
         results = {}
         
         # 채널 목록 결정
@@ -558,6 +569,184 @@ class AlertSystem:
             
         except Exception as e:
             logger.error(f"성과 알림 발송 실패: {e}")
+            return {}
+    
+    def send_weekly_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
+        """
+        주간 시장 분석 보고서 전송
+        
+        Args:
+            analysis_result: 주간 분석 결과
+            
+        Returns:
+            발송 결과
+        """
+        try:
+            # 분석 결과 추출
+            current_season = analysis_result.get("current_season", "알 수 없음")
+            previous_season = analysis_result.get("previous_season", "알 수 없음")
+            season_changed = analysis_result.get("season_changed", False)
+            trend_score = analysis_result.get("trend_score", 0)
+            volatility = analysis_result.get("volatility", 0)
+            momentum = analysis_result.get("momentum", 0)
+            volume_trend = analysis_result.get("volume_trend", "알 수 없음")
+            
+            # 시장 계절 이모지
+            season_emoji = {
+                "BULLISH": "🐂",
+                "BEARISH": "🐻",
+                "ACCUMULATION": "📦",
+                "DISTRIBUTION": "📤",
+                "NEUTRAL": "➡️"
+            }
+            
+            message = f"""
+📊 **주간 시장 분석 보고서**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+🎯 **시장 계절 분석**
+• 현재: {season_emoji.get(current_season, '❓')} {current_season}
+• 이전: {season_emoji.get(previous_season, '❓')} {previous_season}
+• 변화: {'🔄 **변경됨 - 리밸런싱 필요**' if season_changed else '유지'}
+
+📈 **시장 지표**
+• 트렌드 점수: {trend_score:.2f}
+• 변동성: {volatility:.2%}
+• 모멘텀: {momentum:.2f}
+• 거래량: {volume_trend}
+
+💡 **투자 권장사항**
+• {analysis_result.get('recommendation', '현재 전략 유지')}
+            """.strip()
+            
+            # 리밸런싱 정보 추가
+            if analysis_result.get("rebalance_triggered"):
+                message += f"""
+
+🔄 **리밸런싱 실행**
+• 상태: ✅ TWAP 알고리즘으로 진행 중
+• 예상 기간: {analysis_result.get('rebalance_result', {}).get('estimated_hours', 24)}시간"""
+            
+            return self.send_info_alert(
+                "주간 시장 분석 보고서",
+                message,
+                "weekly_analysis"
+            )
+            
+        except Exception as e:
+            logger.error(f"주간 분석 보고서 발송 실패: {e}")
+            return {}
+    
+    def send_multi_timeframe_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
+        """
+        멀티 타임프레임 분석 보고서 전송
+        
+        Args:
+            analysis_result: 멀티 타임프레임 분석 결과
+            
+        Returns:
+            발송 결과
+        """
+        try:
+            overall_trend = analysis_result.get("overall_trend", {})
+            market_season = analysis_result.get("market_season", "알 수 없음")
+            cycle_phase = analysis_result.get("cycle_phase", "알 수 없음")
+            confidence = analysis_result.get("confidence", 0)
+            recommended_allocation = analysis_result.get("recommended_allocation", {})
+            
+            # 트렌드 이모지
+            trend_emoji = {
+                "상승": "📈",
+                "하락": "📉",
+                "횡보": "➡️"
+            }
+            
+            message = f"""
+📊 **멀티 타임프레임 분석 보고서**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+📈 **종합 트렌드**
+• 단기 (1-7일): {trend_emoji.get(overall_trend.get('short', ''), '❓')} {overall_trend.get('short', 'N/A')}
+• 중기 (7-30일): {trend_emoji.get(overall_trend.get('medium', ''), '❓')} {overall_trend.get('medium', 'N/A')}
+• 장기 (30일+): {trend_emoji.get(overall_trend.get('long', ''), '❓')} {overall_trend.get('long', 'N/A')}
+
+🎯 **시장 상태**
+• 시장 계절: {market_season}
+• 사이클 단계: {cycle_phase}
+• 신뢰도: {confidence:.1%}
+
+💼 **권장 자산 배분**
+• 암호화폐: {recommended_allocation.get('crypto', 'N/A')}
+• 현금(KRW): {recommended_allocation.get('krw', 'N/A')}
+            """.strip()
+            
+            return self.send_info_alert(
+                "멀티 타임프레임 분석 보고서",
+                message,
+                "multi_timeframe_analysis"
+            )
+            
+        except Exception as e:
+            logger.error(f"멀티 타임프레임 분석 보고서 발송 실패: {e}")
+            return {}
+    
+    def send_macro_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
+        """
+        매크로 경제 분석 보고서 전송
+        
+        Args:
+            analysis_result: 매크로 경제 분석 결과
+            
+        Returns:
+            발송 결과
+        """
+        try:
+            indicators = analysis_result.get("indicators", {})
+            risk_score = analysis_result.get("risk_score", 0)
+            crypto_correlation = analysis_result.get("crypto_correlation", 0)
+            market_outlook = analysis_result.get("market_outlook", "중립")
+            
+            # 리스크 레벨
+            if risk_score >= 0.7:
+                risk_level = "🔴 높음"
+            elif risk_score >= 0.4:
+                risk_level = "🟡 중간"
+            else:
+                risk_level = "🟢 낮음"
+            
+            message = f"""
+🌍 **매크로 경제 분석 보고서**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+📊 **주요 경제 지표**
+• 연준 기준금리: {indicators.get('fed_funds_rate', 0):.2f}%
+• 달러 인덱스: {indicators.get('dxy_index', 0):.2f}
+• 인플레이션율: {indicators.get('inflation_rate', 0):+.2f}%
+• VIX 지수: {indicators.get('vix_index', 0):.2f}
+• 10년 국채 수익률: {indicators.get('bond_yield_10y', 0):.2f}%
+
+💹 **암호화폐 영향**
+• BTC 상관관계: {crypto_correlation:.2f}
+• 리스크 점수: {risk_score:.2f}/1.0
+• 리스크 수준: {risk_level}
+
+🎯 **시장 전망**: {market_outlook}
+            """.strip()
+            
+            return self.send_info_alert(
+                "매크로 경제 분석 보고서",
+                message,
+                "macro_analysis"
+            )
+            
+        except Exception as e:
+            logger.error(f"매크로 경제 분석 보고서 발송 실패: {e}")
             return {}
 
 

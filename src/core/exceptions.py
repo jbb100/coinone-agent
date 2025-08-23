@@ -169,6 +169,38 @@ class APIResponseException(APIException):
         )
 
 
+class APIClientException(APIException):
+    """API 클라이언트 오류 예외 (4xx)"""
+    
+    def __init__(self, service: str, status_code: int, response: Optional[str] = None):
+        super().__init__(
+            f"API 클라이언트 오류: {service} - 상태 코드: {status_code}",
+            error_code="API_CLIENT_ERROR",
+            details={
+                'service': service,
+                'status_code': status_code,
+                'response': response
+            },
+            recoverable=False  # 4xx는 일반적으로 재시도 불가
+        )
+
+
+class APIServerException(APIException):
+    """API 서버 오류 예외 (5xx)"""
+    
+    def __init__(self, service: str, status_code: int, response: Optional[str] = None):
+        super().__init__(
+            f"API 서버 오류: {service} - 상태 코드: {status_code}",
+            error_code="API_SERVER_ERROR",
+            details={
+                'service': service,
+                'status_code': status_code,
+                'response': response
+            },
+            recoverable=True  # 5xx는 재시도 가능
+        )
+
+
 # Risk Management Exceptions
 class RiskException(KairosException):
     """리스크 관리 관련 기본 예외"""

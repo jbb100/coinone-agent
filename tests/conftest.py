@@ -22,7 +22,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.core.exceptions import *
 from src.security.secrets_manager import SecretsManager, APIKeyManager
 from src.core.async_client import AsyncHTTPClient, AsyncCache
-from src.core.base_service import ServiceRegistry, ServiceConfig
 from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
 
 
@@ -38,6 +37,11 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "async_test: Async tests")
     config.addinivalue_line("markers", "slow: Slow tests")
     config.addinivalue_line("markers", "network: Tests requiring network access")
+    config.addinivalue_line("markers", "security: Security-related tests")
+    config.addinivalue_line("markers", "trading: Trading logic tests")
+    config.addinivalue_line("markers", "portfolio: Portfolio management tests")
+    config.addinivalue_line("markers", "rebalancing: Rebalancing tests")
+    config.addinivalue_line("markers", "multi_account: Multi-account system tests")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -209,23 +213,20 @@ def mock_trade_history() -> list:
 # ============================================================================
 
 @pytest.fixture
-def mock_service_config() -> ServiceConfig:
+def mock_service_config():
     """Mock 서비스 설정"""
-    return ServiceConfig(
-        name="test_service",
-        enabled=True,
-        health_check_interval=1  # 짧은 간격으로 설정
-    )
+    return {
+        "name": "test_service",
+        "enabled": True,
+        "health_check_interval": 1  # 짧은 간격으로 설정
+    }
 
 
 @pytest.fixture
-def service_registry() -> Generator[ServiceRegistry, None, None]:
+def service_registry():
     """서비스 레지스트리"""
-    registry = ServiceRegistry()
-    yield registry
-    
-    # 정리
-    asyncio.create_task(registry.stop_all())
+    registry = Mock()
+    return registry
 
 
 # ============================================================================
@@ -468,3 +469,302 @@ async def wait_for_condition(condition_func, timeout: float = 5.0, interval: flo
         await asyncio.sleep(interval)
     
     return False
+
+
+# ============================================================================
+# Enhanced Mock Fixtures for Trading System
+# ============================================================================
+
+@pytest.fixture
+def mock_coinone_client():
+    """개선된 Mock Coinone 클라이언트"""
+    client = Mock()
+    
+    # 기본 잔고 응답
+    client.get_balance = AsyncMock(return_value={
+        'KRW': {'balance': '5000000', 'locked': '0'},
+        'BTC': {'balance': '0.1', 'locked': '0'},
+        'ETH': {'balance': '2.0', 'locked': '0'},
+        'XRP': {'balance': '1000', 'locked': '0'}
+    })
+    
+    # 기본 시세 응답
+    client.get_ticker = AsyncMock(return_value={
+        'BTC': {'last': '50000000', 'bid': '49950000', 'ask': '50050000'},
+        'ETH': {'last': '2500000', 'bid': '2495000', 'ask': '2505000'},
+        'XRP': {'last': '600', 'bid': '598', 'ask': '602'}
+    })
+    
+    # 주문 성공 응답
+    client.create_order = AsyncMock(return_value={
+        'order_id': 'test_order_12345',
+        'status': 'filled',
+        'filled_qty': '0.01',
+        'filled_amount': '500000',
+        'fee': '500'
+    })
+    
+    # 주문 조회
+    client.get_order = AsyncMock(return_value={
+        'order_id': 'test_order_12345',
+        'status': 'filled',
+        'side': 'buy',
+        'asset': 'BTC',
+        'quantity': '0.01',
+        'price': '50000000'
+    })
+    
+    return client
+
+
+@pytest.fixture
+def realistic_market_data():
+    """현실적인 시장 데이터"""
+    return {
+        'prices': {
+            'BTC': {
+                'current': 50000000,
+                'high_24h': 52000000,
+                'low_24h': 48000000,
+                'volume_24h': 1500.5,
+                'change_24h': 0.02
+            },
+            'ETH': {
+                'current': 2500000,
+                'high_24h': 2600000,
+                'low_24h': 2400000,
+                'volume_24h': 5000.0,
+                'change_24h': 0.04
+            },
+            'XRP': {
+                'current': 600,
+                'high_24h': 620,
+                'low_24h': 580,
+                'volume_24h': 100000.0,
+                'change_24h': -0.01
+            }
+        },
+        'timestamps': {
+            'last_update': datetime.now(),
+            'market_open': datetime.now().replace(hour=9, minute=0, second=0),
+            'market_close': datetime.now().replace(hour=18, minute=0, second=0)
+        }
+    }
+
+
+@pytest.fixture
+def portfolio_scenarios():
+    """다양한 포트폴리오 시나리오"""
+    return {
+        'balanced': {
+            'total_value': 10000000,
+            'allocation': {'BTC': 0.4, 'ETH': 0.3, 'XRP': 0.2, 'KRW': 0.1}
+        },
+        'crypto_heavy': {
+            'total_value': 15000000,
+            'allocation': {'BTC': 0.6, 'ETH': 0.25, 'XRP': 0.1, 'KRW': 0.05}
+        },
+        'conservative': {
+            'total_value': 8000000,
+            'allocation': {'BTC': 0.2, 'ETH': 0.1, 'KRW': 0.7}
+        },
+        'small_portfolio': {
+            'total_value': 1000000,
+            'allocation': {'BTC': 0.3, 'KRW': 0.7}
+        }
+    }
+
+
+@pytest.fixture
+def trading_scenarios():
+    """거래 시나리오 데이터"""
+    return {
+        'successful_buy': {
+            'asset': 'BTC',
+            'action': 'buy',
+            'amount': 1000000,
+            'expected_quantity': 0.02,
+            'expected_fee': 1000,
+            'expected_status': 'filled'
+        },
+        'successful_sell': {
+            'asset': 'ETH',
+            'action': 'sell',
+            'amount': 500000,
+            'expected_quantity': 0.2,
+            'expected_fee': 500,
+            'expected_status': 'filled'
+        },
+        'partial_fill': {
+            'asset': 'XRP',
+            'action': 'buy',
+            'amount': 300000,
+            'filled_ratio': 0.7,
+            'expected_status': 'partially_filled'
+        },
+        'failed_insufficient_balance': {
+            'asset': 'BTC',
+            'action': 'buy',
+            'amount': 100000000,  # 잔고 부족
+            'expected_error': 'InsufficientBalanceException'
+        }
+    }
+
+
+@pytest.fixture
+def rebalancing_scenarios():
+    """리밸런싱 시나리오"""
+    return {
+        'minor_rebalancing': {
+            'current_weights': {'BTC': 0.42, 'ETH': 0.28, 'KRW': 0.3},
+            'target_weights': {'BTC': 0.4, 'ETH': 0.3, 'KRW': 0.3},
+            'threshold': 0.05,
+            'should_rebalance': False
+        },
+        'major_rebalancing': {
+            'current_weights': {'BTC': 0.6, 'ETH': 0.1, 'KRW': 0.3},
+            'target_weights': {'BTC': 0.4, 'ETH': 0.3, 'KRW': 0.3},
+            'threshold': 0.05,
+            'should_rebalance': True,
+            'expected_trades': [
+                {'asset': 'BTC', 'action': 'sell'},
+                {'asset': 'ETH', 'action': 'buy'}
+            ]
+        }
+    }
+
+
+@pytest.fixture
+def mock_market_conditions():
+    """시장 상황별 Mock 데이터 생성기"""
+    def generate_market_data(condition='normal', volatility=0.02):
+        base_prices = {'BTC': 50000000, 'ETH': 2500000, 'XRP': 600}
+        
+        if condition == 'bull':
+            multipliers = {'BTC': 1.1, 'ETH': 1.15, 'XRP': 1.2}
+        elif condition == 'bear':
+            multipliers = {'BTC': 0.9, 'ETH': 0.85, 'XRP': 0.8}
+        else:  # normal
+            multipliers = {'BTC': 1.0, 'ETH': 1.0, 'XRP': 1.0}
+        
+        return {
+            asset: {
+                'last': str(int(base_prices[asset] * multipliers[asset])),
+                'change_24h': (multipliers[asset] - 1.0)
+            }
+            for asset in base_prices
+        }
+    
+    return generate_market_data
+
+
+@pytest.fixture
+async def integration_test_environment(temp_dir, mock_coinone_client):
+    """통합 테스트를 위한 완전한 환경 설정"""
+    # 테스트용 설정 파일 생성
+    config_data = {
+        'portfolio': {
+            'target_weights': {'BTC': 0.4, 'ETH': 0.3, 'KRW': 0.3},
+            'rebalance_threshold': 0.05,
+            'min_trade_amount': 10000
+        },
+        'trading': {
+            'fee_rate': 0.001,
+            'max_order_size': 10000000,
+            'slippage_tolerance': 0.005
+        },
+        'risk': {
+            'max_position_size': 0.5,
+            'max_daily_trades': 10
+        }
+    }
+    
+    config_file = temp_dir / "test_config.yaml"
+    import yaml
+    with open(config_file, 'w') as f:
+        yaml.dump(config_data, f)
+    
+    # 테스트용 계정 데이터
+    accounts_data = {
+        "accounts": [
+            {
+                "id": "test_account_1",
+                "name": "Test Account 1",
+                "strategy": "balanced",
+                "target_allocation": {"BTC": 0.4, "ETH": 0.3, "KRW": 0.3},
+                "risk_level": "medium"
+            }
+        ]
+    }
+    
+    accounts_file = temp_dir / "test_accounts.json"
+    import json
+    with open(accounts_file, 'w') as f:
+        json.dump(accounts_data, f)
+    
+    # 환경 반환
+    return {
+        'config_file': str(config_file),
+        'accounts_file': str(accounts_file),
+        'client': mock_coinone_client,
+        'temp_dir': temp_dir
+    }
+
+
+@pytest.fixture
+def error_simulation():
+    """다양한 오류 상황 시뮬레이션"""
+    def simulate_error(error_type, **kwargs):
+        if error_type == 'network_timeout':
+            return asyncio.TimeoutError("Network timeout")
+        elif error_type == 'api_error':
+            return Exception(f"API Error: {kwargs.get('message', 'Unknown error')}")
+        elif error_type == 'rate_limit':
+            return APIRateLimitException("coinone", kwargs.get('retry_after', 60))
+        elif error_type == 'insufficient_balance':
+            return InsufficientBalanceException(
+                kwargs.get('requested', 1000000),
+                kwargs.get('available', 500000),
+                kwargs.get('asset', 'KRW')
+            )
+        else:
+            return Exception("Unknown error type")
+    
+    return simulate_error
+
+
+# ============================================================================
+# Performance Test Fixtures
+# ============================================================================
+
+@pytest.fixture
+def performance_benchmarks():
+    """성능 벤치마크 기준값들"""
+    return {
+        'portfolio_status_query': {'max_time': 1.0, 'target_time': 0.5},
+        'rebalancing_analysis': {'max_time': 2.0, 'target_time': 1.0},
+        'trade_execution': {'max_time': 5.0, 'target_time': 3.0},
+        'multi_account_sync': {'max_time': 10.0, 'target_time': 5.0}
+    }
+
+
+@pytest.fixture
+def load_test_scenarios():
+    """부하 테스트 시나리오"""
+    return {
+        'light_load': {
+            'concurrent_requests': 5,
+            'request_rate': 10,  # per second
+            'duration': 30  # seconds
+        },
+        'medium_load': {
+            'concurrent_requests': 20,
+            'request_rate': 50,
+            'duration': 60
+        },
+        'heavy_load': {
+            'concurrent_requests': 100,
+            'request_rate': 200,
+            'duration': 120
+        }
+    }

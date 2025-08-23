@@ -35,7 +35,11 @@ class SecretsManager:
             secrets_path: 암호화된 비밀 저장 경로
         """
         self.secrets_path = Path(secrets_path or os.getenv('SECRETS_PATH', './data/.secrets'))
-        self.secrets_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.secrets_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            # Log the error but don't fail initialization - let specific operations fail later
+            logger.warning(f"Could not create secrets directory: {e}")
         
         # 마스터 키 초기화
         self._init_master_key(master_key)
@@ -111,7 +115,13 @@ class SecretsManager:
             self._encrypted_cache[key] = encrypted_data
             
             # 파일에 저장
-            self._persist_secrets()
+            persist_success = self._persist_secrets()
+            if not persist_success:
+                # 파일 저장 실패 시 캐시에서도 제거
+                if key in self._encrypted_cache:
+                    del self._encrypted_cache[key]
+                self._log_access('STORE', key, success=False, error='Failed to persist to file')
+                return False
             
             # 감사 로그
             self._log_access('STORE', key, success=True)
@@ -215,9 +225,9 @@ class SecretsManager:
         try:
             if key in self._encrypted_cache:
                 del self._encrypted_cache[key]
-                self._persist_secrets()
-                self._log_access('DELETE', key, success=True)
-                return True
+                persist_success = self._persist_secrets()
+                self._log_access('DELETE', key, success=persist_success)
+                return persist_success
             
             self._log_access('DELETE', key, success=False, error='Not found')
             return False
@@ -227,7 +237,7 @@ class SecretsManager:
             self._log_access('DELETE', key, success=False, error=str(e))
             return False
     
-    def _persist_secrets(self):
+    def _persist_secrets(self) -> bool:
         """암호화된 비밀 정보를 파일에 저장"""
         try:
             # 전체 캐시를 하나의 파일로 저장
@@ -244,10 +254,17 @@ class SecretsManager:
                 f.write(encrypted_file)
                 
             # 파일 권한 설정 (읽기 전용)
-            os.chmod(self.secrets_path, 0o600)
+            try:
+                os.chmod(self.secrets_path, 0o600)
+            except OSError:
+                # 권한 설정 실패는 무시 (일부 파일 시스템에서는 지원되지 않을 수 있음)
+                pass
+                
+            return True
             
         except Exception as e:
             logger.error(f"비밀 정보 저장 실패: {e}")
+            return False
     
     def _load_secrets(self):
         """파일에서 암호화된 비밀 정보 로드"""
