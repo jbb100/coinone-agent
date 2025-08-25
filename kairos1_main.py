@@ -89,6 +89,14 @@ class KairosSystem:
         self.advanced_performance_analytics = None
         self.opportunistic_buyer = None
         
+        # 분석 실행 추적
+        self.last_analysis_time = None
+        self.analysis_intervals = {
+            "hourly": 3600,    # 1시간
+            "daily": 86400,    # 24시간  
+            "weekly": 604800   # 7일
+        }
+        
         # 시그널 핸들러 설정
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -146,18 +154,17 @@ class KairosSystem:
                 import asyncio
                 asyncio.run(multi_account_manager.initialize())
                 has_multi_accounts = bool(multi_account_manager.accounts)
-                logger.info(f"멀티 계정 관리자 사전 확인: {len(multi_account_manager.accounts) if has_multi_accounts else 0}개 계정")
+                logger.info(f"멀티 계정 관리자 확인: {len(multi_account_manager.accounts) if has_multi_accounts else 0}개 계정")
             except Exception as e:
-                logger.debug(f"멀티 계정 관리자 사전 확인 실패: {e}")
+                logger.debug(f"멀티 계정 관리자 초기 확인 실패: {e}")
             
-            # 필수 설정 검증 (멀티 계정이 있으면 API 키 검증 스킵)
-            required_keys = REQUIRED_CONFIG_KEYS.copy()
-            if has_multi_accounts:
-                # 멀티 계정이 있으면 API 키 관련 필수 검증 제거
-                required_keys = [key for key in required_keys if not key.startswith("api.coinone")]
-                logger.info("멀티 계정 관리자 사용으로 인해 API 키 검증 스킵")
+            # 멀티 계정이 없으면 에러
+            if not has_multi_accounts:
+                logger.error("등록된 계정이 없습니다. --multi-accounts CLI를 사용하여 계정을 먼저 등록하세요.")
+                return False
             
-            if not self.config.validate_required_config(required_keys):
+            # 필수 설정 검증 (API 키는 멀티 계정에서 관리)
+            if not self.config.validate_required_config(REQUIRED_CONFIG_KEYS):
                 logger.error("필수 설정 값이 누락되었습니다.")
                 return False
             
@@ -209,7 +216,7 @@ class KairosSystem:
             # 멀티 계정 관리자 초기화
             self.multi_account_manager = MultiAccountManager()
             
-            # 멀티 계정 관리자에서만 계정 가져오기
+            # 멀티 계정 관리자에서 계정 가져오기
             try:
                 import asyncio
                 # 멀티 계정 관리자 초기화
@@ -226,20 +233,21 @@ class KairosSystem:
                         # 원본 클라이언트에 속도 제한 적용
                         original_client = self.multi_account_manager.clients[primary_account_id]
                         self.coinone_client = create_rate_limited_client(original_client)
-                        logger.info(f"멀티 계정 관리자 사용 (속도 제한 적용): {primary_account_id} 계정")
+                        logger.info(f"멀티 계정 사용 (속도 제한 적용): {primary_account_id} 계정")
                     else:
                         raise ValueError(f"계정 {primary_account_id}의 클라이언트 초기화 실패")
                 else:
-                    raise ValueError("등록된 계정이 없습니다. --setup-multi-account 명령으로 계정을 먼저 등록하세요.")
+                    raise ValueError("등록된 계정이 없습니다. --multi-accounts CLI를 사용하여 계정을 등록하세요.")
                     
             except Exception as e:
                 logger.error(f"멀티 계정 관리자 초기화 실패: {e}")
-                raise ValueError("멀티 계정 관리자 초기화에 실패했습니다. --setup-multi-account 명령으로 계정을 등록하세요.")
+                raise ValueError("멀티 계정 관리자 초기화에 실패했습니다. --multi-accounts CLI를 사용하여 계정을 등록하세요.")
             
-            # 시장 계절 필터
+            # 시장 계절 필터 (DB 매니저 전달하여 고급 분석 통합 가능)
             market_config = self.config.get("strategy.market_season")
             self.market_filter = MarketSeasonFilter(
-                buffer_band=market_config.get("buffer_band", 0.05)
+                buffer_band=market_config.get("buffer_band", 0.05),
+                db_manager=self.db_manager
             )
             
             # 포트폴리오 관리자
@@ -311,7 +319,8 @@ class KairosSystem:
             # 멀티 타임프레임 분석기
             if self.config.get("risk_management.multi_timeframe.enabled", True):
                 self.multi_timeframe_analyzer = MultiTimeframeAnalyzer(
-                    market_season_filter=self.market_filter
+                    market_season_filter=self.market_filter,
+                    db_manager=self.db_manager
                 )
                 logger.info("✅ 멀티 타임프레임 분석기 초기화")
             
@@ -438,10 +447,41 @@ class KairosSystem:
     
 
     
-    def run_weekly_analysis(self, dry_run: bool = False) -> dict:
-        """주간 시장 분석 실행. 시장 계절 변화 시 즉시 리밸런싱을 실행할 수 있습니다."""
+    def should_run_analysis(self, interval: str) -> bool:
+        """
+        분석 실행 여부 결정
+        
+        Args:
+            interval: 분석 주기 ('hourly', 'daily', 'weekly')
+            
+        Returns:
+            실행 필요 여부
+        """
+        if not self.last_analysis_time:
+            return True
+            
+        interval_seconds = self.analysis_intervals.get(interval, 86400)
+        elapsed = (datetime.now() - self.last_analysis_time).total_seconds()
+        
+        return elapsed >= interval_seconds
+    
+    def run_market_analysis(self, dry_run: bool = False, analysis_interval: str = "daily") -> dict:
+        """
+        종합 시장 분석 실행. 고급 분석 모듈을 통합하여 시장 상황을 평가하고 필요시 즉시 리밸런싱을 실행합니다.
+        
+        Args:
+            dry_run: 실제 거래 실행 여부
+            analysis_interval: 분석 주기 ('hourly', 'daily', 'weekly')
+        """
         try:
-            logger.info(f"주간 시장 분석 실행 {'(DRY RUN)' if dry_run else ''}")
+            # 분석 주기 체크
+            if not self.should_run_analysis(analysis_interval):
+                logger.info(f"분석 주기({analysis_interval}) 미도달, 건너뜀")
+                return {"success": False, "reason": "interval_not_reached"}
+            logger.info(f"종합 시장 분석 실행 ({analysis_interval.upper()}) {'(DRY RUN)' if dry_run else ''}")
+            
+            # 고급 분석 모듈 먼저 실행 (주간 분석에서 활용하기 위해)
+            self._run_advanced_analysis_modules()
             
             # BTC 가격 데이터 수집 - Binance API 사용
             # 200주 이동평균 계산을 위해 충분한 데이터 수집
@@ -480,35 +520,164 @@ class KairosSystem:
                 analysis_result["momentum"] = (price_data['Close'].iloc[-1] / price_data['Close'].iloc[-30] - 1) if len(price_data) > 30 else 0
                 analysis_result["volume_trend"] = "상승" if len(price_data) > 1 else "알 수 없음"
                 
-                # 시장 계절 변화 시 알림 및 즉시 리밸런싱
-                if season_changed:
-                    logger.info("시장 계절 변화 감지! 전략적 자산 재배치를 시작합니다.")
-                    self._send_season_change_notification(analysis_result, immediate_rebalance=True)
+                # 고급 분석 반영 배분 정보 추가
+                if analysis_result.get("allocation_weights"):
+                    analysis_result["adjusted_allocation"] = analysis_result["allocation_weights"]
+                
+                # 고급 분석 기반 투자 권장사항 생성
+                trading_recommendation = self.market_filter.generate_trading_recommendation(analysis_result)
+                analysis_result["trading_recommendation"] = trading_recommendation
+                analysis_result["recommendation"] = self._format_recommendation_text(trading_recommendation)
+                
+                # 시장 계절 변화 또는 즉각적 액션이 필요한 경우 리밸런싱 실행
+                needs_rebalancing = season_changed or (
+                    trading_recommendation.get("immediate_action") and 
+                    trading_recommendation.get("action") in ["REBALANCE", "SELL"]
+                )
+                
+                if needs_rebalancing:
+                    # 리밸런싱 이유 로깅
+                    if season_changed:
+                        logger.info("시장 계절 변화 감지! 전략적 자산 재배치를 시작합니다.")
+                        self._send_season_change_notification(analysis_result, immediate_rebalance=True)
+                    else:
+                        action = trading_recommendation.get("action")
+                        strength = trading_recommendation.get("strength", 0)
+                        reasons = trading_recommendation.get("reasons", [])
+                        logger.info(f"🔄 강한 {action} 신호 감지 (강도: {strength:.1%})! 즉시 리밸런싱 필요")
+                        if reasons:
+                            logger.info(f"   리밸런싱 이유: {', '.join(reasons[:3])}")  # 상위 3개 이유만 표시
                     
                     # TWAP 리밸런싱 실행
                     rebalance_result = self.run_quarterly_rebalance_twap(dry_run=dry_run)
                     analysis_result["rebalance_triggered"] = True
                     analysis_result["rebalance_result"] = rebalance_result
+                    analysis_result["rebalance_reason"] = "season_change" if season_changed else f"immediate_{action.lower()}"
                     
                     # 리밸런싱 시작 후 추가 알림
                     if rebalance_result.get("success"):
                         self._send_immediate_rebalance_notification(analysis_result, rebalance_result)
+                
+                # 강한 매수 신호는 기회적 매수로 처리
+                elif trading_recommendation.get("immediate_action") and trading_recommendation.get("action") == "BUY":
+                    logger.info(f"🟢 강한 매수 신호 감지! 기회적 매수 실행 검토")
+                    strength = trading_recommendation.get("strength", 0)
+                    reasons = trading_recommendation.get("reasons", [])
                     
+                    if reasons:
+                        logger.info(f"   매수 이유: {', '.join(reasons[:3])}")  # 상위 3개 이유만 표시
+                    
+                    # 기회적 매수 실행 가능 여부를 분석 결과에 포함
+                    analysis_result["buy_opportunity_detected"] = True
+                    analysis_result["buy_signal_strength"] = strength
+                    
+                    # 실제 기회적 매수 실행 (dry_run 모드 확인)
+                    if not dry_run:
+                        try:
+                            logger.info("💰 강한 매수 신호로 인한 기회적 매수 탐지 시작...")
+                            buy_result = self.check_buy_opportunities(dry_run=dry_run)
+                            if buy_result.get("success") and buy_result.get("opportunities"):
+                                analysis_result["opportunistic_buy_executed"] = True
+                                analysis_result["opportunistic_buy_result"] = buy_result
+                                logger.info(f"✅ 기회적 매수 실행 완료: {len(buy_result.get('opportunities', []))}개 자산")
+                            else:
+                                logger.info("ℹ️ 기회적 매수 조건을 만족하는 자산이 없습니다.")
+                        except Exception as e:
+                            logger.error(f"기회적 매수 실행 중 오류: {e}")
+                    else:
+                        logger.info("🔧 드라이런 모드: 기회적 매수 시뮬레이션만 수행")
+                
                 else:
-                    logger.info("시장 계절에 변화가 없습니다. 기존 전략을 유지합니다.")
+                    logger.info("시장 계절 변화 없음, 즉각적 액션 불필요. 기존 전략 유지합니다.")
                 
-                # Slack으로 분석 보고서 전송
+                # Slack으로 분석 보고서 전송 (주기에 따라 다른 알림 레벨)
                 if self.alert_system:
-                    logger.info("주간 분석 보고서를 Slack으로 전송합니다.")
-                    self.alert_system.send_weekly_analysis_report(analysis_result)
+                    if analysis_interval == "hourly":
+                        # 시간별 분석은 중요한 변화가 있을 때만 알림
+                        if needs_rebalancing or analysis_result.get("buy_opportunity_detected"):
+                            logger.info("중요 변화 감지 - Slack 알림 전송")
+                            self.alert_system.send_market_analysis_report(analysis_result)
+                    else:
+                        # 일별/주별 분석은 항상 보고서 전송
+                        logger.info(f"{analysis_interval.capitalize()} 분석 보고서를 Slack으로 전송합니다.")
+                        self.alert_system.send_market_analysis_report(analysis_result)
                 
-                logger.info("주간 시장 분석 완료")
+                logger.info(f"종합 시장 분석 완료 ({analysis_interval})")
+            
+            # 분석 완료 시간 업데이트
+            self.last_analysis_time = datetime.now()
+            analysis_result["next_analysis_time"] = self.last_analysis_time + timedelta(seconds=self.analysis_intervals.get(analysis_interval, 86400))
             
             return analysis_result
             
         except Exception as e:
-            logger.error(f"주간 시장 분석 실패: {e}")
+            logger.error(f"종합 시장 분석 실패: {e}")
             return {"success": False, "error": str(e)}
+    
+    def _format_recommendation_text(self, recommendation: dict) -> str:
+        """투자 권장사항을 텍스트로 포맷팅"""
+        action = recommendation.get("action", "HOLD")
+        strength = recommendation.get("strength", 0.5)
+        
+        # 기본 행동 텍스트
+        action_text = {
+            "BUY": f"🟢 매수 권장 (강도: {strength:.0%})",
+            "SELL": f"🔴 매도 권장 (강도: {strength:.0%})",
+            "HOLD": "🟡 현상 유지 권장",
+            "REBALANCE": "🔄 리밸런싱 필요"
+        }.get(action, "현상 유지")
+        
+        # 즉시 행동 필요 여부
+        if recommendation.get("immediate_action"):
+            action_text += " ⚠️ 즉시 실행 권장"
+        
+        # 주요 이유 추가
+        reasons = recommendation.get("reasons", [])
+        if reasons:
+            action_text += "\n" + "\n".join(reasons[:3])  # 상위 3개 이유만 표시
+        
+        return action_text
+    
+    def _run_advanced_analysis_modules(self) -> None:
+        """고급 분석 모듈들을 실행하고 DB에 저장"""
+        try:
+            logger.info("고급 분석 모듈 실행 시작")
+            
+            # 1. 멀티 타임프레임 분석
+            if hasattr(self, 'multi_timeframe_analyzer'):
+                try:
+                    import pandas as pd
+                    # 최근 30일 가격 데이터 사용
+                    from src.utils.binance_data_provider import BinanceDataProvider
+                    binance = BinanceDataProvider()
+                    btc_data = binance.get_btc_price_data_for_analysis(weeks_required=5)
+                    if len(btc_data) > 0:
+                        prices = btc_data['Close']
+                        result = self.multi_timeframe_analyzer.analyze_multi_timeframe('BTC', prices)
+                        logger.info(f"멀티 타임프레임 분석 완료: 신뢰도 {result.get('confidence_score', 0):.1%}")
+                except Exception as e:
+                    logger.warning(f"멀티 타임프레임 분석 실패: {e}")
+            
+            # 2. 매크로 경제 분석
+            if hasattr(self, 'macro_economic_analyzer'):
+                try:
+                    result = self.macro_economic_analyzer.analyze_comprehensive_macro()
+                    logger.info(f"매크로 경제 분석 완료: {result.get('market_regime', 'N/A')}")
+                except Exception as e:
+                    logger.warning(f"매크로 경제 분석 실패: {e}")
+            
+            # 3. 온체인 데이터 분석
+            if hasattr(self, 'onchain_data_analyzer'):
+                try:
+                    result = self.onchain_data_analyzer.analyze_comprehensive_onchain('BTC')
+                    logger.info(f"온체인 데이터 분석 완료: {result.get('market_phase', 'N/A')}")
+                except Exception as e:
+                    logger.warning(f"온체인 데이터 분석 실패: {e}")
+            
+            logger.info("고급 분석 모듈 실행 완료")
+            
+        except Exception as e:
+            logger.error(f"고급 분석 모듈 실행 중 오류: {e}")
     
     def check_buy_opportunities(self, dry_run: bool = False) -> dict:
         """
@@ -1289,7 +1458,7 @@ class KairosSystem:
 ✅ 시장 상황에 맞는 최적 포트폴리오로 자동 조정되었습니다.
 ⚡ 기존 미완료 거래소 주문들이 안전하게 취소되었습니다."""
 
-            self.alert_system.send_notification(
+            self.alert_system.send_alert(
                 title="🔄 시장 변화 대응 - 자동 리밸런싱",
                 message=message,
                 alert_type="rebalancing",
@@ -1330,8 +1499,12 @@ class KairosSystem:
             # 활성 주문
             active_orders = self.order_manager.get_active_orders()
             
-            # 리스크 지표
-            risk_score = self.risk_manager.calculate_risk_score(portfolio)
+            # 리스크 지표 (비동기 메서드이므로 간단한 계산으로 대체)
+            # risk_score = self.risk_manager.calculate_risk_score(portfolio)  # 존재하지 않는 메서드
+            total_value = portfolio.get("total_krw", 0)
+            crypto_value = sum(asset.get("value_krw", 0) for asset in portfolio.get("assets", {}).values() 
+                              if asset.get("symbol") != "KRW")
+            risk_score = crypto_value / total_value if total_value > 0 else 0.5  # 암호화폐 비중을 리스크 점수로 사용
             
             status = {
                 "system_time": datetime.now(),
@@ -1427,9 +1600,9 @@ def main():
             sys.exit(1)
         
         # 명령에 따른 실행
-        if args.weekly_analysis:
-            print("🔍 주간 시장 분석 실행...")
-            result = kairos.run_weekly_analysis(args.dry_run)
+        if args.weekly_analysis:  # 하위 호환성 유지
+            print("🔍 종합 시장 분석 실행 (DAILY)...")
+            result = kairos.run_market_analysis(args.dry_run, analysis_interval="daily")
             if result.get("success"):
                 print("✅ 주간 시장 분석 완료")
                 print(f"시장 계절: {result.get('market_season', 'unknown')}")
@@ -1996,7 +2169,6 @@ def main():
             print("\n🏦 멀티 계정 관리:")
             print("  --multi-accounts            : 멀티 계정 관리 CLI 실행")
             print("  --account-status            : 모든 계정 상태 조회")
-            print("  --setup-multi-account       : config API 키를 멀티 계정으로 마이그레이션")
             
             print("\n💡 옵션:")
             print("  --dry-run                   : 실제 거래 없이 시뮬레이션 모드")

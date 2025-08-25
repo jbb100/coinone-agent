@@ -289,8 +289,23 @@ python -m src.cli.portfolio_optimizer_cli status       # 시스템 상태
 메인 실행 파일 `kairos1_main.py`를 통한 단일 계정 실행:
 
 ```bash
-# 주간 시장 분석
+# 종합 시장 분석 (기본: 일별 분석)
+# 고급 분석 시스템을 통합하여 시장 상황을 종합적으로 평가합니다.
+# immediate_action 신호 발생 시 즉시 리밸런싱을 실행할 수 있습니다.
 python kairos1_main.py --weekly-analysis
+
+# 참고: --weekly-analysis 플래그명은 하위 호환성을 위해 유지되었지만,
+# 실제로는 run_market_analysis(analysis_interval="daily")를 실행합니다.
+
+# 분석 주기 커스터마이징 (Python 스크립트에서 직접 호출 시)
+# hourly: 1시간마다 실행 (빠른 대응 필요 시)
+# daily: 24시간마다 실행 (기본값, 정기 점검)
+# weekly: 7일마다 실행 (심층 분석)
+from kairos1_main import KairosSystem
+kairos = KairosSystem()
+kairos.run_market_analysis(dry_run=False, analysis_interval="hourly")  # 시간별
+kairos.run_market_analysis(dry_run=False, analysis_interval="daily")   # 일별
+kairos.run_market_analysis(dry_run=False, analysis_interval="weekly")  # 주별
 
 # 분기별 리밸런싱 (즉시 실행)
 python kairos1_main.py --quarterly-rebalance
@@ -322,14 +337,29 @@ python kairos1_main.py --test-alerts
 
 ### 개별 스크립트 실행
 ```bash
-# 주간 시장 분석 
+# 종합 시장 분석 (구 주간 시장 분석)
+# 기본: 일별 분석 (analysis_interval="daily")
 python scripts/weekly_check.py
 
+# 시간별 분석용 스크립트 (예시)
+# scripts/market_analysis_hourly.py 생성 후 사용
+cat > scripts/market_analysis_hourly.py << 'EOF'
+from kairos1_main import KairosSystem
+kairos = KairosSystem()
+kairos.initialize()
+result = kairos.run_market_analysis(dry_run=False, analysis_interval="hourly")
+EOF
+python scripts/market_analysis_hourly.py
+
 # 분기별 리밸런싱
+# 고급 분석 결과를 반영한 동적 배분 비율 적용
 python scripts/quarterly_rebalance.py
 
 # 성과 분석
 python scripts/performance_report.py
+
+# 기회적 매수 실행
+python scripts/execute_opportunistic_buy.py
 ```
 
 ### 자동 실행 (스케줄러)
@@ -362,6 +392,7 @@ python scripts/performance_report.py
 
 # 1. 전체 계정 통합 리밸런싱 (매주 월요일 09:00)
 # 하나의 스크립트로 모든 계정을 병렬 처리합니다.
+# 주의: 멀티 계정 시스템은 TWAP를 지원하지 않으므로 즉시 실행됩니다.
 0 9 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_multi.py rebalance
 
 # 2. 전체 계정 상태 모니터링 (매일 09:00, 18:00)
@@ -393,14 +424,28 @@ python scripts/performance_report.py
 # KAIROS-1 개별 작업 세분화 자동 실행 스케줄
 # --------------------------------------------------------------------------
 
-# 1. 주간 시장 분석 (매주 월요일 09:00)
-# 시장 계절(Market Season)을 분석하여 위험자산 비중을 결정합니다.
-0 9 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --weekly-analysis
+# 1. 종합 시장 분석 (매일 09:00 - 일별 분석)
+# 고급 분석 시스템을 통합하여 시장 상황을 평가하고 필요시 즉시 리밸런싱을 실행합니다.
+# 기본값: analysis_interval="daily" (24시간 간격 체크)
+0 9 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --weekly-analysis
 
-# 2. 분기별 포트폴리오 리밸런싱 (매 분기 첫째 주 월요일 09:00)
+# 선택 1: 시간별 분석 (매시간 - 빠른 시장 대응)
+# 변동성이 큰 시기에 권장. analysis_interval="hourly" (1시간 간격 체크)
+# 주의: 중복 실행 방지를 위해 should_run_analysis()가 자동으로 주기를 체크합니다.
+# 0 * * * * /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/market_analysis_hourly.py
+
+# 선택 2: 주별 분석 (매주 월요일 - 심층 분석)
+# 장기 투자자용. analysis_interval="weekly" (7일 간격 체크)
+# 0 9 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/market_analysis_weekly.py
+
+# 2. 분기별 포트폴리오 리밸런싱 (매 분기 첫째 주 월요일 10:00)
 # TWAP 분할 매매를 시작하여 포트폴리오를 목표 비중으로 조정합니다.
+# 고급 분석 결과를 반영하여 동적으로 배분 비율을 조정합니다.
 # (1월, 4월, 7월, 10월의 첫 7일 중 월요일에만 실행)
-0 9 1-7 1,4,7,10 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --quarterly-rebalance-twap
+0 10 1-7 1,4,7,10 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --quarterly-rebalance-twap
+
+# 주의: 종합 시장 분석에서 immediate_action 신호가 발생하면 분기별 일정과 관계없이
+# 즉시 리밸런싱이 실행될 수 있습니다. 이는 시장 급변 시 빠른 대응을 위한 기능입니다.
 
 # 3. 대기 중인 TWAP 주문 처리 (15분마다 실행)
 # 분할 매매가 시작된 주문을 지속적으로 처리합니다.
@@ -803,7 +848,16 @@ python kairos1_main.py --process-twap
 
 ## 📈 업데이트 내역
 
-### v3.3.0 (2025.02) - Opportunistic Buying System 🆕
+### v3.4.0 (2025.02) - Enhanced Market Analysis & Dynamic Rebalancing 🆕
+- ✅ **🔄 종합 시장 분석 개선**: 주간 → 일별/시간별 분석으로 전환, 더 기민한 시장 대응
+- ✅ **⏱️ 유연한 분석 주기**: hourly(1시간), daily(24시간), weekly(7일) 선택 가능
+- ✅ **🔒 중복 실행 방지**: should_run_analysis()로 자동 주기 체크, 불필요한 재실행 방지
+- ✅ **⚡ immediate_action 기반 리밸런싱**: 시장 급변 시 분기별 일정 무관하게 즉시 실행
+- ✅ **📊 고급 분석 통합 리밸런싱**: 멀티 타임프레임, 매크로 경제 등 분석 결과 실시간 반영
+- ✅ **🎯 동적 배분 비율**: 하드코딩이 아닌 고급 분석 기반 자산 배분 자동 조정
+- ✅ **📈 강한 매수 신호 처리**: BUY + immediate_action 시 기회적 매수 자동 실행
+
+### v3.3.0 (2025.02) - Opportunistic Buying System
 - ✅ **💰 기회적 매수 시스템**: RSI 과매도 구간에서 현금 활용한 추가 매수
 - ✅ **📉 다층적 기회 판단**: 7일/30일 하락률, RSI, 공포탐욕 지수 종합 분석
 - ✅ **🎯 5단계 매수 레벨**: MINOR(5-10%), MODERATE(10-20%), MAJOR(20-30%), EXTREME(30%+)

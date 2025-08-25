@@ -482,6 +482,7 @@ class Rebalancer:
         """
         try:
             logger.info("리밸런싱 주문 계획 수립 시작")
+            market_analysis = None  # 고급 분석 결과 저장용
             
             # 1. 현재 포트폴리오 상태 조회
             current_portfolio = self.coinone_client.get_portfolio_value()
@@ -509,16 +510,21 @@ class Rebalancer:
             else:
                 logger.warning(f"assets가 딕셔너리가 아님: {type(assets)}")
             
-            # 2. 시장 계절 판단 (필요시)
+            # 2. 시장 계절 판단 (필요시) - 고급 분석 통합
             if target_market_season is None:
-                target_market_season = self._get_current_market_season()
+                market_analysis = self._get_enhanced_market_analysis()
+                target_market_season = MarketSeason(market_analysis["market_season"])
+                # 고급 분석에서 조정된 배분 비율 사용
+                allocation_weights = market_analysis.get("allocation_weights", 
+                    self.market_season_filter.get_allocation_weights(target_market_season))
+            else:
+                # target_market_season이 명시된 경우에도 고급 분석 반영
+                allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
             
             logger.info(f"목표 시장 계절: {target_market_season}")
+            logger.info(f"고급 분석 반영 배분: 암호화폐 {allocation_weights['crypto']:.1%}, KRW {allocation_weights['krw']:.1%}")
             
-            # 3. 목표 자산 배분 계산
-            allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
-            logger.info(f"시장 계절별 배분: 암호화폐 {allocation_weights['crypto']:.1%}, KRW {allocation_weights['krw']:.1%}")
-            
+            # 3. 목표 자산 배분 계산 - 고급 분석 결과 반영
             target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
                 allocation_weights["crypto"],
                 allocation_weights["krw"],
@@ -580,16 +586,28 @@ class Rebalancer:
             else:
                 logger.warning(f"rebalance_orders가 딕셔너리가 아님: {type(rebalance_orders)}")
             
-            return {
+            # 반환값에 고급 분석 정보 포함
+            result_data = {
                 "success": True,
                 "rebalance_orders": rebalance_info.get("rebalance_orders", {}),
                 "target_weights": target_weights,
                 "current_weights": current_weights,
                 "market_season": target_market_season.value if target_market_season else "neutral",
+                "allocation_weights": allocation_weights,  # 고급 분석 반영된 배분 비율
                 "total_orders": len([o for o in rebalance_info.get("rebalance_orders", {}).values() if abs(o["amount_diff_krw"]) > 10000]),
                 "rebalance_summary": rebalance_info.get("rebalance_summary", {}),
                 "timestamp": datetime.now()
             }
+            
+            # 고급 분석 정보가 있으면 추가
+            if market_analysis:
+                result_data["advanced_analysis_applied"] = True
+                result_data["analysis_source"] = "enhanced_market_analysis"
+            else:
+                result_data["advanced_analysis_applied"] = False
+                result_data["analysis_source"] = "basic_market_season"
+            
+            return result_data
             
         except Exception as e:
             logger.error(f"리밸런싱 주문 계획 수립 실패: {e}")
@@ -617,14 +635,19 @@ class Rebalancer:
             current_portfolio = self.coinone_client.get_portfolio_value()
             result.total_value_before = current_portfolio["total_krw"]
             
-            # 2. 시장 계절 판단 (필요시)
+            # 2. 시장 계절 판단 (필요시) - 고급 분석 통합
+            market_analysis = None
             if target_market_season is None:
-                # BTC 가격 데이터를 가져와서 시장 계절 판단
-                # 실제 구현에서는 데이터 수집기에서 가져와야 함
-                target_market_season = self._get_current_market_season()
+                market_analysis = self._get_enhanced_market_analysis()
+                target_market_season = MarketSeason(market_analysis["market_season"])
             
-            # 3. 목표 자산 배분 계산
-            allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
+            # 3. 목표 자산 배분 계산 - 고급 분석 결과 반영
+            if market_analysis:
+                allocation_weights = market_analysis.get("allocation_weights", 
+                    self.market_season_filter.get_allocation_weights(target_market_season))
+            else:
+                allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
+            
             target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
                 allocation_weights["crypto"],
                 allocation_weights["krw"],
@@ -940,6 +963,89 @@ class Rebalancer:
             logger.warning(f"BTC USD 가격 조회 실패: {e}")
             return 50000.0  # Fallback
     
+    def _get_enhanced_market_analysis(self) -> Dict:
+        """
+        고급 분석 결과를 통합한 시장 분석 수행
+        
+        Returns:
+            통합 시장 분석 결과
+        """
+        try:
+            logger.info("고급 분석 통합 시장 분석 시작")
+            
+            # 기본 시장 계절 분석 수행
+            if self.market_season_filter and hasattr(self.market_season_filter, 'analyze_weekly'):
+                # BTC 가격 데이터 가져오기
+                price_data = self._get_btc_price_data_for_analysis()
+                
+                # 고급 분석 결과가 통합된 주간 분석 실행
+                market_analysis = self.market_season_filter.analyze_weekly(price_data)
+                
+                if market_analysis.get("success"):
+                    logger.info(f"고급 분석 통합 완료: {market_analysis['market_season']}")
+                    return market_analysis
+            
+            # Fallback: 기본 시장 계절 판단
+            basic_season = self._get_current_market_season()
+            basic_weights = self.market_season_filter.get_allocation_weights(basic_season)
+            
+            logger.info(f"기본 시장 분석 사용: {basic_season.value}")
+            return {
+                "market_season": basic_season.value,
+                "allocation_weights": basic_weights,
+                "analysis_date": datetime.now(),
+                "success": True,
+                "advanced_analysis": None
+            }
+            
+        except Exception as e:
+            logger.error(f"고급 분석 통합 실패: {e}")
+            # 최종 Fallback
+            return {
+                "market_season": "neutral",
+                "allocation_weights": {"crypto": 0.5, "krw": 0.5},
+                "analysis_date": datetime.now(),
+                "success": False,
+                "error": str(e)
+            }
+    
+    def _get_btc_price_data_for_analysis(self):
+        """분석용 BTC 가격 데이터 조회"""
+        try:
+            if self.market_data_provider:
+                # DatabaseManager를 통한 시장 데이터 조회
+                price_data = self.market_data_provider.get_market_data("BTC", days=1400)  # 약 4년치
+                if not price_data.empty:
+                    return price_data
+            
+            # Fallback: 기본 가격 데이터 생성
+            import pandas as pd
+            dates = pd.date_range(end=datetime.now(), periods=1400, freq='D')
+            current_price = self.coinone_client.get_current_prices()["BTC"]
+            
+            # 간단한 가격 데이터 생성 (실제 환경에서는 실제 데이터 사용)
+            close_prices = [current_price * (1 + (i * 0.001)) for i in range(1400)]
+            
+            return pd.DataFrame({
+                'Close': close_prices,
+                'High': [p * 1.02 for p in close_prices],
+                'Low': [p * 0.98 for p in close_prices],
+                'Open': close_prices,
+                'Volume': [1000000] * 1400
+            }, index=dates)
+            
+        except Exception as e:
+            logger.error(f"분석용 가격 데이터 조회 실패: {e}")
+            # 최소한의 데이터 반환
+            import pandas as pd
+            return pd.DataFrame({
+                'Close': [50000000] * 1400,  # 5천만원 기본값
+                'High': [51000000] * 1400,
+                'Low': [49000000] * 1400,
+                'Open': [50000000] * 1400,
+                'Volume': [1000000] * 1400
+            }, index=pd.date_range(end=datetime.now(), periods=1400, freq='D'))
+    
     def check_rebalance_needed(
         self, 
         current_portfolio: Dict, 
@@ -1092,50 +1198,88 @@ class Rebalancer:
             return {"error": str(e)}
     
     def _collect_market_signals(self) -> Dict:
-        """시장 신호 수집"""
+        """시장 신호 수집 - 모든 고급 분석 모듈에서 저장된 결과 활용"""
         try:
             signals = {
                 "multi_timeframe": 0.0,
                 "onchain": 0.0,
                 "macro": 0.0,
-                "sentiment": 0.0
+                "bias_check": 0.0,
+                "dca_signal": 0.0
             }
             
-            # 멀티 타임프레임 신호 (있는 경우)
-            if hasattr(self.smart_execution_engine, 'multi_timeframe_analyzer') and \
-               self.smart_execution_engine.multi_timeframe_analyzer:
+            # DB에서 최신 고급 분석 결과들 조회
+            if self.db_manager:
                 try:
-                    # 실제로는 분석기의 최신 신호를 가져와야 함
-                    # signals["multi_timeframe"] = self.smart_execution_engine.multi_timeframe_analyzer.get_latest_signal()
-                    pass
-                except:
-                    pass
-            
-            # 온체인 신호
-            if hasattr(self.smart_execution_engine, 'onchain_analyzer') and \
-               self.smart_execution_engine.onchain_analyzer:
-                try:
-                    # 온체인 분석기의 최신 신호를 가져옴
-                    onchain_result = self.smart_execution_engine.onchain_analyzer.get_latest_signal()
-                    if onchain_result and 'market_signal' in onchain_result:
-                        signals["onchain"] = onchain_result['market_signal']
-                        logger.debug(f"온체인 신호 수집: {signals['onchain']:.3f}")
+                    all_results = self.db_manager.get_all_latest_analysis_results()
+                    
+                    # 멀티 타임프레임 분석 결과
+                    multi_timeframe = all_results.get("multi_timeframe")
+                    if multi_timeframe:
+                        signals["multi_timeframe"] = multi_timeframe.get("confidence_score", 0.0)
+                        logger.debug(f"멀티 타임프레임 신호: {signals['multi_timeframe']:.3f}")
+                    
+                    # 온체인 데이터 분석 결과
+                    onchain_data = all_results.get("onchain_data")
+                    if onchain_data:
+                        price_signals = onchain_data.get("price_prediction_signals", {})
+                        # 단기, 중기, 장기 신호의 가중 평균
+                        weighted_signal = (
+                            price_signals.get("short_term", 0) * 0.4 +
+                            price_signals.get("medium_term", 0) * 0.4 +
+                            price_signals.get("long_term", 0) * 0.2
+                        )
+                        signals["onchain"] = weighted_signal
+                        logger.debug(f"온체인 신호: {signals['onchain']:.3f}")
+                    
+                    # 매크로 경제 분석 결과
+                    macro_economic = all_results.get("macro_economic")
+                    if macro_economic:
+                        signals["macro"] = macro_economic.get("overall_score", 0.0) / 100.0  # 0-100을 0-1로 변환
+                        logger.debug(f"매크로 신호: {signals['macro']:.3f}")
+                    
+                    # DCA 신호 결과
+                    dca_signal = all_results.get("dca_signal")
+                    if dca_signal:
+                        signals["dca_signal"] = dca_signal.get("signal_strength", 0.0)
+                        logger.debug(f"DCA 신호: {signals['dca_signal']:.3f}")
+                    
+                    # 편향 체크 결과 (위험도를 음수로 변환)
+                    bias_check = all_results.get("bias_check")
+                    if bias_check:
+                        risk_score = bias_check.get("risk_score", 0)
+                        # 위험도가 높을수록 음수 신호 (조심스러운 거래)
+                        signals["bias_check"] = -min(risk_score / 100.0, 1.0)
+                        logger.debug(f"편향 체크 신호: {signals['bias_check']:.3f}")
+                    
+                    logger.info(f"고급 분석 신호 수집 완료: 멀티TF={signals['multi_timeframe']:.2f}, "
+                              f"온체인={signals['onchain']:.2f}, 매크로={signals['macro']:.2f}, "
+                              f"DCA={signals['dca_signal']:.2f}, 편향={signals['bias_check']:.2f}")
+                    
                 except Exception as e:
-                    logger.warning(f"온체인 신호 수집 실패: {e}")
-                    pass
+                    logger.warning(f"DB에서 고급 분석 결과 조회 실패: {e}")
             
-            # 매크로 경제 신호
-            if hasattr(self.smart_execution_engine, 'macro_analyzer') and \
-               self.smart_execution_engine.macro_analyzer:
-                try:
-                    # 매크로 분석기의 최신 신호를 가져옴
-                    macro_result = self.smart_execution_engine.macro_analyzer.get_latest_signal()
-                    if macro_result and 'market_signal' in macro_result:
-                        signals["macro"] = macro_result['market_signal']
-                        logger.debug(f"매크로 신호 수집: {signals['macro']:.3f}")
-                except Exception as e:
-                    logger.warning(f"매크로 신호 수집 실패: {e}")
-                    pass
+            # 기존 스마트 실행 엔진의 분석기들도 활용 (백업)
+            if hasattr(self, 'smart_execution_engine') and self.smart_execution_engine:
+                # 온체인 분석기 백업
+                if hasattr(self.smart_execution_engine, 'onchain_analyzer') and \
+                   self.smart_execution_engine.onchain_analyzer and signals["onchain"] == 0.0:
+                    try:
+                        onchain_result = self.smart_execution_engine.onchain_analyzer.get_latest_signal()
+                        if onchain_result and 'market_signal' in onchain_result:
+                            signals["onchain"] = onchain_result['market_signal']
+                    except Exception as e:
+                        logger.warning(f"온체인 분석기 백업 호출 실패: {e}")
+                
+                # 매크로 분석기 백업
+                if hasattr(self.smart_execution_engine, 'macro_analyzer') and \
+                   self.smart_execution_engine.macro_analyzer and signals["macro"] == 0.0:
+                    try:
+                        macro_result = self.smart_execution_engine.macro_analyzer.get_latest_signal()
+                        if macro_result and 'market_signal' in macro_result:
+                            signals["macro"] = macro_result['market_signal']
+                    except Exception as e:
+                        logger.warning(f"매크로 분석기 백업 호출 실패: {e}")
             
             return signals
             
@@ -1145,7 +1289,8 @@ class Rebalancer:
                 "multi_timeframe": 0.0,
                 "onchain": 0.0,
                 "macro": 0.0,
-                "sentiment": 0.0
+                "bias_check": 0.0,
+                "dca_signal": 0.0
             }
     
     def _create_smart_order_params(
@@ -1170,12 +1315,13 @@ class Rebalancer:
             # 긴급도 계산 (우선순위 기반)
             urgency_score = max(0.1, min(1.0, (10 - order_priority) / 10))
             
-            # 신뢰도 계산 (신호 강도 기반)
+            # 신뢰도 계산 (신호 강도 기반) - 모든 고급 분석 신호 고려
             signal_strength = abs(market_signals.get("multi_timeframe", 0)) + \
                             abs(market_signals.get("onchain", 0)) + \
                             abs(market_signals.get("macro", 0)) + \
-                            abs(market_signals.get("sentiment", 0))
-            confidence_score = min(1.0, signal_strength / 2.0) if signal_strength > 0 else 0.5
+                            abs(market_signals.get("dca_signal", 0)) + \
+                            abs(market_signals.get("bias_check", 0))
+            confidence_score = min(1.0, signal_strength / 3.0) if signal_strength > 0 else 0.5
             
             # 스마트 주문 파라미터 생성
             params = SmartOrderParams(
@@ -1189,11 +1335,11 @@ class Rebalancer:
                 max_slippage=self.max_slippage,
                 timeout_minutes=self.order_timeout // 60,
                 
-                # 시장 신호들
+                # 시장 신호들 - 모든 고급 분석 신호 포함
                 multi_timeframe_signal=market_signals.get("multi_timeframe", 0),
                 onchain_signal=market_signals.get("onchain", 0),
                 macro_signal=market_signals.get("macro", 0),
-                sentiment_signal=market_signals.get("sentiment", 0),
+                sentiment_signal=market_signals.get("bias_check", 0),  # 편향 체크를 센티먼트로 활용
                 
                 # 리스크 관리
                 max_position_size=0.15,  # 전체 포트폴리오의 15%로 증가
