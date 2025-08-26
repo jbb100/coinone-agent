@@ -1229,8 +1229,7 @@ class DatabaseManager:
                 price_data = provider.get_historical_klines(
                     symbol=binance_symbol,
                     interval="1d",
-                    start_date=start_date,
-                    limit=days
+                    start_date=start_date
                 )
                 
                 if not price_data.empty:
