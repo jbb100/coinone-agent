@@ -33,18 +33,27 @@ async def main():
         logger.info("=" * 50)
         logger.info(f"기회적 매수 실행 시작: {datetime.now()}")
         
-        # 설정 파일 로드
+        # 설정 파일 로드 (멀티계정 시스템에서는 API 키 검증 생략)
         config_path = project_root / "config" / "config.yaml"
         if config_path.exists():
-            config = ConfigLoader(str(config_path))
+            config = ConfigLoader(str(config_path), skip_api_validation=True)
+            # 멀티계정 시스템에서는 API 키 검증 불필요
+            logger.info("설정 파일 로드 완료 (멀티계정 모드)")
         else:
             # 간단한 config 객체 생성
             class SimpleConfig:
                 def get(self, key, default=None):
                     if key == "database.sqlite_path":
                         return str(project_root / "data" / "kairos.db")
+                    elif key == "logging.level":
+                        return "INFO"
                     return default
+                
+                def get_config(self):
+                    return {}
+                    
             config = SimpleConfig()
+            logger.info("기본 설정으로 실행 (config.yaml 없음)")
         
         # 멀티 계정 관리자 초기화
         multi_account_manager = MultiAccountManager()
@@ -103,7 +112,7 @@ async def main():
         
         # 매수 기회 식별
         target_assets = strategy.get("target_assets", ["BTC", "ETH", "SOL", "AVAX"])
-        opportunities = opportunistic_buyer.identify_opportunities(target_assets)
+        opportunities, no_opportunity_reasons = opportunistic_buyer.identify_opportunities(target_assets)
         
         if not opportunities:
             logger.info("현재 매수 기회가 없습니다")

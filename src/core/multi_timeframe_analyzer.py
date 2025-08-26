@@ -66,12 +66,14 @@ class MultiTimeframeAnalyzer:
     보다 정교한 투자 결정을 지원합니다.
     """
     
-    def __init__(self, market_season_filter: MarketSeasonFilter):
+    def __init__(self, market_season_filter: MarketSeasonFilter, db_manager=None):
         """
         Args:
             market_season_filter: 기존 시장 계절 필터
+            db_manager: DatabaseManager 인스턴스 (선택사항)
         """
         self.market_season_filter = market_season_filter
+        self.db_manager = db_manager
         
         # 비트코인 반감기 날짜들 (UTC 기준)
         self.halving_dates = [
@@ -111,6 +113,10 @@ class MultiTimeframeAnalyzer:
             
             # 전체 분석 수행
             result = self.analyze_all_timeframes(df)
+            
+            # 분석 결과를 DB에 저장
+            if self.db_manager:
+                self._save_analysis_to_db(result, symbol)
             
             # 외부 인터페이스에 맞는 형태로 반환
             return self.get_analysis_summary(result)
@@ -285,8 +291,11 @@ class MultiTimeframeAnalyzer:
             support_level = ma_200w * 0.85  # 15% 아래
             resistance_level = ma_200w * 1.15  # 15% 위
             
-            # 신뢰도 (200주 MA는 일반적으로 신뢰도 높음)
-            confidence = 0.8
+            # 신뢰도 계산 (가격과 MA의 거리가 가까울수록 신뢰도 높음)
+            price_deviation = abs(price_ratio - 1.0)
+            base_confidence = 0.8  # 기본 신뢰도
+            deviation_penalty = min(price_deviation * 2, 0.4)  # 너무 벗어나면 신뢰도 감소
+            confidence = max(base_confidence - deviation_penalty, 0.3)
             
             return TimeframeAnalysis(
                 timeframe="medium_term_200w",
@@ -357,8 +366,22 @@ class MultiTimeframeAnalyzer:
             yearly_high = close_prices.tail(365).max() if len(close_prices) > 365 else current_price * 2
             yearly_low = close_prices.tail(365).min() if len(close_prices) > 365 else current_price * 0.5
             
-            # 신뢰도는 사이클 단계에 따라
-            confidence = 0.9 if 0.1 < cycle_progress < 0.9 else 0.6
+            # 신뢰도 계산 (사이클 진행도와 가격 동작 기반)
+            price_from_yearly_low = (current_price - yearly_low) / (yearly_high - yearly_low) if yearly_high > yearly_low else 0.5
+            
+            # 사이클 진행도 및 가격 위치 기반 신뢰도
+            if 0.2 < cycle_progress < 0.8:  # 사이클 중간
+                base_confidence = 0.7
+            else:  # 사이클 초기/말기
+                base_confidence = 0.5
+            
+            # 가격 위치에 따른 조정
+            if 0.3 < price_from_yearly_low < 0.7:  # 중간 영역에 있으면 신뢰도 감소
+                price_adjustment = -0.1
+            else:
+                price_adjustment = 0.1
+            
+            confidence = min(max(base_confidence + price_adjustment, 0.3), 0.8)
             
             return TimeframeAnalysis(
                 timeframe="long_term_4y",
@@ -422,13 +445,13 @@ class MultiTimeframeAnalyzer:
         # 시간대별 일치도 확인
         trends = [short.trend_direction, medium.trend_direction, long.trend_direction]
         
-        # 같은 방향이 많을수록 신뢰도 높음
+        # 같은 방향이 많을수록 신뢰도 높음 (보너스 감소)
         if trends.count(TrendDirection.BULLISH) >= 2:
-            alignment_bonus = 0.3
+            alignment_bonus = 0.15  # 30% -> 15%로 감소
         elif trends.count(TrendDirection.BEARISH) >= 2:
-            alignment_bonus = 0.3
+            alignment_bonus = 0.15  # 30% -> 15%로 감소
         else:
-            alignment_bonus = 0.0
+            alignment_bonus = -0.05  # 방향이 다르면 신뢰도 감소
         
         # 각 시간대 신뢰도의 가중평균
         weighted_confidence = (
@@ -546,6 +569,46 @@ class MultiTimeframeAnalyzer:
                 "long_term_resistance": result.long_term.resistance_level
             }
         }
+    
+    def _save_analysis_to_db(self, result: MultiTimeframeResult, symbol: str):
+        """분석 결과를 DB에 저장"""
+        try:
+            analysis_data = {
+                "analysis_date": datetime.now().isoformat(),
+                "symbol": symbol,
+                "short_term": {
+                    "trend": result.short_term.trend_direction.value,
+                    "strength": result.short_term.strength,
+                    "support": result.short_term.support_level,
+                    "resistance": result.short_term.resistance_level,
+                    "confidence": result.short_term.confidence
+                },
+                "medium_term": {
+                    "trend": result.medium_term.trend_direction.value,
+                    "strength": result.medium_term.strength,
+                    "support": result.medium_term.support_level,
+                    "resistance": result.medium_term.resistance_level,
+                    "confidence": result.medium_term.confidence
+                },
+                "long_term": {
+                    "trend": result.long_term.trend_direction.value,
+                    "strength": result.long_term.strength,
+                    "support": result.long_term.support_level,
+                    "resistance": result.long_term.resistance_level,
+                    "confidence": result.long_term.confidence
+                },
+                "market_season": result.market_season.value,
+                "cycle_phase": result.cycle_phase.value,
+                "overall_confidence": result.overall_confidence,
+                "recommended_allocation": result.recommended_allocation,
+                "confidence_score": result.overall_confidence
+            }
+            
+            self.db_manager.save_analysis_result("multi_timeframe", analysis_data)
+            logger.info(f"멀티 타임프레임 분석 결과 DB 저장 완료: {symbol}")
+            
+        except Exception as e:
+            logger.error(f"멀티 타임프레임 분석 결과 DB 저장 실패: {e}")
 
 
 # 유틸리티 함수들

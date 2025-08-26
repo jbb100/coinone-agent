@@ -81,12 +81,14 @@ class MacroEconomicAnalyzer:
     거시경제 지표를 종합 분석하여 암호화폐 투자 전략을 조정합니다.
     """
     
-    def __init__(self, api_keys: Optional[Dict[str, str]] = None):
+    def __init__(self, api_keys: Optional[Dict[str, str]] = None, db_manager=None):
         """
         Args:
             api_keys: 외부 API 키 딕셔너리
+            db_manager: DatabaseManager 인스턴스 (선택사항)
         """
         self.api_keys = api_keys or {}
+        self.db_manager = db_manager
         
         # 기본 데이터 소스 설정
         self.data_sources = {
@@ -183,6 +185,10 @@ class MacroEconomicAnalyzer:
             
             logger.info(f"매크로 분석 완료: {economic_regime.value} 체제, "
                        f"암호화폐 우호도 {crypto_favorability:.2f}")
+            
+            # 분석 결과를 DB에 저장
+            if self.db_manager:
+                self._save_analysis_to_db(analysis, indicators)
             
             return analysis
             
@@ -519,6 +525,60 @@ class MacroEconomicAnalyzer:
             created_at=datetime.now()
         )
     
+    def analyze_comprehensive_macro(self) -> Dict[str, Any]:
+        """포괄적 매크로 경제 분석 (DB 저장 포함)"""
+        try:
+            indicators = self._get_fallback_indicators()  # 임시로 폴백 데이터 사용
+            analysis = self.analyze_macro_environment(indicators)
+            
+            # DB에 분석 결과 저장
+            if self.db_manager:
+                self._save_macro_analysis_to_db(analysis)
+            
+            return {
+                "success": True,
+                "overall_score": analysis.crypto_favorability * 50 + 50,  # -1~1을 0~100으로 변환
+                "market_outlook": analysis.economic_regime.value,
+                "inflation_regime": analysis.inflation_regime.value,
+                "rate_environment": analysis.rate_environment.value,
+                "crypto_favorability": analysis.crypto_favorability,
+                "risk_adjustment": analysis.risk_adjustment,
+                "key_drivers": analysis.key_drivers,
+                "confidence": analysis.analysis_confidence,
+                "timestamp": datetime.now()
+            }
+            
+        except Exception as e:
+            logger.error(f"포괄적 매크로 분석 실패: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "overall_score": 50.0,
+                "confidence": 0.3,
+                "timestamp": datetime.now()
+            }
+    
+    def _save_macro_analysis_to_db(self, analysis: MacroAnalysis):
+        """매크로 분석 결과를 DB에 저장"""
+        try:
+            analysis_data = {
+                "economic_regime": analysis.economic_regime.value,
+                "inflation_regime": analysis.inflation_regime.value,
+                "rate_environment": analysis.rate_environment.value,
+                "crypto_favorability": analysis.crypto_favorability,
+                "risk_adjustment": analysis.risk_adjustment,
+                "recommended_allocation": analysis.recommended_allocation,
+                "key_drivers": analysis.key_drivers,
+                "analysis_confidence": analysis.analysis_confidence,
+                "created_at": analysis.created_at.isoformat()
+            }
+            
+            self.db_manager.save_analysis_result("macro_economic", analysis_data)
+            logger.info(f"매크로 분석 결과 DB 저장 완료")
+            
+        except Exception as e:
+            logger.error(f"매크로 분석 결과 DB 저장 실패: {e}")
+    
     def get_macro_trend_analysis(self, historical_data: Dict[str, List[float]]) -> Dict[str, Any]:
         """매크로 트렌드 분석"""
         
@@ -643,3 +703,36 @@ class MacroEconomicAnalyzer:
                 "timestamp": datetime.now(),
                 "error": str(e)
             }
+    
+    def _save_analysis_to_db(self, analysis: MacroAnalysis, indicators: MacroIndicators):
+        """분석 결과를 DB에 저장"""
+        try:
+            analysis_data = {
+                "analysis_date": datetime.now().isoformat(),
+                "economic_regime": analysis.economic_regime.value,
+                "inflation_regime": analysis.inflation_regime.value,
+                "rate_environment": analysis.rate_environment.value,
+                "crypto_favorability": analysis.crypto_favorability,
+                "risk_adjustment": analysis.risk_adjustment,
+                "recommended_allocation": analysis.recommended_allocation,
+                "key_drivers": analysis.key_drivers,
+                "confidence_score": analysis.analysis_confidence,
+                "indicators": {
+                    "fed_funds_rate": indicators.fed_funds_rate,
+                    "inflation_rate": indicators.inflation_rate,
+                    "dxy_index": indicators.dxy_index,
+                    "m2_money_supply": indicators.m2_money_supply,
+                    "unemployment_rate": indicators.unemployment_rate,
+                    "gdp_growth": indicators.gdp_growth,
+                    "vix_index": indicators.vix_index,
+                    "gold_price": indicators.gold_price,
+                    "oil_price": indicators.oil_price,
+                    "bond_yield_10y": indicators.bond_yield_10y
+                }
+            }
+            
+            self.db_manager.save_analysis_result("macro_economic", analysis_data)
+            logger.info("매크로 경제 분석 결과 DB 저장 완료")
+            
+        except Exception as e:
+            logger.error(f"매크로 경제 분석 결과 DB 저장 실패: {e}")

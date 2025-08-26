@@ -101,12 +101,14 @@ class OnchainDataAnalyzer:
     블록체인 온체인 데이터를 분석하여 시장 인사이트를 제공합니다.
     """
     
-    def __init__(self, api_keys: Optional[Dict[str, str]] = None):
+    def __init__(self, api_keys: Optional[Dict[str, str]] = None, db_manager=None):
         """
         Args:
             api_keys: 외부 API 키 딕셔너리 (Glassnode, CryptoQuant 등)
+            db_manager: 데이터베이스 매니저 인스턴스
         """
         self.api_keys = api_keys or {}
+        self.db_manager = db_manager
         
         # 온체인 데이터 제공자 설정
         self.data_providers = {
@@ -231,6 +233,10 @@ class OnchainDataAnalyzer:
                 confidence_level=confidence,
                 created_at=datetime.now()
             )
+            
+            # DB에 분석 결과 저장
+            if self.db_manager:
+                self._save_analysis_to_db(analysis, asset)
             
             logger.info(f"{asset} 온체인 분석 완료: {overall_trend.value}, 축적점수 {accumulation_score:.1f}")
             return analysis
@@ -756,3 +762,51 @@ class OnchainDataAnalyzer:
             confidence_level=0.3,
             created_at=datetime.now()
         )
+    
+    def _save_analysis_to_db(self, analysis: OnchainAnalysis, asset: str):
+        """분석 결과를 DB에 저장"""
+        try:
+            analysis_data = {
+                "overall_trend": analysis.overall_trend.value,
+                "whale_activity": analysis.whale_activity.value,
+                "exchange_flow": analysis.exchange_flow.value,
+                "accumulation_score": analysis.accumulation_score,
+                "distribution_score": analysis.distribution_score,
+                "network_health_score": analysis.network_health_score,
+                "market_sentiment": analysis.market_sentiment,
+                "key_insights": analysis.key_insights,
+                "price_prediction_signals": analysis.price_prediction_signals,
+                "confidence_level": analysis.confidence_level,
+                "asset": asset,
+                "created_at": analysis.created_at.isoformat()
+            }
+            
+            self.db_manager.save_analysis_result("onchain_data", analysis_data)
+            logger.info(f"온체인 분석 결과 DB 저장 완료: {asset}")
+            
+        except Exception as e:
+            logger.error(f"온체인 분석 결과 DB 저장 실패: {e}")
+    
+    def analyze_comprehensive_onchain(self, asset: str = "BTC") -> Dict[str, Any]:
+        """포괄적 온체인 분석 (DB 저장 포함)"""
+        try:
+            metrics = self.collect_onchain_metrics(asset)
+            analysis = self.analyze_onchain_data(metrics, asset)
+            
+            return {
+                "success": True,
+                "analysis": analysis,
+                "metrics": metrics,
+                "signals": analysis.price_prediction_signals,
+                "confidence": analysis.confidence_level,
+                "timestamp": datetime.now()
+            }
+            
+        except Exception as e:
+            logger.error(f"포괄적 온체인 분석 실패: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "confidence": 0.3,
+                "timestamp": datetime.now()
+            }

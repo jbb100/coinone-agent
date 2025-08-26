@@ -82,12 +82,14 @@ class DCAPlus:
     시장 상황을 고려한 지능형 적립식 투자 시스템
     """
     
-    def __init__(self, market_data_provider: Optional[MarketDataProvider] = None):
+    def __init__(self, market_data_provider: Optional[MarketDataProvider] = None, db_manager=None):
         """
         Args:
             market_data_provider: 시장 데이터 제공자
+            db_manager: 데이터베이스 매니저 인스턴스
         """
         self.market_data_provider = market_data_provider
+        self.db_manager = db_manager
         
         # 기본 설정
         self.default_schedule = DCASchedule(
@@ -240,6 +242,10 @@ class DCAPlus:
             logger.info(f"DCA 신호 생성 완료: {asset} - 강도 {signal_strength:.2f}, "
                        f"권장금액 {recommended_amount:,.0f} KRW ({market_adjustment_factor:.2f}x)")
             logger.info(f"근거: {reasoning}")
+            
+            # DB에 DCA 신호 저장
+            if self.db_manager:
+                self._save_dca_signal_to_db(dca_signal, asset)
             
             return dca_signal
             
@@ -732,3 +738,53 @@ class DCAPlus:
         except Exception as e:
             logger.error(f"DCA 성과 지표 계산 실패: {e}")
             return {}
+    
+    def _save_dca_signal_to_db(self, signal: DCASignal, asset: str):
+        """DCA 신호를 DB에 저장"""
+        try:
+            signal_data = {
+                "signal_strength": signal.signal_strength,
+                "recommended_amount": signal.recommended_amount,
+                "next_execution_date": signal.next_execution_date.isoformat(),
+                "market_adjustment_factor": signal.market_adjustment_factor,
+                "reasoning": signal.reasoning,
+                "market_conditions": signal.market_conditions,
+                "asset": asset,
+                "created_at": datetime.now().isoformat()
+            }
+            
+            self.db_manager.save_analysis_result("dca_signal", signal_data)
+            logger.info(f"DCA 신호 DB 저장 완료: {asset}")
+            
+        except Exception as e:
+            logger.error(f"DCA 신호 DB 저장 실패: {e}")
+    
+    def analyze_comprehensive_dca(
+        self, 
+        asset: str, 
+        base_amount: float, 
+        market_conditions: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """포괄적 DCA 분석 (DB 저장 포함)"""
+        try:
+            signal = self.calculate_dca_signal(asset, base_amount, market_conditions)
+            
+            return {
+                "success": True,
+                "signal": signal,
+                "signal_strength": signal.signal_strength,
+                "recommended_amount": signal.recommended_amount,
+                "adjustment_factor": signal.market_adjustment_factor,
+                "reasoning": signal.reasoning,
+                "timestamp": datetime.now()
+            }
+            
+        except Exception as e:
+            logger.error(f"포괄적 DCA 분석 실패: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "signal_strength": 0.5,
+                "recommended_amount": base_amount,
+                "timestamp": datetime.now()
+            }

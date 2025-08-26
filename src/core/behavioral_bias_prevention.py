@@ -93,9 +93,10 @@ class BehavioralBiasPrevention:
     감지하고 방지합니다.
     """
     
-    def __init__(self):
+    def __init__(self, db_manager=None):
         """편향 방지 시스템 초기화"""
         
+        self.db_manager = db_manager
         self.prevention_rules = self._initialize_prevention_rules()
         self.bias_history: List[BiasEvent] = []
         self.cooling_periods: Dict[str, datetime] = {}
@@ -774,6 +775,10 @@ class BehavioralBiasPrevention:
                                      if action.value in prevention_result["actions_taken"]]
                 )
                 self.bias_history.append(event)
+                
+                # DB에 편향 감지 결과 저장
+                if self.db_manager:
+                    self._save_bias_detection_to_db(bias, prevention_result["actions_taken"])
             
             logger.info(f"편향 방지 조치 적용: {len(prevention_result['actions_taken'])}개 조치")
             return prevention_result
@@ -928,3 +933,74 @@ class BehavioralBiasPrevention:
                 del self.cooling_periods[bias_key]
         
         return False, None
+    
+    def _save_bias_detection_to_db(self, bias: BiasDetection, actions_taken: List[str]):
+        """편향 감지 결과를 DB에 저장"""
+        try:
+            bias_data = {
+                "bias_type": bias.bias_type.value,
+                "level": bias.level.value,
+                "confidence": bias.confidence,
+                "evidence": bias.evidence,
+                "risk_score": bias.risk_score,
+                "detected_at": bias.detected_at.isoformat(),
+                "actions_taken": actions_taken,
+                "created_at": datetime.now().isoformat()
+            }
+            
+            self.db_manager.save_analysis_result("bias_check", bias_data)
+            logger.info(f"편향 감지 결과 DB 저장 완료: {bias.bias_type.value}")
+            
+        except Exception as e:
+            logger.error(f"편향 감지 결과 DB 저장 실패: {e}")
+    
+    def analyze_comprehensive_bias(
+        self, 
+        decision_data: Dict[str, Any], 
+        market_context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """포괄적 편향 분석 (DB 저장 포함)"""
+        try:
+            biases = [self.detect_bias(decision_data, market_context or {})]
+            biases = [b for b in biases if b is not None]  # None 제거
+            
+            if not biases:
+                return {
+                    "success": True,
+                    "biases_detected": [],
+                    "prevention_measures": None,
+                    "risk_level": "low",
+                    "timestamp": datetime.now()
+                }
+            
+            prevention_result = self.apply_prevention_measures(biases, decision_data)
+            
+            # 위험도 계산
+            max_risk = max(bias.risk_score for bias in biases)
+            risk_level = "critical" if max_risk >= 70 else "high" if max_risk >= 50 else "medium" if max_risk >= 30 else "low"
+            
+            return {
+                "success": True,
+                "biases_detected": [
+                    {
+                        "type": bias.bias_type.value,
+                        "level": bias.level.value,
+                        "confidence": bias.confidence,
+                        "risk_score": bias.risk_score,
+                        "evidence": bias.evidence
+                    }
+                    for bias in biases
+                ],
+                "prevention_measures": prevention_result,
+                "risk_level": risk_level,
+                "timestamp": datetime.now()
+            }
+            
+        except Exception as e:
+            logger.error(f"포괄적 편향 분석 실패: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "risk_level": "unknown",
+                "timestamp": datetime.now()
+            }

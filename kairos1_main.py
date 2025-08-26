@@ -39,7 +39,8 @@ from src.trading.order_manager import OrderManager
 from src.risk.risk_manager import RiskManager
 from src.monitoring.alert_system import AlertSystem
 from src.monitoring.performance_tracker import PerformanceTracker
-from src.utils.config_loader import ConfigLoader, REQUIRED_CONFIG_KEYS
+from src.utils.config_loader import ConfigLoader
+from src.utils.constants import REQUIRED_CONFIG_KEYS
 from src.utils.database_manager import DatabaseManager
 from src.utils.market_data_provider import MarketDataProvider
 from src.core.multi_account_manager import MultiAccountManager

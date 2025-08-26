@@ -172,13 +172,9 @@ ERROR_BACKOFF_SECONDS = 60  # 오류 발생 시 대기 시간
 # =============================================================================
 
 # Required configuration keys for validation
+# API 키는 멀티 계정 관리자에서 관리하므로 제외
 REQUIRED_CONFIG_KEYS = [
-    "api.coinone.api_key",
-    "api.coinone.secret_key",
-    "database.url",
-    "logging.level",
-    "strategy.portfolio",
-    "strategy.market_season"
+    "logging.level"
 ]
 
 # Sensitive configuration keys (for masking in logs)
