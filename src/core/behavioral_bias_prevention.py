@@ -957,11 +957,12 @@ class BehavioralBiasPrevention:
     def analyze_comprehensive_bias(
         self, 
         decision_data: Dict[str, Any], 
-        market_context: Dict[str, Any] = None
+        market_context: Dict[str, Any] = None,
+        user_history: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """포괄적 편향 분석 (DB 저장 포함)"""
         try:
-            biases = [self.detect_bias(decision_data, market_context or {})]
+            biases = self.detect_bias(decision_data, market_context or {}, user_history or {})
             biases = [b for b in biases if b is not None]  # None 제거
             
             if not biases:
