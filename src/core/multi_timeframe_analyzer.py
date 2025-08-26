@@ -235,9 +235,11 @@ class MultiTimeframeAnalyzer:
             recent_high = close_prices.tail(20).max()
             recent_low = close_prices.tail(20).min()
             
-            # 신뢰도 계산
+            # 신뢰도 계산 (가격이 MA에 가까울수록 높은 신뢰도)
             price_distance_from_ma = abs(current_price - current_ma) / current_ma
-            confidence = min(price_distance_from_ma * 10, 1.0)
+            base_confidence = 0.8
+            distance_penalty = min(price_distance_from_ma * 2, 0.5)  # 최대 50% 감소
+            confidence = max(base_confidence - distance_penalty, 0.3)  # 최소 30% 보장
             
             return TimeframeAnalysis(
                 timeframe="short_term_20d",
@@ -558,6 +560,7 @@ class MultiTimeframeAnalyzer:
             "market_season": result.market_season.value,
             "cycle_phase": result.cycle_phase.value,
             "confidence": result.overall_confidence,
+            "confidence_score": result.overall_confidence,  # 강도 계산용
             "recommended_allocation": {
                 "crypto": f"{result.recommended_allocation['crypto']:.1%}",
                 "krw": f"{result.recommended_allocation['krw']:.1%}"

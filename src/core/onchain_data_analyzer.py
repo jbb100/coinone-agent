@@ -91,6 +91,7 @@ class OnchainAnalysis:
     key_insights: List[str]
     price_prediction_signals: Dict[str, float]
     confidence_level: float
+    overall_signal: float          # 종합 신호 점수 (0-1)
     created_at: datetime
 
 
@@ -220,6 +221,12 @@ class OnchainDataAnalyzer:
             # 신뢰도 계산
             confidence = self._calculate_confidence(metrics)
             
+            # 종합 신호 계산
+            overall_signal = self._calculate_overall_signal(
+                overall_trend, accumulation_score, distribution_score, 
+                network_health, confidence
+            )
+            
             analysis = OnchainAnalysis(
                 overall_trend=overall_trend,
                 whale_activity=whale_activity,
@@ -231,6 +238,7 @@ class OnchainDataAnalyzer:
                 key_insights=key_insights,
                 price_prediction_signals=price_signals,
                 confidence_level=confidence,
+                overall_signal=overall_signal,
                 created_at=datetime.now()
             )
             
@@ -777,6 +785,7 @@ class OnchainDataAnalyzer:
                 "key_insights": analysis.key_insights,
                 "price_prediction_signals": analysis.price_prediction_signals,
                 "confidence_level": analysis.confidence_level,
+                "overall_signal": analysis.overall_signal,
                 "asset": asset,
                 "created_at": analysis.created_at.isoformat()
             }
@@ -810,3 +819,44 @@ class OnchainDataAnalyzer:
                 "confidence": 0.3,
                 "timestamp": datetime.now()
             }
+    
+    def _calculate_overall_signal(
+        self, 
+        overall_trend: OnchainTrend, 
+        accumulation_score: float, 
+        distribution_score: float,
+        network_health: float, 
+        confidence: float
+    ) -> float:
+        """종합 온체인 신호 계산 (0-1 범위)"""
+        try:
+            # 트렌드 점수 (0-1)
+            if overall_trend == OnchainTrend.BULLISH:
+                trend_score = 0.8
+            elif overall_trend == OnchainTrend.BEARISH:
+                trend_score = 0.2
+            else:  # NEUTRAL
+                trend_score = 0.5
+            
+            # 축적/분산 점수 정규화 (0-100을 0-1로)
+            accumulation_norm = accumulation_score / 100.0
+            distribution_norm = 1.0 - (distribution_score / 100.0)  # 분산은 역방향
+            network_health_norm = network_health / 100.0
+            
+            # 가중 평균 계산
+            signal = (
+                trend_score * 0.4 +           # 트렌드 40%
+                accumulation_norm * 0.25 +    # 축적 25%
+                distribution_norm * 0.15 +    # 분산 15%
+                network_health_norm * 0.20    # 네트워크 건강도 20%
+            )
+            
+            # 신뢰도로 조정
+            adjusted_signal = signal * confidence
+            
+            # 0-1 범위 보장
+            return max(0.0, min(1.0, adjusted_signal))
+            
+        except Exception as e:
+            logger.error(f"종합 신호 계산 실패: {e}")
+            return 0.5  # 기본값

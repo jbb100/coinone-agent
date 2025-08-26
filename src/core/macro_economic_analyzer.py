@@ -537,7 +537,7 @@ class MacroEconomicAnalyzer:
             
             return {
                 "success": True,
-                "overall_score": analysis.crypto_favorability * 50 + 50,  # -1~1을 0~100으로 변환
+                "overall_score": (analysis.crypto_favorability + 1) / 2,  # -1~1을 0~1로 변환
                 "market_outlook": analysis.economic_regime.value,
                 "inflation_regime": analysis.inflation_regime.value,
                 "rate_environment": analysis.rate_environment.value,
@@ -553,7 +553,7 @@ class MacroEconomicAnalyzer:
             return {
                 "success": False,
                 "error": str(e),
-                "overall_score": 50.0,
+                "overall_score": 0.5,
                 "confidence": 0.3,
                 "timestamp": datetime.now()
             }
