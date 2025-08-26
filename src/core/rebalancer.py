@@ -1012,11 +1012,14 @@ class Rebalancer:
     def _get_btc_price_data_for_analysis(self):
         """분석용 BTC 가격 데이터 조회"""
         try:
-            if self.market_data_provider:
-                # DatabaseManager를 통한 시장 데이터 조회
-                price_data = self.market_data_provider.get_market_data("BTC", days=1400)  # 약 4년치
-                if not price_data.empty:
-                    return price_data
+            # BinanceDataProvider를 사용하여 분석용 데이터 조회
+            from ..utils.binance_data_provider import BinanceDataProvider
+            binance_provider = BinanceDataProvider()
+            
+            # 약 4년치 데이터 (1400일 = 200주)
+            price_data = binance_provider.get_btc_price_data_for_analysis(weeks_required=200)
+            if not price_data.empty:
+                return price_data
             
             # Fallback: 기본 가격 데이터 생성
             import pandas as pd
