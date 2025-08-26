@@ -149,11 +149,21 @@ async def main():
                     message=success_msg,
                     alert_type="info"
                 )
+        elif len(opportunities) > 0:
+            # 기회는 있었지만 실행되지 않은 경우
+            logger.info(f"💡 {len(opportunities)}개의 매수 기회가 있었지만 실행되지 않음:")
+            for opportunity in opportunities:
+                logger.info(f"  - {opportunity.asset}: 현재가 {opportunity.current_price:,.0f} KRW "
+                           f"(신뢰도: {opportunity.confidence_score:.1%})")
+            if no_opportunity_reasons:
+                logger.info("📊 기회가 없었던 자산:")
+                for asset, reason in no_opportunity_reasons.items():
+                    logger.info(f"  - {asset}: {reason}")
         else:
-            logger.info("실행된 매수 주문이 없습니다")
+            logger.info("현재 실행 가능한 매수 기회가 없습니다")
         
-        if results["failed_orders"]:
-            logger.warning(f"실패한 주문: {len(results['failed_orders'])}개")
+        if results.get("failed_orders"):
+            logger.warning(f"⚠️ 실패한 주문: {len(results['failed_orders'])}개")
             for order in results["failed_orders"]:
                 logger.warning(f"  - {order['asset']}: {order['reason']}")
         

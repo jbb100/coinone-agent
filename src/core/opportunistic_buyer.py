@@ -395,11 +395,16 @@ class OpportunisticBuyer:
                 remaining_budget
             )
             
-            # 최소 주문 금액 확인
+            # 최소 주문 금액 확인 및 조정
             min_amount = MIN_ORDER_AMOUNTS_KRW.get(opportunity.asset, 5000)
             if buy_amount < min_amount:
-                logger.info(f"⚠️ {opportunity.asset}: 매수 금액 {buy_amount:,.0f} KRW가 최소 금액 미달")
-                continue
+                # 최소 금액이 남은 예산보다 크면 건너뛰기
+                if min_amount > remaining_budget:
+                    logger.info(f"⏭️ {opportunity.asset}: 최소 금액 {min_amount:,.0f} KRW가 남은 예산 {remaining_budget:,.0f} KRW 초과")
+                    continue
+                # 최소 금액으로 조정
+                logger.info(f"📈 {opportunity.asset}: 매수 금액을 최소 금액으로 조정 {buy_amount:,.0f} → {min_amount:,.0f} KRW")
+                buy_amount = min_amount
             
             try:
                 # 매수 수량 계산 (분할 매수와 동일한 방식)
@@ -424,15 +429,17 @@ class OpportunisticBuyer:
                 final_quantity = max(min_limit, min(calculated_quantity, max_limit))
                 
                 if final_quantity != calculated_quantity:
-                    logger.info(f"📊 {opportunity.asset} 주문량 조정: {calculated_quantity:.8f} → {final_quantity:.8f}")
+                    logger.info(f"📊 {opportunity.asset} 주문량 조정: {calculated_quantity:.8f} → {final_quantity:.8f} {opportunity.asset}")
+                    logger.info(f"💵 매수 금액: {buy_amount:,.0f} KRW (현재가: {opportunity.current_price:,.0f} KRW)")
                 
                 # 매수 주문 실행 (분할 매수와 동일한 방식)
                 if self.order_manager:
                     # OrderManager 사용하여 분할 매수와 일관성 유지
+                    # 시장가 매수는 KRW 금액을 전달해야 함
                     order_result_obj = self.order_manager.submit_market_order(
                         currency=opportunity.asset,
                         side="buy",
-                        amount=final_quantity
+                        amount=buy_amount  # KRW 금액 전달
                     )
                     
                     # Order 객체를 딕셔너리로 변환 (분할 매수와 동일한 방식)
@@ -449,13 +456,36 @@ class OpportunisticBuyer:
                             "error": "Order submission returned None"
                         }
                 else:
+                    # 가격 단위 조정 (코인원 요구사항)
+                    adjusted_price = opportunity.current_price
+                    
+                    # 코인원 가격 단위 요구사항
+                    if opportunity.asset == "BTC":
+                        # BTC는 10000원 단위
+                        adjusted_price = int(adjusted_price / 10000) * 10000
+                    elif opportunity.asset == "ETH":
+                        # ETH는 1000원 단위
+                        adjusted_price = int(adjusted_price / 1000) * 1000
+                    elif opportunity.asset in ["XRP", "ADA", "DOGE", "TRX", "XLM"]:
+                        # 저가 코인은 1원 단위
+                        adjusted_price = int(adjusted_price)
+                    else:
+                        # 기타 코인은 10원 단위
+                        adjusted_price = int(adjusted_price / 10) * 10
+                    
+                    logger.info(f"💰 가격 조정: {opportunity.current_price:.0f} → {adjusted_price:.0f} KRW")
+                    
                     # Fallback: coinone_client 직접 사용 (기존 방식)
-                    order_result = self.coinone_client.place_limit_order(
+                    # 지정가 매수 시에도 올바른 수량 계산이 필요함
+                    # 최종 주문 금액 재계산 (조정된 가격 * 수량)
+                    final_order_amount = adjusted_price * final_quantity
+                    
+                    order_result = self.coinone_client.place_order(
                         currency=opportunity.asset,
                         side="buy",
-                        price=opportunity.current_price,
-                        amount=final_quantity,
-                        order_type="limit"
+                        price=adjusted_price,
+                        amount=final_quantity,  # 지정가는 코인 수량 전달
+                        amount_in_krw=False  # 지정가는 코인 수량으로 처리
                     )
                 
                 if order_result.get("success"):
