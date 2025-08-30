@@ -588,7 +588,7 @@ class OpportunisticBuyer:
         
         return results
     
-    def _is_recently_bought(self, asset: str) -> bool:
+    def _is_recently_bought(self, asset: str) -> tuple[bool, str]:
         """
         최근 매수 여부 확인 (DB 기반)
         
@@ -596,7 +596,7 @@ class OpportunisticBuyer:
             asset: 자산 심볼
             
         Returns:
-            최근 매수 여부
+            tuple[bool, str]: (최근 매수 여부, 상세 정보)
         """
         # DB 기반 최근 매수 이력 확인
         recent_buys = self.db_manager.get_recent_opportunistic_buys(
@@ -614,16 +614,21 @@ class OpportunisticBuyer:
                 time_since_buy = datetime.now() - last_buy_time
                 
                 if time_since_buy < timedelta(hours=cooldown):
-                    logger.info(f"{asset}: 쿨다운 기간 중 ({cooldown}시간 중 {time_since_buy.total_seconds()/3600:.1f}시간 경과)")
-                    return True
+                    elapsed_hours = time_since_buy.total_seconds() / 3600
+                    cooldown_info = f"쿨다운 기간 중 ({cooldown}시간 중 {elapsed_hours:.1f}시간 경과)"
+                    logger.info(f"{asset}: {cooldown_info}")
+                    return True, cooldown_info
         
         # 메모리 기반 확인 (폴백)
         if asset in self.recent_buys:
             last_buy_time = self.recent_buys[asset]
             time_since_buy = datetime.now() - last_buy_time
-            return time_since_buy < timedelta(hours=self.min_buy_interval_hours)
+            if time_since_buy < timedelta(hours=self.min_buy_interval_hours):
+                elapsed_hours = time_since_buy.total_seconds() / 3600
+                cooldown_info = f"쿨다운 기간 중 ({self.min_buy_interval_hours}시간 중 {elapsed_hours:.1f}시간 경과)"
+                return True, cooldown_info
         
-        return False
+        return False, ""
     
     def _can_execute_buy(self, asset: str, amount: float) -> tuple[bool, str]:
         """
@@ -659,8 +664,9 @@ class OpportunisticBuyer:
             return False, f"Daily buy amount limit reached (remaining: {remaining:,.0f} KRW)"
         
         # 4. 최근 매수 이력 확인 (쿨다운)
-        if self._is_recently_bought(asset):
-            return False, f"Asset in cooldown period"
+        is_cooldown, cooldown_info = self._is_recently_bought(asset)
+        if is_cooldown:
+            return False, cooldown_info
         
         # 5. 포트폴리오 비중 확인
         try:
