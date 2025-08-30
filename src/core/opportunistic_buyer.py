@@ -394,6 +394,7 @@ class OpportunisticBuyer:
         results = {
             "executed_orders": [],
             "failed_orders": [],
+            "skipped_orders": [],
             "total_invested": 0,
             "remaining_cash": available_cash
         }
@@ -410,6 +411,10 @@ class OpportunisticBuyer:
                                                      remaining_budget * opportunity.recommended_buy_ratio)
             if not can_buy:
                 logger.info(f"⏭️ {opportunity.asset}: {reason}")
+                results["skipped_orders"].append({
+                    "asset": opportunity.asset,
+                    "reason": reason
+                })
                 continue
             
             # 점진적 매수 조건 확인
@@ -421,8 +426,12 @@ class OpportunisticBuyer:
                 current_drop = self._calculate_current_drop(opportunity.asset)
                 
                 if current_drop > required_drop:
-                    logger.info(f"📈 {opportunity.asset}: 점진적 매수 조건 미충족 "
-                              f"(현재: {current_drop:.1%}, 필요: {required_drop:.1%})")
+                    reason = f"점진적 매수 조건 미충족 (현재: {current_drop:.1%}, 필요: {required_drop:.1%})"
+                    logger.info(f"📈 {opportunity.asset}: {reason}")
+                    results["skipped_orders"].append({
+                        "asset": opportunity.asset,
+                        "reason": reason
+                    })
                     continue
             
             # 매수 금액 계산
@@ -436,7 +445,12 @@ class OpportunisticBuyer:
             if buy_amount < min_amount:
                 # 최소 금액이 남은 예산보다 크면 건너뛰기
                 if min_amount > remaining_budget:
-                    logger.info(f"⏭️ {opportunity.asset}: 최소 금액 {min_amount:,.0f} KRW가 남은 예산 {remaining_budget:,.0f} KRW 초과")
+                    reason = f"최소 금액 {min_amount:,.0f} KRW가 남은 예산 {remaining_budget:,.0f} KRW 초과"
+                    logger.info(f"⏭️ {opportunity.asset}: {reason}")
+                    results["skipped_orders"].append({
+                        "asset": opportunity.asset,
+                        "reason": reason
+                    })
                     continue
                 # 최소 금액으로 조정
                 logger.info(f"📈 {opportunity.asset}: 매수 금액을 최소 금액으로 조정 {buy_amount:,.0f} → {min_amount:,.0f} KRW")

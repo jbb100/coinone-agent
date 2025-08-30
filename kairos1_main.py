@@ -797,6 +797,7 @@ class KairosSystem:
         results = {
             "executed_orders": [],
             "failed_orders": [],
+            "skipped_orders": [],
             "total_invested": 0,
             "remaining_cash": available_cash
         }
@@ -827,6 +828,7 @@ class KairosSystem:
         try:
             executed = execution_result.get("executed_orders", [])
             failed = execution_result.get("failed_orders", [])
+            skipped = execution_result.get("skipped_orders", [])
             total_invested = execution_result.get("total_invested", 0)
             remaining_cash = execution_result.get("remaining_cash", 0)
             
@@ -835,6 +837,7 @@ class KairosSystem:
 
 **성공한 주문**: {len(executed)}건
 **실패한 주문**: {len(failed)}건
+**건너뛴 주문**: {len(skipped)}건
 **총 투자 금액**: {total_invested:,.0f} KRW
 **남은 현금**: {remaining_cash:,.0f} KRW
 """
@@ -848,6 +851,13 @@ class KairosSystem:
                 message += "\n\n❌ **실패한 주문**:"
                 for order in failed:
                     message += f"\n• {order.get('asset')}: {order.get('error', 'Unknown error')}"
+            
+            if skipped:
+                message += "\n\n⏸️ **건너뛴 주문 (사유):**"
+                for order in skipped:
+                    asset = order.get('asset')
+                    reason = order.get('reason', 'Unknown reason')
+                    message += f"\n• {asset}: {reason}"
             
             message += f"\n\n⏰ 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
