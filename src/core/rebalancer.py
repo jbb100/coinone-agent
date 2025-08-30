@@ -627,9 +627,21 @@ class Rebalancer:
             리밸런싱 결과
         """
         result = RebalanceResult()
+        lock_id = None
         
         try:
             logger.info("분기별 리밸런싱 시작")
+            
+            # 리밸런싱 락 획듍
+            if self.db_manager:
+                lock_id = self.db_manager.acquire_trading_lock(
+                    lock_type='rebalancing',
+                    asset='ALL',
+                    duration_hours=2,
+                    reason='Quarterly portfolio rebalancing'
+                )
+                if not lock_id:
+                    logger.warning("리밸런싱 락 획듍 실패, 계속 진행")
             
             # 1. 현재 포트폴리오 상태 조회
             current_portfolio = self.coinone_client.get_portfolio_value()
@@ -699,10 +711,19 @@ class Rebalancer:
             
             logger.info(f"분기별 리밸런싱 완료: {'성공' if result.success else '부분 실패'}")
             
+            # 리밸런싱 결과 저장
+            if self.db_manager and result.success:
+                self.db_manager.save_rebalance_result(result.to_dict())
+            
         except Exception as e:
             logger.error(f"분기별 리밸런싱 실패: {e}")
             result.success = False
             result.error_message = str(e)
+        finally:
+            # 락 해제
+            if lock_id and self.db_manager:
+                self.db_manager.release_trading_lock(lock_id)
+                logger.info("리밸런싱 락 해제")
         
         return result
     
@@ -712,14 +733,14 @@ class Rebalancer:
         validation_results: Dict[str, bool]
     ) -> Dict[str, List]:
         """
-        🚀 스마트 리밸런싱 주문 실행 (개선된 버전)
+        리밸런싱 주문 실행
         
         Args:
             rebalance_info: 리밸런싱 정보
             validation_results: 검증 결과
             
         Returns:
-            실행 결과 딕셔너리
+            실행 결과
         """
         executed_orders = []
         failed_orders = []

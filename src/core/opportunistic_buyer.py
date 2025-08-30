@@ -4,12 +4,11 @@ Opportunistic Buyer Module
 시장 하락 시 현금 보유분을 활용한 추가 매수 전략 모듈
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from enum import Enum
 import pandas as pd
-import numpy as np
 from loguru import logger
 
 from ..trading.coinone_client import CoinoneClient
@@ -86,9 +85,31 @@ class OpportunisticBuyer:
             OpportunityLevel.EXTREME: {"drop": 0.30, "buy_ratio": 0.4}
         }
         
-        # 최근 매수 이력 (중복 매수 방지)
+        # 최근 매수 이력 (중복 매수 방지) - 메모리 기반은 유지하되 DB 기반으로 보완
         self.recent_buys: Dict[str, datetime] = {}
         self.min_buy_interval_hours = 4  # 동일 자산 최소 매수 간격
+        
+        # 일일 한도 설정
+        self.daily_limits = {
+            "max_buy_count": 3,        # 자산별 일일 최대 매수 횟수
+            "max_buy_amount": 1000000,  # 자산별 일일 최대 매수 금액 (100만원)
+            "max_portfolio_ratio": 0.4  # 포트폴리오 대비 최대 비중
+        }
+        
+        # 점진적 매수 설정 (N번째 매수는 더 큰 하락 필요)
+        self.progressive_thresholds = {
+            1: -0.05,   # 첫 번째 매수: -5%
+            2: -0.10,   # 두 번째 매수: -10%
+            3: -0.20,   # 세 번째 매수: -20%
+        }
+        
+        # 기회 레벨별 쿨다운 시간 (시간 단위)
+        self.cooldown_hours = {
+            OpportunityLevel.MINOR: 6,
+            OpportunityLevel.MODERATE: 12,
+            OpportunityLevel.MAJOR: 24,
+            OpportunityLevel.EXTREME: 48
+        }
         
         logger.info(f"OpportunisticBuyer 초기화 완료 (현금 보유: {cash_reserve_ratio:.1%})")
     
@@ -384,10 +405,25 @@ class OpportunisticBuyer:
         remaining_budget = min(available_cash, max_total_buy)
         
         for opportunity in opportunities:
-            # 최근 매수 이력 확인
-            if self._is_recently_bought(opportunity.asset):
-                logger.info(f"⏭️ {opportunity.asset}: 최근 매수 이력 있음, 건너뜀")
+            # 매수 가능 여부 종합 체크
+            can_buy, reason = self._can_execute_buy(opportunity.asset, 
+                                                     remaining_budget * opportunity.recommended_buy_ratio)
+            if not can_buy:
+                logger.info(f"⏭️ {opportunity.asset}: {reason}")
                 continue
+            
+            # 점진적 매수 조건 확인
+            daily_stats = self.db_manager.get_daily_buy_stats(opportunity.asset)
+            if daily_stats['count'] > 0:
+                required_drop = self.progressive_thresholds.get(
+                    daily_stats['count'] + 1, -0.30
+                )
+                current_drop = self._calculate_current_drop(opportunity.asset)
+                
+                if current_drop > required_drop:
+                    logger.info(f"📈 {opportunity.asset}: 점진적 매수 조건 미충족 "
+                              f"(현재: {current_drop:.1%}, 필요: {required_drop:.1%})")
+                    continue
             
             # 매수 금액 계산
             buy_amount = min(
@@ -477,9 +513,6 @@ class OpportunisticBuyer:
                     
                     # Fallback: coinone_client 직접 사용 (기존 방식)
                     # 지정가 매수 시에도 올바른 수량 계산이 필요함
-                    # 최종 주문 금액 재계산 (조정된 가격 * 수량)
-                    final_order_amount = adjusted_price * final_quantity
-                    
                     order_result = self.coinone_client.place_order(
                         currency=opportunity.asset,
                         side="buy",
@@ -503,6 +536,13 @@ class OpportunisticBuyer:
                     
                     # 매수 이력 기록
                     self.recent_buys[opportunity.asset] = datetime.now()
+                    
+                    # 일일 매수 한도 업데이트
+                    self.db_manager.update_daily_buy_limits(
+                        opportunity.asset, 
+                        buy_amount, 
+                        opportunity.current_price
+                    )
                     
                     logger.info(f"✅ {opportunity.asset} 기회적 매수 실행: {buy_amount:,.0f} KRW")
                     
@@ -536,7 +576,7 @@ class OpportunisticBuyer:
     
     def _is_recently_bought(self, asset: str) -> bool:
         """
-        최근 매수 여부 확인
+        최근 매수 여부 확인 (DB 기반)
         
         Args:
             asset: 자산 심볼
@@ -544,13 +584,106 @@ class OpportunisticBuyer:
         Returns:
             최근 매수 여부
         """
-        if asset not in self.recent_buys:
-            return False
+        # DB 기반 최근 매수 이력 확인
+        recent_buys = self.db_manager.get_recent_opportunistic_buys(
+            asset, hours=self.min_buy_interval_hours
+        )
         
-        last_buy_time = self.recent_buys[asset]
-        time_since_buy = datetime.now() - last_buy_time
+        if recent_buys:
+            # 가장 최근 매수의 기회 레벨에 따른 쿨다운 확인
+            last_buy = recent_buys[0]
+            if 'opportunity_level' in last_buy:
+                level = OpportunityLevel(last_buy['opportunity_level'])
+                cooldown = self.cooldown_hours.get(level, self.min_buy_interval_hours)
+                
+                last_buy_time = datetime.fromisoformat(last_buy['timestamp'])
+                time_since_buy = datetime.now() - last_buy_time
+                
+                if time_since_buy < timedelta(hours=cooldown):
+                    logger.info(f"{asset}: 쿨다운 기간 중 ({cooldown}시간 중 {time_since_buy.total_seconds()/3600:.1f}시간 경과)")
+                    return True
         
-        return time_since_buy < timedelta(hours=self.min_buy_interval_hours)
+        # 메모리 기반 확인 (폴백)
+        if asset in self.recent_buys:
+            last_buy_time = self.recent_buys[asset]
+            time_since_buy = datetime.now() - last_buy_time
+            return time_since_buy < timedelta(hours=self.min_buy_interval_hours)
+        
+        return False
+    
+    def _can_execute_buy(self, asset: str, amount: float) -> tuple[bool, str]:
+        """
+        매수 가능 여부 확인
+        
+        Args:
+            asset: 자산 심볼
+            amount: 매수 예정 금액
+            
+        Returns:
+            튜플: (가능 여부, 불가능한 경우 사유)
+        """
+        # 1. 거래 락 확인
+        if self.db_manager.is_trading_locked('opportunistic_buy', asset):
+            return False, "Trading locked by rebalancing or maintenance"
+        
+        # 2. 최근 리밸런싱 확인 (24시간 이내)
+        last_rebalance = self.db_manager.get_last_rebalance_time()
+        if last_rebalance:
+            time_since_rebalance = datetime.now() - last_rebalance
+            if time_since_rebalance < timedelta(hours=24):
+                hours_passed = time_since_rebalance.total_seconds() / 3600
+                return False, f"Recent rebalancing detected ({hours_passed:.1f}h ago)"
+        
+        # 3. 일일 매수 한도 확인
+        daily_stats = self.db_manager.get_daily_buy_stats(asset)
+        
+        if daily_stats['count'] >= self.daily_limits['max_buy_count']:
+            return False, f"Daily buy count limit reached ({daily_stats['count']}/{self.daily_limits['max_buy_count']})"
+        
+        if daily_stats['amount'] + amount > self.daily_limits['max_buy_amount']:
+            remaining = self.daily_limits['max_buy_amount'] - daily_stats['amount']
+            return False, f"Daily buy amount limit reached (remaining: {remaining:,.0f} KRW)"
+        
+        # 4. 최근 매수 이력 확인 (쿨다운)
+        if self._is_recently_bought(asset):
+            return False, f"Asset in cooldown period"
+        
+        # 5. 포트폴리오 비중 확인
+        try:
+            portfolio = self.coinone_client.get_portfolio_value()
+            if asset in portfolio['assets']:
+                asset_value = portfolio['assets'][asset].get('value_krw', 0)
+                total_value = portfolio['total_value_krw']
+                
+                if total_value > 0:
+                    current_ratio = asset_value / total_value
+                    if current_ratio > self.daily_limits['max_portfolio_ratio']:
+                        return False, f"Portfolio ratio too high ({current_ratio:.1%} > {self.daily_limits['max_portfolio_ratio']:.1%})"
+        except Exception as e:
+            logger.warning(f"포트폴리오 비중 확인 실패: {e}")
+        
+        return True, "OK"
+    
+    def _calculate_current_drop(self, asset: str) -> float:
+        """
+        현재 하락률 계산
+        
+        Args:
+            asset: 자산 심볼
+            
+        Returns:
+            하락률 (음수)
+        """
+        try:
+            price_data_7d = self.db_manager.get_market_data(asset, days=7)
+            if not price_data_7d.empty:
+                current_price = price_data_7d['Close'].iloc[-1]
+                avg_price_7d = price_data_7d['Close'].mean()
+                return (current_price / avg_price_7d) - 1
+        except Exception as e:
+            logger.error(f"하락률 계산 실패: {e}")
+        
+        return 0.0
     
     def _record_opportunistic_buy(
         self, 

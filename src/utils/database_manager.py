@@ -300,6 +300,34 @@ class DatabaseManager:
                     )
                 """)
                 
+                # 거래 락 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS trading_locks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        lock_type TEXT NOT NULL,
+                        asset TEXT,
+                        account_id TEXT,
+                        created_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        reason TEXT,
+                        active INTEGER DEFAULT 1
+                    )
+                """)
+                
+                # 기회적 매수 일일 한도 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS opportunistic_buy_limits (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        asset TEXT NOT NULL,
+                        date TEXT NOT NULL,
+                        daily_buy_count INTEGER DEFAULT 0,
+                        daily_buy_amount REAL DEFAULT 0,
+                        last_buy_time TEXT,
+                        last_buy_price REAL,
+                        UNIQUE(asset, date)
+                    )
+                """)
+                
                 # 기존 테이블에 completed_at 컬럼이 없으면 추가
                 try:
                     cursor.execute("ALTER TABLE twap_executions ADD COLUMN completed_at TEXT")
@@ -1256,4 +1284,271 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"시장 데이터 조회 실패: {asset}, {days}일 - {e}")
-            return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume']) 
+            return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume'])
+    
+    def acquire_trading_lock(self, lock_type: str, asset: str = 'ALL', 
+                            account_id: str = None, duration_hours: float = 2.0, 
+                            reason: str = None) -> Optional[int]:
+        """
+        거래 락 획득
+        
+        Args:
+            lock_type: 락 타입 ('rebalancing', 'opportunistic_buy', 'maintenance')
+            asset: 자산 심볼 또는 'ALL'
+            account_id: 계정 ID
+            duration_hours: 락 유지 시간
+            reason: 락 사유
+            
+        Returns:
+            락 ID 또는 None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                created_at = datetime.now()
+                expires_at = created_at + timedelta(hours=duration_hours)
+                
+                cursor.execute("""
+                    INSERT INTO trading_locks (
+                        lock_type, asset, account_id, created_at, expires_at, reason, active
+                    ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                """, (
+                    lock_type,
+                    asset,
+                    account_id,
+                    created_at.isoformat(),
+                    expires_at.isoformat(),
+                    reason
+                ))
+                
+                lock_id = cursor.lastrowid
+                conn.commit()
+                
+                logger.info(f"거래 락 획득: ID={lock_id}, type={lock_type}, asset={asset}, duration={duration_hours}h")
+                return lock_id
+                
+        except Exception as e:
+            logger.error(f"거래 락 획득 실패: {e}")
+            return None
+    
+    def release_trading_lock(self, lock_id: int) -> bool:
+        """
+        거래 락 해제
+        
+        Args:
+            lock_id: 락 ID
+            
+        Returns:
+            성공 여부
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    UPDATE trading_locks 
+                    SET active = 0 
+                    WHERE id = ? AND active = 1
+                """, (lock_id,))
+                
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"거래 락 해제: ID={lock_id}")
+                    return True
+                else:
+                    logger.warning(f"거래 락 해제 실패: ID={lock_id} - 락이 이미 해제됨 또는 존재하지 않음")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"거래 락 해제 실패: {e}")
+            return False
+    
+    def is_trading_locked(self, lock_type: str = None, asset: str = None) -> bool:
+        """
+        거래 가능 여부 확인
+        
+        Args:
+            lock_type: 확인할 락 타입
+            asset: 확인할 자산
+            
+        Returns:
+            락 존재 여부 (True면 거래 불가)
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                current_time = datetime.now().isoformat()
+                
+                # 활성 락 확인 쿼리
+                query = """
+                    SELECT COUNT(*) FROM trading_locks 
+                    WHERE active = 1 AND expires_at > ?
+                """
+                params = [current_time]
+                
+                # 특정 락 타입 필터
+                if lock_type:
+                    query += " AND lock_type != ?"
+                    params.append(lock_type)
+                
+                # 특정 자산 필터
+                if asset:
+                    query += " AND (asset = ? OR asset = 'ALL')"
+                    params.append(asset)
+                
+                cursor.execute(query, params)
+                count = cursor.fetchone()[0]
+                
+                return count > 0
+                
+        except Exception as e:
+            logger.error(f"거래 락 확인 실패: {e}")
+            return True  # 오류 시 안전하게 거래 차단
+    
+    def get_recent_opportunistic_buys(self, asset: str, hours: int = 4) -> List[Dict]:
+        """
+        최근 기회적 매수 이력 조회
+        
+        Args:
+            asset: 자산 심볼
+            hours: 조회 시간 범위
+            
+        Returns:
+            최근 매수 이력 리스트
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cutoff_time = (datetime.now() - timedelta(hours=hours)).isoformat()
+                
+                cursor.execute("""
+                    SELECT * FROM opportunistic_buys
+                    WHERE asset = ? AND timestamp > ?
+                    ORDER BY timestamp DESC
+                """, (asset, cutoff_time))
+                
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                
+                return [dict(zip(columns, row)) for row in rows]
+                
+        except Exception as e:
+            logger.error(f"최근 기회적 매수 이력 조회 실패: {e}")
+            return []
+    
+    def get_daily_buy_stats(self, asset: str, date: str = None) -> Dict:
+        """
+        일일 매수 통계 조회
+        
+        Args:
+            asset: 자산 심볼
+            date: 날짜 (YYYY-MM-DD 형식, None이면 오늘)
+            
+        Returns:
+            일일 매수 통계
+        """
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 먼저 통계 조회
+                cursor.execute("""
+                    SELECT daily_buy_count, daily_buy_amount, last_buy_time, last_buy_price
+                    FROM opportunistic_buy_limits
+                    WHERE asset = ? AND date = ?
+                """, (asset, date))
+                
+                row = cursor.fetchone()
+                
+                if row:
+                    return {
+                        'count': row[0],
+                        'amount': row[1],
+                        'last_buy_time': row[2],
+                        'last_buy_price': row[3]
+                    }
+                else:
+                    # 레코드가 없으면 기본값 반환
+                    return {
+                        'count': 0,
+                        'amount': 0.0,
+                        'last_buy_time': None,
+                        'last_buy_price': None
+                    }
+                    
+        except Exception as e:
+            logger.error(f"일일 매수 통계 조회 실패: {e}")
+            return {'count': 0, 'amount': 0.0, 'last_buy_time': None, 'last_buy_price': None}
+    
+    def update_daily_buy_limits(self, asset: str, amount: float, price: float, date: str = None):
+        """
+        일일 매수 한도 업데이트
+        
+        Args:
+            asset: 자산 심볼
+            amount: 매수 금액
+            price: 매수 가격
+            date: 날짜 (None이면 오늘)
+        """
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # UPSERT 처리
+                cursor.execute("""
+                    INSERT INTO opportunistic_buy_limits (
+                        asset, date, daily_buy_count, daily_buy_amount, 
+                        last_buy_time, last_buy_price
+                    ) VALUES (?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(asset, date) DO UPDATE SET
+                        daily_buy_count = daily_buy_count + 1,
+                        daily_buy_amount = daily_buy_amount + ?,
+                        last_buy_time = ?,
+                        last_buy_price = ?
+                """, (
+                    asset, date, amount, datetime.now().isoformat(), price,
+                    amount, datetime.now().isoformat(), price
+                ))
+                
+                conn.commit()
+                logger.info(f"일일 매수 한도 업데이트: {asset} - {amount:,.0f} KRW")
+                
+        except Exception as e:
+            logger.error(f"일일 매수 한도 업데이트 실패: {e}")
+    
+    def get_last_rebalance_time(self) -> Optional[datetime]:
+        """
+        최근 리밸런싱 시간 조회
+        
+        Returns:
+            최근 리밸런싱 시간 또는 None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT rebalance_date FROM rebalance_history
+                    ORDER BY rebalance_date DESC
+                    LIMIT 1
+                """)
+                
+                row = cursor.fetchone()
+                
+                if row:
+                    return datetime.fromisoformat(row[0])
+                return None
+                
+        except Exception as e:
+            logger.error(f"최근 리밸런싱 시간 조회 실패: {e}")
+            return None 
