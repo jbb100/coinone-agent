@@ -599,8 +599,10 @@ class OpportunisticBuyer:
             tuple[bool, str]: (최근 매수 여부, 상세 정보)
         """
         # DB 기반 최근 매수 이력 확인
+        # 최대 쿨다운 시간까지 조회하여 모든 레벨의 쿨다운 체크 가능
+        max_cooldown = max(self.cooldown_hours.values())  # 48시간
         recent_buys = self.db_manager.get_recent_opportunistic_buys(
-            asset, hours=self.min_buy_interval_hours
+            asset, hours=max_cooldown
         )
         
         if recent_buys:
