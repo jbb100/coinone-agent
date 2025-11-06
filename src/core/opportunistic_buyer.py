@@ -418,7 +418,12 @@ class OpportunisticBuyer:
         total_portfolio_value = 0.0
         try:
             portfolio_snapshot = self.coinone_client.get_portfolio_value()
-            total_portfolio_value = float(portfolio_snapshot.get("total_value_krw", 0.0))
+            total_portfolio_value = float(
+                portfolio_snapshot.get("total_value_krw")
+                or portfolio_snapshot.get("total_krw")
+                or portfolio_snapshot.get("total_value")
+                or 0.0
+            )
         except Exception as e:
             logger.warning(f"포트폴리오 평가액 조회 실패: {e}")
         
@@ -730,9 +735,15 @@ class OpportunisticBuyer:
         # 5. 포트폴리오 비중 확인
         try:
             portfolio = self.coinone_client.get_portfolio_value()
-            if asset in portfolio['assets']:
-                asset_value = portfolio['assets'][asset].get('value_krw', 0)
-                total_value = portfolio['total_value_krw']
+            assets_info = portfolio.get('assets', {})
+            if asset in assets_info:
+                asset_value = assets_info[asset].get('value_krw', 0)
+                total_value = (
+                    portfolio.get('total_value_krw')
+                    or portfolio.get('total_krw')
+                    or portfolio.get('total_value')
+                    or 0
+                )
                 
                 if total_value > 0:
                     current_ratio = asset_value / total_value
