@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 import pandas as pd
 from loguru import logger
-from collections import defaultdict
 
 from ..trading.coinone_client import CoinoneClient
 from ..utils.database_manager import DatabaseManager
@@ -61,7 +60,8 @@ class OpportunisticBuyer:
         cash_reserve_ratio: float = 0.15,  # 기본 현금 보유 비율
         min_opportunity_threshold: float = 0.05,  # 최소 기회 임계값 (5% 하락)
         max_buy_per_opportunity: float = 0.3,  # 기회당 최대 매수 비율
-        level_portfolio_caps: Optional[Dict[OpportunityLevel, float]] = None  # 포트폴리오 대비 레벨별 최대 사용 비율
+        level_portfolio_usage_schedule: Optional[Dict[OpportunityLevel, float]] = None,  # 레벨별 누적 사용 한도 (포트폴리오 대비)
+        level_min_cash_ratio: Optional[Dict[OpportunityLevel, float]] = None  # 레벨별 최소 현금 비중
     ):
         """
         Args:
@@ -71,7 +71,8 @@ class OpportunisticBuyer:
             cash_reserve_ratio: 현금 보유 비율
             min_opportunity_threshold: 최소 매수 기회 임계값
             max_buy_per_opportunity: 기회당 최대 매수 비율
-            level_portfolio_caps: 기회 레벨별 포트폴리오 대비 최대 사용 비율
+            level_portfolio_usage_schedule: 기회 레벨별 포트폴리오 대비 누적 사용 한도
+            level_min_cash_ratio: 기회 레벨별 최소 유지해야 할 현금 비중
         """
         self.coinone_client = coinone_client
         self.db_manager = db_manager
@@ -79,11 +80,17 @@ class OpportunisticBuyer:
         self.cash_reserve_ratio = cash_reserve_ratio
         self.min_opportunity_threshold = min_opportunity_threshold
         self.max_buy_per_opportunity = max_buy_per_opportunity
-        self.level_portfolio_caps = level_portfolio_caps or {
-            OpportunityLevel.MINOR: 0.10,     # 전체 평가 금액의 10%
-            OpportunityLevel.MODERATE: 0.20,  # 전체 평가 금액의 20%
-            OpportunityLevel.MAJOR: 0.30,     # 전체 평가 금액의 30%
-            OpportunityLevel.EXTREME: 0.40    # 전체 평가 금액의 40%
+        self.level_portfolio_usage_schedule = level_portfolio_usage_schedule or {
+            OpportunityLevel.MINOR: 0.05,     # 누적 5%
+            OpportunityLevel.MODERATE: 0.15,  # 누적 15%
+            OpportunityLevel.MAJOR: 0.20,     # 누적 20%
+            OpportunityLevel.EXTREME: 1.00    # 극단 하락 시 전액 사용 가능
+        }
+        self.level_min_cash_ratio = level_min_cash_ratio or {
+            OpportunityLevel.MINOR: 0.30,     # 현금 비중 30% 초과 시만 대응
+            OpportunityLevel.MODERATE: 0.20,
+            OpportunityLevel.MAJOR: 0.10,
+            OpportunityLevel.EXTREME: 0.0
         }
         
         # 매수 기회 레벨별 설정
@@ -408,13 +415,14 @@ class OpportunisticBuyer:
             "remaining_cash": available_cash
         }
         
-        # 최대 매수 금액 설정
+        # 최대 매수 금액 설정 (기본적으로 보유 현금 전액을 검사 대상에 포함)
         if max_total_buy is None:
-            max_total_buy = available_cash * 0.5  # 기본적으로 현금의 50%까지만 사용
+            max_total_buy = available_cash
         
-        remaining_budget = min(available_cash, max_total_buy)
+        initial_budget = min(available_cash, max_total_buy)
+        remaining_budget = initial_budget
         
-        # 포트폴리오 총 평가액 조회 (레벨별 캡 적용용)
+        # 포트폴리오 총 평가액 조회 (현금 비중 기반 의사결정용)
         total_portfolio_value = 0.0
         try:
             portfolio_snapshot = self.coinone_client.get_portfolio_value()
@@ -427,9 +435,47 @@ class OpportunisticBuyer:
         except Exception as e:
             logger.warning(f"포트폴리오 평가액 조회 실패: {e}")
         
-        level_spent_tracker: Dict[OpportunityLevel, float] = defaultdict(float)
+        if total_portfolio_value <= 0:
+            # 최소한의 보수적 추정을 위해 사용 가능한 현금을 활용
+            total_portfolio_value = max(available_cash, 1.0)
         
         for opportunity in opportunities:
+            current_cash_remaining = max(available_cash - results["total_invested"], 0.0)
+            current_cash_ratio = (
+                current_cash_remaining / total_portfolio_value
+                if total_portfolio_value > 0 else 0.0
+            )
+            
+            min_required_ratio = self.level_min_cash_ratio.get(
+                opportunity.opportunity_level,
+                0.0
+            )
+            if total_portfolio_value > 0 and current_cash_ratio <= min_required_ratio:
+                reason = (
+                    f"현금 비중 {current_cash_ratio:.1%} ≤ 레벨 요구치 "
+                    f"{min_required_ratio:.1%}"
+                )
+                logger.info(f"⏭️ {opportunity.asset}: {reason}")
+                results["skipped_orders"].append({
+                    "asset": opportunity.asset,
+                    "reason": reason
+                })
+                continue
+            
+            threshold_cash_floor = (
+                total_portfolio_value * min_required_ratio
+                if total_portfolio_value > 0 else 0.0
+            )
+            available_above_threshold = max(0.0, current_cash_remaining - threshold_cash_floor)
+            if available_above_threshold <= 0:
+                reason = "현금 비중 유지 한도 내 추가 사용 가능 금액 없음"
+                logger.info(f"⏭️ {opportunity.asset}: {reason}")
+                results["skipped_orders"].append({
+                    "asset": opportunity.asset,
+                    "reason": reason
+                })
+                continue
+            
             # 매수 가능 여부 종합 체크
             can_buy, reason = self._can_execute_buy(opportunity.asset, 
                                                      remaining_budget * opportunity.recommended_buy_ratio)
@@ -464,26 +510,39 @@ class OpportunisticBuyer:
                 remaining_budget
             )
             
-            level_cap_ratio = self.level_portfolio_caps.get(opportunity.opportunity_level)
-            remaining_level_cap = remaining_budget
-            if level_cap_ratio is not None and total_portfolio_value > 0:
-                max_level_allocation = total_portfolio_value * level_cap_ratio
-                spent_for_level = level_spent_tracker[opportunity.opportunity_level]
-                remaining_level_cap = max(0.0, max_level_allocation - spent_for_level)
-                
-                if remaining_level_cap <= 0:
-                    reason = f"레벨별 포트폴리오 한도 초과 ({level_cap_ratio:.0%})"
-                    logger.info(f"⏭️ {opportunity.asset}: {reason}")
-                    results["skipped_orders"].append({
-                        "asset": opportunity.asset,
-                        "reason": reason
-                    })
-                    continue
-                
-                buy_amount = min(buy_amount, remaining_level_cap)
+            buy_amount = min(buy_amount, available_above_threshold)
+            
+            target_fraction = self.level_portfolio_usage_schedule.get(
+                opportunity.opportunity_level,
+                1.0
+            )
+            if target_fraction < 0:
+                target_fraction = 0
+            
+            max_cumulative_allocation = (
+                total_portfolio_value * target_fraction
+                if total_portfolio_value > 0
+                else initial_budget * target_fraction
+            )
+            cumulative_spent = results["total_invested"]
+            remaining_allocation = max(0.0, max_cumulative_allocation - cumulative_spent)
+            
+            if remaining_allocation <= 0:
+                reason = (
+                    f"레벨 누적 한도 소진 (목표 {target_fraction:.0%} "
+                    "포트폴리오 대비)"
+                )
+                logger.info(f"⏭️ {opportunity.asset}: {reason}")
+                results["skipped_orders"].append({
+                    "asset": opportunity.asset,
+                    "reason": reason
+                })
+                continue
+            
+            buy_amount = min(buy_amount, remaining_allocation)
             
             if buy_amount <= 0:
-                reason = "레벨별 포트폴리오 한도로 인해 사용 가능한 예산 없음"
+                reason = "레벨 누적 한도로 인해 사용 가능한 예산 없음"
                 logger.info(f"⏭️ {opportunity.asset}: {reason}")
                 results["skipped_orders"].append({
                     "asset": opportunity.asset,
@@ -494,8 +553,22 @@ class OpportunisticBuyer:
             # 최소 주문 금액 확인 및 조정
             min_amount = MIN_ORDER_AMOUNTS_KRW.get(opportunity.asset, 5000)
             if buy_amount < min_amount:
-                if min_amount > remaining_level_cap:
-                    reason = f"레벨별 포트폴리오 한도 잔여 {remaining_level_cap:,.0f} KRW < 최소 주문 금액 {min_amount:,.0f} KRW"
+                if min_amount > available_above_threshold:
+                    reason = (
+                        f"현금 비중 한도 내 사용 가능 금액 {available_above_threshold:,.0f} KRW < "
+                        f"최소 주문 금액 {min_amount:,.0f} KRW"
+                    )
+                    logger.info(f"⏭️ {opportunity.asset}: {reason}")
+                    results["skipped_orders"].append({
+                        "asset": opportunity.asset,
+                        "reason": reason
+                    })
+                    continue
+                if min_amount > remaining_allocation:
+                    reason = (
+                        f"레벨 누적 한도 잔여 {remaining_allocation:,.0f} KRW < "
+                        f"최소 주문 금액 {min_amount:,.0f} KRW"
+                    )
                     logger.info(f"⏭️ {opportunity.asset}: {reason}")
                     results["skipped_orders"].append({
                         "asset": opportunity.asset,
@@ -621,10 +694,6 @@ class OpportunisticBuyer:
                     
                     # 데이터베이스 기록
                     self._record_opportunistic_buy(opportunity, buy_amount, order_result)
-                    
-                    # 레벨별 사용 금액 갱신
-                    level_spent_tracker[opportunity.opportunity_level] += buy_amount
-                    
                 else:
                     results["failed_orders"].append({
                         "asset": opportunity.asset,
