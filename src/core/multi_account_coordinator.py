@@ -268,6 +268,7 @@ class MultiAccountCoordinator(BaseService):
         timeout_seconds: int = 300
     ) -> str:
         """반복 작업 스케줄링"""
+        await self._ensure_initialized()
         
         task_id = f"{name}_recurring_{uuid.uuid4().hex[:8]}"
         
