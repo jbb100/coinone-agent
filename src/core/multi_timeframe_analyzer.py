@@ -840,6 +840,13 @@ class MultiTimeframeAnalyzer:
                 "market_season": result.market_season.value,
                 "cycle_phase": result.cycle_phase.value
             },
+            "overall_trend": {
+                "short": result.technical_20d.trend_direction.value,
+                "medium": result.market_season_200w.trend_direction.value,
+                "long": result.bitcoin_cycle.trend_direction.value
+            },
+            "market_season": result.market_season.value,
+            "cycle_phase": result.cycle_phase.value,
             "confidence": result.overall_confidence,
             "confidence_score": result.overall_confidence,  # 강도 계산용
             "recommended_allocation": {
