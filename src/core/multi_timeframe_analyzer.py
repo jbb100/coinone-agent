@@ -61,6 +61,7 @@ class MultiTimeframeResult:
     # Strategic analysis
     market_season: MarketSeason
     cycle_phase: CyclePhase
+    overall_trend: TrendDirection           # 전체 트렌드 방향
     overall_confidence: float
     recommended_allocation: Dict[str, float]
     analysis_timestamp: datetime
@@ -190,6 +191,13 @@ class MultiTimeframeAnalyzer:
                 tech_20d, season_200w, cycle, market_season, cycle_phase
             )
 
+            # Overall trend (consensus from strategic layer)
+            overall_trend = get_trend_consensus([
+                tech_20d.trend_direction,
+                season_200w.trend_direction,
+                cycle.trend_direction
+            ])
+
             result = MultiTimeframeResult(
                 very_short_term=very_short,
                 swing_term=swing,
@@ -199,6 +207,7 @@ class MultiTimeframeAnalyzer:
                 bitcoin_cycle=cycle,
                 market_season=market_season,
                 cycle_phase=cycle_phase,
+                overall_trend=overall_trend,
                 overall_confidence=overall_confidence,
                 recommended_allocation=recommended_allocation,
                 analysis_timestamp=datetime.now()
