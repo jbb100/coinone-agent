@@ -847,26 +847,26 @@ class MultiTimeframeAnalyzer:
             analysis_data = {
                 "analysis_date": datetime.now().isoformat(),
                 "symbol": symbol,
-                "short_term": {
-                    "trend": result.short_term.trend_direction.value,
-                    "strength": result.short_term.strength,
-                    "support": result.short_term.support_level,
-                    "resistance": result.short_term.resistance_level,
-                    "confidence": result.short_term.confidence
+                "technical_20d": {
+                    "trend": result.technical_20d.trend_direction.value,
+                    "strength": result.technical_20d.strength,
+                    "support": result.technical_20d.support_level,
+                    "resistance": result.technical_20d.resistance_level,
+                    "confidence": result.technical_20d.confidence
                 },
-                "medium_term": {
-                    "trend": result.medium_term.trend_direction.value,
-                    "strength": result.medium_term.strength,
-                    "support": result.medium_term.support_level,
-                    "resistance": result.medium_term.resistance_level,
-                    "confidence": result.medium_term.confidence
+                "market_season_200w": {
+                    "trend": result.market_season_200w.trend_direction.value,
+                    "strength": result.market_season_200w.strength,
+                    "support": result.market_season_200w.support_level,
+                    "resistance": result.market_season_200w.resistance_level,
+                    "confidence": result.market_season_200w.confidence
                 },
-                "long_term": {
-                    "trend": result.long_term.trend_direction.value,
-                    "strength": result.long_term.strength,
-                    "support": result.long_term.support_level,
-                    "resistance": result.long_term.resistance_level,
-                    "confidence": result.long_term.confidence
+                "bitcoin_cycle": {
+                    "trend": result.bitcoin_cycle.trend_direction.value,
+                    "strength": result.bitcoin_cycle.strength,
+                    "support": result.bitcoin_cycle.support_level,
+                    "resistance": result.bitcoin_cycle.resistance_level,
+                    "confidence": result.bitcoin_cycle.confidence
                 },
                 "market_season": result.market_season.value,
                 "cycle_phase": result.cycle_phase.value,
