@@ -45,12 +45,20 @@ class TimeframeAnalysis:
     last_updated: datetime
 
 
-@dataclass 
+@dataclass
 class MultiTimeframeResult:
     """멀티 타임프레임 분석 결과"""
-    short_term: TimeframeAnalysis      # 20일
-    medium_term: TimeframeAnalysis     # 200주
-    long_term: TimeframeAnalysis       # 4년
+    # Trading timeframes (new)
+    very_short_term: TimeframeAnalysis      # 1-7일
+    swing_term: TimeframeAnalysis           # 7-30일
+    position_term: TimeframeAnalysis        # 30-200일
+
+    # Strategic layer (existing, renamed)
+    technical_20d: TimeframeAnalysis        # 기존 short_term
+    market_season_200w: TimeframeAnalysis   # 기존 medium_term
+    bitcoin_cycle: TimeframeAnalysis        # 기존 long_term
+
+    # Strategic analysis
     market_season: MarketSeason
     cycle_phase: CyclePhase
     overall_confidence: float
@@ -147,60 +155,66 @@ class MultiTimeframeAnalyzer:
     def analyze_all_timeframes(self, price_data: pd.DataFrame) -> MultiTimeframeResult:
         """
         전체 시간대 통합 분석
-        
+
         Args:
             price_data: BTC 가격 데이터 (OHLCV)
-            
+
         Returns:
             멀티 타임프레임 분석 결과
         """
         try:
             logger.info("멀티 타임프레임 분석 시작")
-            
-            # 각 시간대별 분석
-            short_term = self._analyze_short_term(price_data)
-            medium_term = self._analyze_medium_term(price_data) 
-            long_term = self._analyze_long_term(price_data)
-            
-            # 기존 시장 계절 분석
+
+            # Trading timeframes (new)
+            very_short = self._analyze_very_short_term(price_data)
+            swing = self._analyze_swing_term(price_data)
+            position = self._analyze_position_term(price_data)
+
+            # Strategic layer (existing, renamed calls)
+            tech_20d = self._analyze_technical_20d(price_data)  # 기존 _analyze_short_term
+            season_200w = self._analyze_market_season_200w(price_data)  # 기존 _analyze_medium_term
+            cycle = self._analyze_bitcoin_cycle_analysis(price_data)  # 기존 _analyze_long_term
+
+            # Market season & cycle
             season_result = self.market_season_filter.analyze_weekly(price_data)
             market_season = MarketSeason(season_result.get("market_season", "neutral"))
-            
-            # 비트코인 사이클 단계 분석
             cycle_phase = self._analyze_bitcoin_cycle(price_data)
-            
-            # 전체적인 신뢰도 계산
-            overall_confidence = self._calculate_overall_confidence(
-                short_term, medium_term, long_term
+
+            # Overall confidence (use trading timeframes)
+            overall_confidence = self._calculate_overall_confidence_v2(
+                very_short, swing, position
             )
-            
-            # 권장 자산 배분 계산
+
+            # Recommended allocation (use strategic layer)
             recommended_allocation = self._calculate_recommended_allocation(
-                short_term, medium_term, long_term, market_season, cycle_phase
+                tech_20d, season_200w, cycle, market_season, cycle_phase
             )
-            
+
             result = MultiTimeframeResult(
-                short_term=short_term,
-                medium_term=medium_term, 
-                long_term=long_term,
+                very_short_term=very_short,
+                swing_term=swing,
+                position_term=position,
+                technical_20d=tech_20d,
+                market_season_200w=season_200w,
+                bitcoin_cycle=cycle,
                 market_season=market_season,
                 cycle_phase=cycle_phase,
                 overall_confidence=overall_confidence,
                 recommended_allocation=recommended_allocation,
                 analysis_timestamp=datetime.now()
             )
-            
+
             logger.info(f"멀티 타임프레임 분석 완료: 신뢰도 {overall_confidence:.1%}")
             return result
-            
+
         except Exception as e:
             logger.error(f"멀티 타임프레임 분석 실패: {e}")
             raise
     
-    def _analyze_short_term(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
+    def _analyze_technical_20d(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
         """
-        단기 분석 (20일)
-        RSI, MACD, 볼린저 밴드 등을 활용한 단기 트렌드 분석
+        기술적 분석 (20일)
+        RSI, MACD, 볼린저 밴드 등을 활용한 기술적 트렌드 분석
         """
         try:
             # 20일 이동평균
@@ -263,10 +277,10 @@ class MultiTimeframeAnalyzer:
                 last_updated=datetime.now()
             )
     
-    def _analyze_medium_term(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
+    def _analyze_market_season_200w(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
         """
-        중기 분석 (200주)
-        기존 200주 이동평균 시스템을 확장
+        시장 계절 분석 (200주)
+        200주 이동평균 기반 시장 계절 판단
         """
         try:
             close_prices = price_data['Close']
@@ -321,9 +335,9 @@ class MultiTimeframeAnalyzer:
                 last_updated=datetime.now()
             )
     
-    def _analyze_long_term(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
+    def _analyze_bitcoin_cycle_analysis(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
         """
-        장기 분석 (4년 사이클)
+        비트코인 사이클 분석 (4년)
         비트코인 반감기 사이클 기반 분석
         """
         try:
@@ -407,46 +421,243 @@ class MultiTimeframeAnalyzer:
                 last_updated=datetime.now()
             )
     
+    def _analyze_very_short_term(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
+        """
+        초단기 분석 (1-7일) - 전술적 트레이딩
+        7일 MA, 7일 RSI를 활용한 단기 트렌드 분석
+        """
+        try:
+            close_prices = price_data['Close']
+
+            # 7일 이동평균
+            ma_7 = close_prices.rolling(window=7).mean()
+            current_price = close_prices.iloc[-1]
+            current_ma_7 = ma_7.iloc[-1]
+
+            # 7일 RSI
+            rsi_7 = self._calculate_rsi(close_prices, period=7)
+            current_rsi_7 = rsi_7.iloc[-1] if not rsi_7.empty else 50
+
+            # 3일 모멘텀 (3일 변화율)
+            if len(close_prices) >= 4:
+                momentum_3d = (close_prices.iloc[-1] / close_prices.iloc[-4] - 1) * 100
+            else:
+                momentum_3d = 0
+
+            # 트렌드 방향 결정
+            if current_price > current_ma_7 and current_rsi_7 > 55:
+                trend = TrendDirection.BULLISH
+                strength = min((current_rsi_7 - 50) / 50, 1.0)
+            elif current_price < current_ma_7 and current_rsi_7 < 45:
+                trend = TrendDirection.BEARISH
+                strength = (50 - current_rsi_7) / 50
+            else:
+                trend = TrendDirection.SIDEWAYS
+                strength = 0.3
+
+            # 지지/저항 레벨
+            recent_high_7d = close_prices.tail(7).max()
+            recent_low_7d = close_prices.tail(7).min()
+
+            # 신뢰도 (단기는 노이즈가 많아 상대적으로 낮은 신뢰도)
+            confidence = 0.6
+
+            return TimeframeAnalysis(
+                timeframe="very_short_term_7d",
+                trend_direction=trend,
+                strength=strength,
+                support_level=recent_low_7d,
+                resistance_level=recent_high_7d,
+                confidence=confidence,
+                last_updated=datetime.now()
+            )
+
+        except Exception as e:
+            logger.error(f"초단기 분석 실패: {e}")
+            return TimeframeAnalysis(
+                timeframe="very_short_term_7d",
+                trend_direction=TrendDirection.SIDEWAYS,
+                strength=0.3,
+                support_level=0,
+                resistance_level=0,
+                confidence=0.3,
+                last_updated=datetime.now()
+            )
+
+    def _analyze_swing_term(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
+        """
+        스윙 분석 (7-30일) - 중기 트렌드
+        30일 MA, 30일 RSI, MACD를 활용한 스윙 트레이딩 분석
+        """
+        try:
+            close_prices = price_data['Close']
+
+            # 30일 이동평균
+            ma_30 = close_prices.rolling(window=30).mean()
+            current_price = close_prices.iloc[-1]
+            current_ma_30 = ma_30.iloc[-1]
+
+            # 30일 RSI
+            rsi_30 = self._calculate_rsi(close_prices, period=30)
+            current_rsi_30 = rsi_30.iloc[-1] if not rsi_30.empty else 50
+
+            # MACD
+            macd_line, signal_line = self._calculate_macd(close_prices)
+            macd_current = macd_line.iloc[-1] if not macd_line.empty else 0
+            signal_current = signal_line.iloc[-1] if not signal_line.empty else 0
+
+            # 트렌드 방향 결정
+            if current_price > current_ma_30 and macd_current > signal_current:
+                trend = TrendDirection.BULLISH
+                strength = 0.7
+            elif current_price < current_ma_30 and macd_current < signal_current:
+                trend = TrendDirection.BEARISH
+                strength = 0.7
+            else:
+                trend = TrendDirection.SIDEWAYS
+                strength = 0.4
+
+            # 지지/저항 레벨
+            recent_high_30d = close_prices.tail(30).max()
+            recent_low_30d = close_prices.tail(30).min()
+
+            # 신뢰도
+            confidence = 0.7
+
+            return TimeframeAnalysis(
+                timeframe="swing_term_30d",
+                trend_direction=trend,
+                strength=strength,
+                support_level=recent_low_30d,
+                resistance_level=recent_high_30d,
+                confidence=confidence,
+                last_updated=datetime.now()
+            )
+
+        except Exception as e:
+            logger.error(f"스윙 분석 실패: {e}")
+            return TimeframeAnalysis(
+                timeframe="swing_term_30d",
+                trend_direction=TrendDirection.SIDEWAYS,
+                strength=0.4,
+                support_level=0,
+                resistance_level=0,
+                confidence=0.5,
+                last_updated=datetime.now()
+            )
+
+    def _analyze_position_term(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
+        """
+        포지션 분석 (30-200일) - 주요 트렌드
+        50/100/200일 MA를 활용한 장기 포지션 트레이딩 분석
+        """
+        try:
+            close_prices = price_data['Close']
+            current_price = close_prices.iloc[-1]
+
+            # 다중 이동평균
+            ma_50 = close_prices.rolling(window=50).mean()
+            ma_100 = close_prices.rolling(window=100).mean()
+            ma_200 = close_prices.rolling(window=200).mean()
+
+            current_ma_50 = ma_50.iloc[-1] if len(close_prices) >= 50 else current_price
+            current_ma_100 = ma_100.iloc[-1] if len(close_prices) >= 100 else current_price
+            current_ma_200 = ma_200.iloc[-1] if len(close_prices) >= 200 else current_price
+
+            # 골든크로스/데드크로스 감지
+            golden_cross = current_ma_50 > current_ma_200 if len(close_prices) >= 200 else True
+
+            # 트렌드 분류 (다중 MA 정렬)
+            if (current_price > current_ma_50 > current_ma_100 > current_ma_200):
+                # 완벽한 상승 정렬
+                trend = TrendDirection.BULLISH
+                strength = 0.9
+            elif (current_price < current_ma_50 < current_ma_100 < current_ma_200):
+                # 완벽한 하락 정렬
+                trend = TrendDirection.BEARISH
+                strength = 0.9
+            elif current_price > current_ma_200:
+                # 200일선 위
+                trend = TrendDirection.BULLISH
+                strength = 0.5
+            elif current_price < current_ma_200:
+                # 200일선 아래
+                trend = TrendDirection.BEARISH
+                strength = 0.5
+            else:
+                trend = TrendDirection.SIDEWAYS
+                strength = 0.3
+
+            # 지지/저항 레벨
+            lookback = min(200, len(close_prices))
+            support_level = close_prices.tail(lookback).min()
+            resistance_level = close_prices.tail(lookback).max()
+
+            # 신뢰도 (장기는 노이즈가 적어 높은 신뢰도)
+            confidence = 0.85
+
+            return TimeframeAnalysis(
+                timeframe="position_term_200d",
+                trend_direction=trend,
+                strength=strength,
+                support_level=support_level,
+                resistance_level=resistance_level,
+                confidence=confidence,
+                last_updated=datetime.now()
+            )
+
+        except Exception as e:
+            logger.error(f"포지션 분석 실패: {e}")
+            return TimeframeAnalysis(
+                timeframe="position_term_200d",
+                trend_direction=TrendDirection.SIDEWAYS,
+                strength=0.5,
+                support_level=0,
+                resistance_level=0,
+                confidence=0.6,
+                last_updated=datetime.now()
+            )
+
     def _analyze_bitcoin_cycle(self, price_data: pd.DataFrame) -> CyclePhase:
         """비트코인 4년 사이클 단계 분석"""
         try:
             current_date = datetime.now()
             last_halving = None
-            
+
             for halving_date in reversed(self.halving_dates):
                 if halving_date <= current_date:
                     last_halving = halving_date
                     break
-            
+
             if not last_halving:
                 return CyclePhase.ACCUMULATION
-            
+
             days_since_halving = (current_date - last_halving).days
-            
+
             # 대략적인 사이클 단계 (역사적 패턴 기반)
             if days_since_halving < 150:  # 약 5개월
                 return CyclePhase.ACCUMULATION
             elif days_since_halving < 550:  # 약 18개월
                 return CyclePhase.MARKUP
-            elif days_since_halving < 750:  # 약 25개월  
+            elif days_since_halving < 750:  # 약 25개월
                 return CyclePhase.DISTRIBUTION
             else:
                 return CyclePhase.DECLINE
-                
+
         except Exception as e:
             logger.error(f"비트코인 사이클 분석 실패: {e}")
             return CyclePhase.ACCUMULATION
     
     def _calculate_overall_confidence(
-        self, 
-        short: TimeframeAnalysis, 
-        medium: TimeframeAnalysis, 
+        self,
+        short: TimeframeAnalysis,
+        medium: TimeframeAnalysis,
         long: TimeframeAnalysis
     ) -> float:
-        """전체 신뢰도 계산"""
+        """전체 신뢰도 계산 (Strategic layer용 - 기존 로직)"""
         # 시간대별 일치도 확인
         trends = [short.trend_direction, medium.trend_direction, long.trend_direction]
-        
+
         # 같은 방향이 많을수록 신뢰도 높음 (보너스 감소)
         if trends.count(TrendDirection.BULLISH) >= 2:
             alignment_bonus = 0.15  # 30% -> 15%로 감소
@@ -454,15 +665,41 @@ class MultiTimeframeAnalyzer:
             alignment_bonus = 0.15  # 30% -> 15%로 감소
         else:
             alignment_bonus = -0.05  # 방향이 다르면 신뢰도 감소
-        
+
         # 각 시간대 신뢰도의 가중평균
         weighted_confidence = (
             short.confidence * 0.2 +    # 단기 20%
-            medium.confidence * 0.5 +   # 중기 50%  
+            medium.confidence * 0.5 +   # 중기 50%
             long.confidence * 0.3       # 장기 30%
         ) + alignment_bonus
-        
+
         return min(weighted_confidence, 1.0)
+
+    def _calculate_overall_confidence_v2(
+        self,
+        very_short: TimeframeAnalysis,
+        swing: TimeframeAnalysis,
+        position: TimeframeAnalysis
+    ) -> float:
+        """트레이딩 타임프레임 기반 전체 신뢰도 계산"""
+        trends = [very_short.trend_direction, swing.trend_direction, position.trend_direction]
+
+        # Alignment bonus
+        if len(set(trends)) == 1:  # All same
+            alignment_bonus = 0.20
+        elif trends.count(trends[0]) >= 2:  # 2/3 same
+            alignment_bonus = 0.10
+        else:  # All different
+            alignment_bonus = -0.10
+
+        # Weighted average
+        weighted_confidence = (
+            very_short.confidence * 0.2 +    # 초단기 20%
+            swing.confidence * 0.3 +         # 스윙 30%
+            position.confidence * 0.5        # 포지션 50%
+        ) + alignment_bonus
+
+        return min(max(weighted_confidence, 0.0), 1.0)
     
     def _calculate_recommended_allocation(
         self,
@@ -537,7 +774,18 @@ class MultiTimeframeAnalyzer:
             return rsi
         except:
             return pd.Series([50] * len(prices), index=prices.index)
-    
+
+    def _calculate_macd(self, prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[pd.Series, pd.Series]:
+        """MACD 계산"""
+        try:
+            ema_fast = prices.ewm(span=fast, adjust=False).mean()
+            ema_slow = prices.ewm(span=slow, adjust=False).mean()
+            macd_line = ema_fast - ema_slow
+            signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+            return macd_line, signal_line
+        except:
+            return pd.Series([0] * len(prices), index=prices.index), pd.Series([0] * len(prices), index=prices.index)
+
     def _calculate_bollinger_bands(self, prices: pd.Series, period: int = 20, std_dev: int = 2) -> Tuple[pd.Series, pd.Series]:
         """볼린저 밴드 계산"""
         try:
@@ -552,13 +800,33 @@ class MultiTimeframeAnalyzer:
     def get_analysis_summary(self, result: MultiTimeframeResult) -> Dict[str, Any]:
         """분석 결과 요약"""
         return {
-            "overall_trend": {
-                "short": result.short_term.trend_direction.value,
-                "medium": result.medium_term.trend_direction.value, 
-                "long": result.long_term.trend_direction.value
+            "trading_timeframes": {
+                "very_short_term": {
+                    "period": "1-7일",
+                    "trend": result.very_short_term.trend_direction.value,
+                    "strength": result.very_short_term.strength,
+                    "confidence": result.very_short_term.confidence
+                },
+                "swing_term": {
+                    "period": "7-30일",
+                    "trend": result.swing_term.trend_direction.value,
+                    "strength": result.swing_term.strength,
+                    "confidence": result.swing_term.confidence
+                },
+                "position_term": {
+                    "period": "30-200일",
+                    "trend": result.position_term.trend_direction.value,
+                    "strength": result.position_term.strength,
+                    "confidence": result.position_term.confidence
+                }
             },
-            "market_season": result.market_season.value,
-            "cycle_phase": result.cycle_phase.value,
+            "strategic_layer": {
+                "technical_20d": result.technical_20d.trend_direction.value,
+                "market_season_200w": result.market_season_200w.trend_direction.value,
+                "bitcoin_cycle": result.bitcoin_cycle.trend_direction.value,
+                "market_season": result.market_season.value,
+                "cycle_phase": result.cycle_phase.value
+            },
             "confidence": result.overall_confidence,
             "confidence_score": result.overall_confidence,  # 강도 계산용
             "recommended_allocation": {
@@ -566,10 +834,10 @@ class MultiTimeframeAnalyzer:
                 "krw": f"{result.recommended_allocation['krw']:.1%}"
             },
             "key_levels": {
-                "short_term_support": result.short_term.support_level,
-                "short_term_resistance": result.short_term.resistance_level,
-                "long_term_support": result.long_term.support_level,
-                "long_term_resistance": result.long_term.resistance_level
+                "very_short_support": result.very_short_term.support_level,
+                "very_short_resistance": result.very_short_term.resistance_level,
+                "position_support": result.position_term.support_level,
+                "position_resistance": result.position_term.resistance_level
             }
         }
     

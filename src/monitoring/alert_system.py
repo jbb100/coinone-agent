@@ -725,33 +725,42 @@ class AlertSystem:
             발송 결과
         """
         try:
-            overall_trend = analysis_result.get("overall_trend", {})
-            market_season = analysis_result.get("market_season", "알 수 없음")
-            cycle_phase = analysis_result.get("cycle_phase", "알 수 없음")
+            # Extract trading timeframes
+            trading_timeframes = analysis_result.get("trading_timeframes", {})
+            very_short = trading_timeframes.get("very_short_term", {})
+            swing = trading_timeframes.get("swing_term", {})
+            position = trading_timeframes.get("position_term", {})
+
+            # Extract strategic layer
+            strategic_layer = analysis_result.get("strategic_layer", {})
+            market_season = strategic_layer.get("market_season", "알 수 없음")
+            cycle_phase = strategic_layer.get("cycle_phase", "알 수 없음")
+
+            # Extract overall metrics
             confidence = analysis_result.get("confidence", 0)
             recommended_allocation = analysis_result.get("recommended_allocation", {})
-            
+
             # 트렌드 이모지
             trend_emoji = {
-                "상승": "📈",
-                "하락": "📉",
-                "횡보": "➡️"
+                "bullish": "📈",
+                "bearish": "📉",
+                "sideways": "➡️"
             }
-            
+
             message = f"""
 📊 **멀티 타임프레임 분석 보고서**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📅 분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-📈 **종합 트렌드**
-• 단기 (1-7일): {trend_emoji.get(overall_trend.get('short', ''), '❓')} {overall_trend.get('short', 'N/A')}
-• 중기 (7-30일): {trend_emoji.get(overall_trend.get('medium', ''), '❓')} {overall_trend.get('medium', 'N/A')}
-• 장기 (30일+): {trend_emoji.get(overall_trend.get('long', ''), '❓')} {overall_trend.get('long', 'N/A')}
+📈 **트레이딩 타임프레임**
+• 초단기 (1-7일): {trend_emoji.get(very_short.get('trend', ''), '❓')} {very_short.get('trend', 'N/A')}
+• 스윙 (7-30일): {trend_emoji.get(swing.get('trend', ''), '❓')} {swing.get('trend', 'N/A')}
+• 포지션 (30-200일): {trend_emoji.get(position.get('trend', ''), '❓')} {position.get('trend', 'N/A')}
 
-🎯 **시장 상태**
+🎯 **전략 계층**
 • 시장 계절: {market_season}
-• 사이클 단계: {cycle_phase}
+• 비트코인 사이클: {cycle_phase}
 • 신뢰도: {confidence:.1%}
 
 💼 **권장 자산 배분**
