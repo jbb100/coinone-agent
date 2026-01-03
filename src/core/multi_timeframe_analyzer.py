@@ -131,7 +131,9 @@ class MultiTimeframeAnalyzer:
             return self.get_analysis_summary(result)
             
         except Exception as e:
+            import traceback
             logger.error(f"멀티 타임프레임 분석 실패: {e}")
+            logger.error(f"상세 오류:\n{traceback.format_exc()}")
             return {
                 "overall_trend": {
                     "short": "sideways",
@@ -217,7 +219,9 @@ class MultiTimeframeAnalyzer:
             return result
 
         except Exception as e:
-            logger.error(f"멀티 타임프레임 분석 실패: {e}")
+            import traceback
+            logger.error(f"analyze_all_timeframes 실패: {e}")
+            logger.error(f"상세 오류:\n{traceback.format_exc()}")
             raise
     
     def _analyze_technical_20d(self, price_data: pd.DataFrame) -> TimeframeAnalysis:
