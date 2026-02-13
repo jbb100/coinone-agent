@@ -768,3 +768,303 @@ def load_test_scenarios():
             'duration': 120
         }
     }
+
+
+# ============================================================================
+# Risk Manager Test Fixtures (TDD Phase 1)
+# ============================================================================
+
+@pytest.fixture
+def mock_config():
+    """Mock ConfigLoader for RiskManager"""
+    config = Mock()
+    config.get_risk_config.return_value = {
+        'trading_limits': {
+            'max_single_trade': 10000000,
+            'max_daily_volume': 50000000,
+            'max_position_size': 0.50
+        },
+        'loss_limits': {
+            'max_daily_loss': 0.05,
+            'max_monthly_loss': 0.15,
+            'drawdown_threshold': 0.20
+        },
+        'three_line_check': {
+            'performance_period': 30,
+            'tracking_error_threshold': 0.02,
+            'benchmark': 'BTC'
+        }
+    }
+    return config
+
+
+@pytest.fixture
+def mock_db_manager():
+    """Mock DatabaseManager for portfolio history"""
+    db_manager = Mock()
+
+    # 기본 포트폴리오 가치: 10,000,000 KRW
+    db_manager.get_portfolio_value_days_ago.return_value = 10_000_000
+
+    # 30일간 일별 수익률 (낮은 변동성)
+    db_manager.get_portfolio_daily_returns.return_value = [
+        0.01, -0.005, 0.008, -0.003, 0.012,
+        -0.007, 0.006, -0.002, 0.009, -0.004,
+        0.011, -0.006, 0.007, -0.001, 0.008,
+        -0.003, 0.005, -0.008, 0.010, -0.002,
+        0.006, -0.004, 0.009, -0.005, 0.007,
+        -0.002, 0.008, -0.003, 0.006, -0.001
+    ]
+
+    # 온체인/매크로 분석 결과
+    db_manager.get_latest_analysis_result.return_value = None
+
+    return db_manager
+
+
+@pytest.fixture
+def stable_portfolio():
+    """저변동성 포트폴리오 데이터"""
+    return {
+        'total_krw': 10_000_000,
+        'daily_returns': [0.001, -0.002, 0.001, 0.002, -0.001] * 6  # 30일
+    }
+
+
+@pytest.fixture
+def volatile_portfolio():
+    """고변동성 포트폴리오 데이터"""
+    return {
+        'total_krw': 10_000_000,
+        'daily_returns': [0.05, -0.08, 0.06, -0.07, 0.04] * 6  # 30일
+    }
+
+
+@pytest.fixture
+def daily_loss_portfolio():
+    """일일 손실 5% 초과 포트폴리오"""
+    return {
+        'total_krw': 9_400_000,  # 6% 손실 (10M -> 9.4M)
+        'assets': {
+            'KRW': {'value_krw': 5_000_000},
+            'BTC': {'value_krw': 4_400_000}
+        }
+    }
+
+
+@pytest.fixture
+def monthly_loss_portfolio():
+    """월간 손실 15% 초과 포트폴리오"""
+    return {
+        'total_krw': 8_300_000,  # 17% 손실 (10M -> 8.3M)
+        'assets': {
+            'KRW': {'value_krw': 5_000_000},
+            'BTC': {'value_krw': 3_300_000}
+        }
+    }
+
+
+@pytest.fixture
+def normal_portfolio():
+    """정상 포트폴리오 데이터"""
+    return {
+        'total_krw': 9_800_000,  # 2% 손실 (허용 범위 내)
+        'assets': {
+            'KRW': {'value_krw': 5_000_000},
+            'BTC': {'value_krw': 4_800_000}
+        }
+    }
+
+
+# ============================================================================
+# Technical Analysis Test Fixtures (TDD Phase 2)
+# ============================================================================
+
+@pytest.fixture
+def oversold_prices():
+    """RSI 과매도 상태 가격 데이터"""
+    import pandas as pd
+    import numpy as np
+
+    # 연속 하락 패턴 (RSI < 30)
+    np.random.seed(42)
+    base_price = 50_000_000
+    prices = [base_price]
+    for _ in range(30):
+        # 대부분 하락
+        change = np.random.uniform(-0.03, 0.005)
+        prices.append(prices[-1] * (1 + change))
+
+    return pd.Series(prices)
+
+
+@pytest.fixture
+def overbought_prices():
+    """RSI 과매수 상태 가격 데이터"""
+    import pandas as pd
+    import numpy as np
+
+    # 연속 상승 패턴 (RSI > 70)
+    np.random.seed(42)
+    base_price = 50_000_000
+    prices = [base_price]
+    for _ in range(30):
+        # 대부분 상승
+        change = np.random.uniform(-0.005, 0.03)
+        prices.append(prices[-1] * (1 + change))
+
+    return pd.Series(prices)
+
+
+@pytest.fixture
+def crossover_prices():
+    """RSI 50 상향돌파 패턴"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    base_price = 50_000_000
+    # 하락 후 상승 반전
+    prices = [base_price * (0.9 + i * 0.02) for i in range(20)]
+    return pd.Series(prices)
+
+
+@pytest.fixture
+def golden_cross_prices():
+    """MACD 골든크로스 패턴"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    # 상승 추세 시작
+    prices = [50_000_000 * (1 + i * 0.01) for i in range(50)]
+    return pd.Series(prices)
+
+
+@pytest.fixture
+def death_cross_prices():
+    """MACD 데드크로스 패턴"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    # 하락 추세 시작
+    prices = [50_000_000 * (1 - i * 0.008) for i in range(50)]
+    return pd.Series(prices)
+
+
+@pytest.fixture
+def lower_touch_prices():
+    """볼린저밴드 하단 터치 패턴"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    # 급락 후 하단 터치
+    base = 50_000_000
+    prices = [base] * 15 + [base * 0.85] * 5  # 급락
+    return pd.Series(prices)
+
+
+@pytest.fixture
+def upper_touch_prices():
+    """볼린저밴드 상단 터치 패턴"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    # 급등 후 상단 터치
+    base = 50_000_000
+    prices = [base] * 15 + [base * 1.15] * 5  # 급등
+    return pd.Series(prices)
+
+
+@pytest.fixture
+def all_bullish_data():
+    """3개 지표 모두 매수 신호인 데이터"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    # 하락 후 강한 반등 (RSI 과매도 + MACD 골든크로스 + 볼린저 하단 반등)
+    base = 50_000_000
+    prices = []
+    # 하락 구간
+    for i in range(25):
+        prices.append(base * (1 - i * 0.015))
+    # 반등 시작
+    bottom = prices[-1]
+    for i in range(10):
+        prices.append(bottom * (1 + i * 0.02))
+
+    return pd.DataFrame({
+        'Close': prices,
+        'High': [p * 1.01 for p in prices],
+        'Low': [p * 0.99 for p in prices],
+        'Volume': [1000] * len(prices)
+    })
+
+
+@pytest.fixture
+def all_bearish_data():
+    """3개 지표 모두 매도 신호인 데이터"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    # 상승 후 강한 하락 (RSI 과매수 + MACD 데드크로스 + 볼린저 상단 반락)
+    base = 50_000_000
+    prices = []
+    # 상승 구간
+    for i in range(25):
+        prices.append(base * (1 + i * 0.015))
+    # 하락 시작
+    top = prices[-1]
+    for i in range(10):
+        prices.append(top * (1 - i * 0.02))
+
+    return pd.DataFrame({
+        'Close': prices,
+        'High': [p * 1.01 for p in prices],
+        'Low': [p * 0.99 for p in prices],
+        'Volume': [1000] * len(prices)
+    })
+
+
+@pytest.fixture
+def mixed_data():
+    """지표 혼재 데이터 (중립)"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    base = 50_000_000
+    # 횡보 패턴
+    prices = [base * (1 + np.sin(i * 0.3) * 0.02) for i in range(35)]
+
+    return pd.DataFrame({
+        'Close': prices,
+        'High': [p * 1.005 for p in prices],
+        'Low': [p * 0.995 for p in prices],
+        'Volume': [1000] * len(prices)
+    })
+
+
+@pytest.fixture
+def two_bullish_data():
+    """2개 지표 매수 신호인 데이터"""
+    import pandas as pd
+    import numpy as np
+
+    np.random.seed(42)
+    base = 50_000_000
+    # 약한 하락 후 반등 (RSI 과매도 + 볼린저 하단, MACD는 중립)
+    prices = [base * (1 - i * 0.008) for i in range(20)]
+    prices += [prices[-1] * (1 + i * 0.005) for i in range(15)]
+
+    return pd.DataFrame({
+        'Close': prices,
+        'High': [p * 1.005 for p in prices],
+        'Low': [p * 0.995 for p in prices],
+        'Volume': [1000] * len(prices)
+    })

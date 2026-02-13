@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from loguru import logger
+import numpy as np
 
 
 @dataclass
@@ -44,18 +45,20 @@ class RiskManager:
     3-라인 체크 시스템과 리스크 제한을 통해 포트폴리오를 보호합니다.
     """
     
-    def __init__(self, config):
+    def __init__(self, config, db_manager=None):
         """
         Args:
             config: ConfigLoader 인스턴스
+            db_manager: DatabaseManager 인스턴스 (선택)
         """
         self.config = config
         self.risk_config = config.get_risk_config()
-        
+        self.db_manager = db_manager
+
         # 리스크 제한 설정
         trading_limits = self.risk_config.get("trading_limits", {})
         loss_limits = self.risk_config.get("loss_limits", {})
-        
+
         self.risk_limits = RiskLimits(
             max_single_trade=trading_limits.get("max_single_trade", 10000000),
             max_daily_volume=trading_limits.get("max_daily_volume", 50000000),
@@ -64,17 +67,17 @@ class RiskManager:
             max_monthly_loss=loss_limits.get("max_monthly_loss", 0.15),
             drawdown_threshold=loss_limits.get("drawdown_threshold", 0.20)
         )
-        
+
         # 3-라인 체크 설정
         three_line_config = self.risk_config.get("three_line_check", {})
         self.performance_period = three_line_config.get("performance_period", 30)
         self.tracking_error_threshold = three_line_config.get("tracking_error_threshold", 0.02)
         self.benchmark = three_line_config.get("benchmark", "BTC")
-        
+
         # 일일 거래량 추적
         self.daily_trade_volume = 0
         self.last_reset_date = datetime.now().date()
-        
+
         logger.info("RiskManager 초기화 완료")
     
     def pre_trade_risk_check(self, portfolio_data: Dict, trade_amount: float = 0) -> RiskCheckResult:
@@ -179,23 +182,52 @@ class RiskManager:
     def _check_loss_limits(self, portfolio_data: Dict) -> List[str]:
         """
         손실 한도 체크
-        
+
         Args:
             portfolio_data: 포트폴리오 데이터
-            
+
         Returns:
             제한 사항 메시지 리스트
         """
         restrictions = []
-        
-        # TODO: 실제 구현에서는 데이터베이스에서 과거 데이터를 조회해야 함
-        # 여기서는 예시로 간단한 로직만 구현
-        
-        # 일일 손실 체크 (임시)
-        # daily_loss = self._calculate_daily_loss(portfolio_data)
-        # if daily_loss < -self.risk_limits.max_daily_loss:
-        #     restrictions.append(f"일일 손실 한도 초과: {daily_loss:.2%}")
-        
+        current_value = portfolio_data.get("total_krw", 0)
+
+        if current_value <= 0 or not self.db_manager:
+            return restrictions
+
+        try:
+            # 1. 일일 손실 체크
+            yesterday_value = self.db_manager.get_portfolio_value_days_ago(1)
+            if yesterday_value and yesterday_value > 0:
+                daily_loss = (current_value - yesterday_value) / yesterday_value
+                if daily_loss < -self.risk_limits.max_daily_loss:
+                    restrictions.append(
+                        f"일일 손실 한도 초과: {daily_loss:.2%} (한도: -{self.risk_limits.max_daily_loss:.0%})"
+                    )
+
+            # 2. 월간 손실 체크
+            month_ago_value = self.db_manager.get_portfolio_value_days_ago(30)
+            if month_ago_value and month_ago_value > 0:
+                monthly_loss = (current_value - month_ago_value) / month_ago_value
+                if monthly_loss < -self.risk_limits.max_monthly_loss:
+                    restrictions.append(
+                        f"월간 손실 한도 초과: {monthly_loss:.2%} (한도: -{self.risk_limits.max_monthly_loss:.0%})"
+                    )
+
+            # 3. 드로우다운 체크
+            if hasattr(self.db_manager, 'get_portfolio_peak_value'):
+                peak_value = self.db_manager.get_portfolio_peak_value()
+                if peak_value and peak_value > 0:
+                    drawdown = (current_value - peak_value) / peak_value
+                    if drawdown < -self.risk_limits.drawdown_threshold:
+                        restrictions.append(
+                            f"드로우다운 임계값 초과: {drawdown:.2%} (한도: -{self.risk_limits.drawdown_threshold:.0%})"
+                        )
+
+        except Exception as e:
+            logger.warning(f"손실 한도 체크 중 오류: {e}")
+            # DB 오류 시 빈 리스트 반환 (거래 허용)
+
         return restrictions
     
     def _reset_daily_volume_if_needed(self):
@@ -369,34 +401,34 @@ class RiskManager:
     def calculate_risk_score(self, portfolio_data: Dict) -> float:
         """
         전체 포트폴리오 리스크 스코어 계산
-        
+
         Args:
             portfolio_data: 포트폴리오 데이터
-            
+
         Returns:
             리스크 스코어 (0.0 ~ 1.0)
         """
         try:
             risk_score = 0.0
-            
+
             # 포지션 집중도 리스크
             concentration_risk = self._calculate_concentration_risk(portfolio_data)
             risk_score += concentration_risk * 0.3
-            
-            # 변동성 리스크 (임시)
-            volatility_risk = 0.2  # TODO: 실제 변동성 계산
+
+            # 변동성 리스크 (동적 계산)
+            volatility_risk = self._calculate_volatility_risk(portfolio_data)
             risk_score += volatility_risk * 0.2
-            
+
             # 유동성 리스크
             liquidity_risk = self._calculate_liquidity_risk(portfolio_data)
             risk_score += liquidity_risk * 0.3
-            
-            # 시장 리스크
-            market_risk = 0.3  # TODO: 시장 상황 기반 계산
+
+            # 시장 리스크 (동적 계산)
+            market_risk = self._calculate_market_risk()
             risk_score += market_risk * 0.2
-            
+
             return min(risk_score, 1.0)
-            
+
         except Exception as e:
             logger.error(f"리스크 스코어 계산 실패: {e}")
             return 0.5  # 중간값 반환
@@ -466,7 +498,7 @@ class RiskManager:
     def update_risk_limits(self, new_limits: Dict):
         """
         리스크 제한 설정 업데이트
-        
+
         Args:
             new_limits: 새로운 제한 설정
         """
@@ -474,6 +506,183 @@ class RiskManager:
             if hasattr(self.risk_limits, key):
                 setattr(self.risk_limits, key, value)
                 logger.info(f"리스크 제한 업데이트: {key} = {value}")
+
+    def calculate_position_size_with_kelly(
+        self,
+        account_size: float,
+        entry_price: float,
+        stop_loss: float,
+        win_rate: float = 0.45,
+        risk_reward: float = 2.0,
+        max_risk_percent: float = 0.01,
+        use_half_kelly: bool = True,
+        kelly_fraction: float = None
+    ) -> float:
+        """
+        켈리 기준 + 1% 규칙을 적용한 포지션 사이징
+
+        Args:
+            account_size: 계좌 크기 (KRW)
+            entry_price: 진입 가격
+            stop_loss: 손절 가격
+            win_rate: 승률 (0-1)
+            risk_reward: 손익비 (예: 2.0 = 1:2)
+            max_risk_percent: 최대 리스크 비율 (기본 1%)
+            use_half_kelly: Half Kelly 사용 여부
+            kelly_fraction: 켈리 비율 직접 지정 (None이면 use_half_kelly 사용)
+
+        Returns:
+            포지션 크기 (KRW)
+        """
+        # 파라미터 검증
+        if account_size <= 0:
+            raise ValueError("계좌 크기는 0보다 커야 합니다")
+
+        if entry_price <= 0 or stop_loss <= 0:
+            raise ValueError("가격은 0보다 커야 합니다")
+
+        # 롱 포지션 기준 손절가 검증
+        if stop_loss >= entry_price:
+            raise ValueError("롱 포지션에서 손절가는 진입가보다 낮아야 합니다")
+
+        # 손절 비율 계산
+        stop_loss_percent = (entry_price - stop_loss) / entry_price
+
+        # 켈리 기준 계산
+        # Kelly % = (win_rate * risk_reward - (1 - win_rate)) / risk_reward
+        kelly_percent = (win_rate * risk_reward - (1 - win_rate)) / risk_reward
+
+        # 음수 엣지면 포지션 0
+        if kelly_percent <= 0:
+            return 0
+
+        # 켈리 비율 적용
+        if kelly_fraction is not None:
+            effective_kelly = kelly_percent * kelly_fraction
+        elif use_half_kelly:
+            effective_kelly = kelly_percent * 0.5  # Half Kelly
+        else:
+            effective_kelly = kelly_percent  # Full Kelly
+
+        # 켈리 기준 포지션 크기
+        kelly_position = account_size * effective_kelly
+
+        # 1% 규칙 적용: 최대 리스크 금액
+        max_risk_amount = account_size * max_risk_percent
+        max_position_by_risk = max_risk_amount / stop_loss_percent if stop_loss_percent > 0 else 0
+
+        # 켈리와 1% 규칙 중 더 작은 값 선택
+        position_size = min(kelly_position, max_position_by_risk)
+
+        # 최소 거래 금액 확인 (5,000 KRW)
+        min_trade_amount = 5_000
+        if position_size > 0 and position_size < min_trade_amount:
+            # 최소 금액 미만이면 0 반환 (거래 불가)
+            return 0
+
+        return position_size
+
+    def _calculate_volatility_risk(self, portfolio_data: Dict) -> float:
+        """
+        동적 변동성 리스크 계산
+
+        Args:
+            portfolio_data: 포트폴리오 데이터
+
+        Returns:
+            변동성 리스크 점수 (0.0 ~ 1.0)
+        """
+        if not self.db_manager:
+            return 0.5  # 기본 중간값
+
+        try:
+            # 30일 일별 수익률 조회
+            daily_returns = self.db_manager.get_portfolio_daily_returns()
+
+            if not daily_returns or len(daily_returns) < 10:
+                # 데이터 부족 시 보수적 중간값
+                return 0.5
+
+            # 표준편차 계산
+            returns_array = np.array(daily_returns)
+            daily_volatility = np.std(returns_array)
+
+            # 변동성 0인 경우
+            if daily_volatility == 0:
+                return 0.05  # 매우 낮은 리스크
+
+            # 연간화 변동성 (대략적)
+            annual_volatility = daily_volatility * np.sqrt(365)
+
+            # 변동성 기반 리스크 점수 계산
+            # 5% 일일 변동성 = 고위험 (0.7+)
+            # 1% 일일 변동성 = 저위험 (0.2-)
+
+            if daily_volatility >= 0.05:  # 5% 이상
+                risk_score = 0.7 + min((daily_volatility - 0.05) * 10, 0.3)
+            elif daily_volatility >= 0.02:  # 2-5%
+                risk_score = 0.3 + (daily_volatility - 0.02) / 0.03 * 0.4
+            else:  # 2% 미만
+                risk_score = daily_volatility / 0.02 * 0.3
+
+            return min(max(risk_score, 0.0), 1.0)
+
+        except Exception as e:
+            logger.warning(f"변동성 리스크 계산 중 오류: {e}")
+            return 0.5  # 오류 시 중간값
+
+    def _calculate_market_risk(self) -> float:
+        """
+        시장 리스크 동적 계산 (온체인 지표 + 공포탐욕지수)
+
+        Returns:
+            시장 리스크 점수 (0.0 ~ 1.0)
+        """
+        if not self.db_manager:
+            return 0.5  # 기본 중간값
+
+        try:
+            # 최신 시장 분석 결과 조회
+            analysis = self.db_manager.get_latest_analysis_result()
+
+            if not analysis:
+                return 0.5  # 데이터 없으면 중간값
+
+            fear_greed = analysis.get('fear_greed_index', 50)
+            mvrv = analysis.get('mvrv', 1.5)
+
+            risk_score = 0.0
+
+            # 1. Fear & Greed Index 기반 리스크
+            # 극단적 탐욕 (>75): 고위험 (매도 신호)
+            # 극단적 공포 (<25): 중간 리스크 (매수 기회지만 변동성 큼)
+            # 중립 (25-75): 낮은 리스크
+            if fear_greed >= 75:
+                fg_risk = 0.5 + (fear_greed - 75) / 25 * 0.5
+            elif fear_greed <= 25:
+                fg_risk = 0.3 + (25 - fear_greed) / 25 * 0.2
+            else:
+                fg_risk = 0.2
+
+            # 2. MVRV 기반 리스크
+            # MVRV > 3.0: 과대평가, 고위험
+            # MVRV < 1.0: 과소평가, 저위험
+            if mvrv >= 3.0:
+                mvrv_risk = 0.6 + min((mvrv - 3.0) * 0.2, 0.4)
+            elif mvrv <= 1.0:
+                mvrv_risk = mvrv * 0.3
+            else:
+                # 1.0 ~ 3.0 사이
+                mvrv_risk = 0.3 + (mvrv - 1.0) / 2.0 * 0.3
+
+            # 가중 평균 (Fear&Greed 40%, MVRV 60%)
+            risk_score = fg_risk * 0.4 + mvrv_risk * 0.6
+
+            return min(max(risk_score, 0.0), 1.0)
+
+        except Exception as e:
+            logger.warning(f"시장 리스크 계산 중 오류: {e}")
+            return 0.5  # 오류 시 중간값
 
 
 # 설정 상수
