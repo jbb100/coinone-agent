@@ -13,7 +13,14 @@ from loguru import logger
 
 from ..trading.coinone_client import CoinoneClient
 from ..utils.database_manager import DatabaseManager
-from ..utils.constants import MIN_ORDER_AMOUNTS_KRW
+from ..utils.constants import (
+    MIN_ORDER_AMOUNTS_KRW,
+    RSI_OVERSOLD,
+    RSI_MIDLINE,
+    FEAR_GREED_EXTREME_FEAR,
+    FEAR_GREED_FEAR,
+    FEAR_GREED_EXTREME_GREED
+)
 
 
 class OpportunityLevel(Enum):
@@ -256,9 +263,9 @@ class OpportunisticBuyer:
                     reasons = []
                     if price_drop_7d > -0.05:  # 7일간 5% 이상 하락하지 않음
                         reasons.append(f"7일 하락률 부족 ({price_drop_7d:.1%})")
-                    if rsi > 30:  # RSI가 과매도 구간이 아님
+                    if rsi > RSI_OVERSOLD:  # RSI가 과매도 구간이 아님
                         reasons.append(f"RSI 과매도 아님 ({rsi:.1f})")
-                    if fear_greed > 25:  # 공포 지수가 충분히 낮지 않음
+                    if fear_greed > FEAR_GREED_EXTREME_FEAR:  # 공포 지수가 충분히 낮지 않음
                         reasons.append(f"공포지수 높음 ({fear_greed:.0f})")
                     
                     if not reasons:
@@ -298,18 +305,18 @@ class OpportunisticBuyer:
         # 주요 지표 종합 평가
         max_drop = min(drop_7d, drop_30d)  # 더 큰 하락률 사용
         
-        # RSI 과매도 구간 (30 이하)
-        rsi_oversold = rsi < 30
-        
-        # 극도의 공포 구간 (25 이하)
-        extreme_fear = fear_greed < 25
+        # RSI 과매도 구간 (RSI_OVERSOLD 이하)
+        rsi_oversold = rsi < RSI_OVERSOLD
+
+        # 극도의 공포 구간 (FEAR_GREED_EXTREME_FEAR 이하)
+        extreme_fear = fear_greed < FEAR_GREED_EXTREME_FEAR
         
         # 기회 수준 판단
         if max_drop <= -0.30 and (rsi_oversold or extreme_fear):
             return OpportunityLevel.EXTREME
-        elif max_drop <= -0.20 and rsi < 40:
+        elif max_drop <= -0.20 and rsi < FEAR_GREED_FEAR:
             return OpportunityLevel.MAJOR
-        elif max_drop <= -0.10 and rsi < 50:
+        elif max_drop <= -0.10 and rsi < RSI_MIDLINE:
             return OpportunityLevel.MODERATE
         elif max_drop <= -0.05:
             return OpportunityLevel.MINOR
@@ -336,10 +343,10 @@ class OpportunisticBuyer:
         base_ratio = self.opportunity_thresholds[level]["buy_ratio"]
         
         # RSI 조정 (과매도일수록 비율 증가)
-        rsi_adjustment = max(0, (30 - rsi) / 100)  # RSI 30 이하에서 보너스
-        
+        rsi_adjustment = max(0, (RSI_OVERSOLD - rsi) / 100)  # RSI_OVERSOLD 이하에서 보너스
+
         # 공포지수 조정 (공포가 클수록 비율 증가)
-        fear_adjustment = max(0, (25 - fear_greed) / 100)  # 극도의 공포에서 보너스
+        fear_adjustment = max(0, (FEAR_GREED_EXTREME_FEAR - fear_greed) / 100)  # 극도의 공포에서 보너스
         
         # 최종 비율 계산 (보너스는 추가로 더함)
         final_ratio = base_ratio + (base_ratio * (rsi_adjustment + fear_adjustment))
@@ -901,7 +908,7 @@ class OpportunisticBuyer:
                 btc_volatility = 0.02
             
             # 전략 결정
-            if fear_greed < 25:  # 극도의 공포
+            if fear_greed < FEAR_GREED_EXTREME_FEAR:  # 극도의 공포
                 strategy = {
                     "mode": "aggressive_buying",
                     "description": "극도의 공포 구간 - 적극적 매수",
@@ -909,15 +916,15 @@ class OpportunisticBuyer:
                     "target_assets": ["BTC", "ETH"],  # 주요 자산 위주
                     "buy_trigger": -0.05  # 5% 하락 시 매수
                 }
-            elif fear_greed < 40:  # 공포
+            elif fear_greed < FEAR_GREED_FEAR:  # 공포
                 strategy = {
-                    "mode": "moderate_buying", 
+                    "mode": "moderate_buying",
                     "description": "공포 구간 - 선별적 매수",
                     "cash_deploy_ratio": 0.3,
                     "target_assets": ["BTC", "ETH", "SOL"],
                     "buy_trigger": -0.08
                 }
-            elif fear_greed > 75:  # 탐욕
+            elif fear_greed > FEAR_GREED_EXTREME_GREED:  # 탐욕
                 strategy = {
                     "mode": "defensive",
                     "description": "탐욕 구간 - 현금 보유 유지",

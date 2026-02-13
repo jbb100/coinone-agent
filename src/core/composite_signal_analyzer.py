@@ -13,6 +13,13 @@ import pandas as pd
 import numpy as np
 from loguru import logger
 
+from src.utils.constants import (
+    RSI_PERIOD, RSI_OVERSOLD, RSI_OVERBOUGHT,
+    MACD_FAST, MACD_SLOW, MACD_SIGNAL,
+    BOLLINGER_PERIOD, BOLLINGER_STD,
+    SIGNAL_CONFIDENCE_HIGH, SIGNAL_CONFIDENCE_MEDIUM, SIGNAL_CONFIDENCE_LOW
+)
+
 
 class SignalStrength(Enum):
     """신호 강도"""
@@ -58,19 +65,19 @@ class CompositeSignalAnalyzer:
         Args:
             max_history: 신호 이력 최대 저장 개수
         """
-        # RSI 설정 (14일, 30/70 임계값)
-        self.rsi_period = 14
-        self.rsi_oversold = 30
-        self.rsi_overbought = 70
+        # RSI 설정 (constants.py에서 가져옴)
+        self.rsi_period = RSI_PERIOD
+        self.rsi_oversold = RSI_OVERSOLD
+        self.rsi_overbought = RSI_OVERBOUGHT
 
-        # MACD 설정 (12-26-9)
-        self.macd_fast = 12
-        self.macd_slow = 26
-        self.macd_signal = 9
+        # MACD 설정 (constants.py에서 가져옴)
+        self.macd_fast = MACD_FAST
+        self.macd_slow = MACD_SLOW
+        self.macd_signal = MACD_SIGNAL
 
-        # 볼린저밴드 설정 (20 SMA ± 2 std)
-        self.bollinger_period = 20
-        self.bollinger_std = 2
+        # 볼린저밴드 설정 (constants.py에서 가져옴)
+        self.bollinger_period = BOLLINGER_PERIOD
+        self.bollinger_std = BOLLINGER_STD
 
         # 신호 이력
         self.signal_history: List[CompositeSignalResult] = []
@@ -111,22 +118,22 @@ class CompositeSignalAnalyzer:
             buy_count = sum(1 for s in [rsi_signal, macd_signal, bollinger_signal] if s == "buy")
             sell_count = sum(1 for s in [rsi_signal, macd_signal, bollinger_signal] if s == "sell")
 
-            # 신호 강도 및 신뢰도 결정
+            # 신호 강도 및 신뢰도 결정 (constants.py 사용)
             if buy_count == 3:
                 signal = SignalStrength.STRONG_BUY
-                confidence = 0.85
+                confidence = SIGNAL_CONFIDENCE_HIGH
                 aligned = 3
             elif sell_count == 3:
                 signal = SignalStrength.STRONG_SELL
-                confidence = 0.85
+                confidence = SIGNAL_CONFIDENCE_HIGH
                 aligned = 3
             elif buy_count == 2 and sell_count == 0:
                 signal = SignalStrength.BUY
-                confidence = 0.65
+                confidence = SIGNAL_CONFIDENCE_MEDIUM
                 aligned = 2
             elif sell_count == 2 and buy_count == 0:
                 signal = SignalStrength.SELL
-                confidence = 0.65
+                confidence = SIGNAL_CONFIDENCE_MEDIUM
                 aligned = 2
             elif buy_count > sell_count:
                 signal = SignalStrength.BUY
@@ -138,7 +145,7 @@ class CompositeSignalAnalyzer:
                 aligned = sell_count
             else:
                 signal = SignalStrength.NEUTRAL
-                confidence = 0.40
+                confidence = SIGNAL_CONFIDENCE_LOW
                 aligned = 0
 
             result = CompositeSignalResult(

@@ -17,6 +17,7 @@ import numpy as np
 from loguru import logger
 
 from ..utils.market_data_provider import MarketDataProvider
+from ..utils.constants import DEFAULT_BTC_DOMINANCE
 
 
 @dataclass
@@ -484,7 +485,7 @@ class DCAPlus:
             
             # 1. BTC 도미넌스 (가정: 높은 도미넌스 = 축적)
             # 실제로는 외부 API에서 가져와야 함
-            btc_dominance = 0.6  # 기본값
+            btc_dominance = DEFAULT_BTC_DOMINANCE  # 기본값
             if btc_dominance >= self.accumulation_thresholds["btc_dominance_min"]:
                 score_components.append(0.8)
             else:

@@ -14,6 +14,8 @@ from binance.exceptions import BinanceAPIException
 from loguru import logger
 import time
 
+from src.utils.constants import DEFAULT_USD_KRW_RATE
+
 
 class BinanceDataProvider:
     """
@@ -228,9 +230,9 @@ class BinanceDataProvider:
             return {}
     
     def convert_usdt_to_krw(
-        self, 
-        df: pd.DataFrame, 
-        usd_krw_rate: float = 1400.0
+        self,
+        df: pd.DataFrame,
+        usd_krw_rate: float = DEFAULT_USD_KRW_RATE
     ) -> pd.DataFrame:
         """
         USDT 가격을 KRW로 변환
