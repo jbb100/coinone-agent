@@ -351,3 +351,638 @@ class TestBacktestValidatorConfig:
         assert validator.sharpe_threshold == 3.0
         assert validator.max_params == 5
         assert validator.oos_drop_threshold == 0.30
+
+
+# ============================================================================
+# BacktestingEngine Tests - 백테스팅 엔진 테스트
+# ============================================================================
+
+class TestBacktestMode:
+    """BacktestMode Enum 테스트"""
+
+    def test_mode_values(self):
+        """모드 값 확인"""
+        from src.backtesting.backtesting_engine import BacktestMode
+
+        assert BacktestMode.SIMPLE.value == "simple"
+        assert BacktestMode.ADVANCED.value == "advanced"
+        assert BacktestMode.COMPARISON.value == "comparison"
+
+    def test_mode_count(self):
+        """모드 개수 확인"""
+        from src.backtesting.backtesting_engine import BacktestMode
+
+        assert len(BacktestMode) == 3
+
+
+class TestBacktestConfig:
+    """BacktestConfig 테스트"""
+
+    def test_basic_config(self):
+        """기본 설정 생성"""
+        from src.backtesting.backtesting_engine import BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-06-30",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        assert config.start_date == "2024-01-01"
+        assert config.end_date == "2024-06-30"
+        assert config.initial_capital == 10000000
+        assert config.rebalance_frequency == "monthly"
+        assert config.mode == BacktestMode.SIMPLE
+
+    def test_default_values(self):
+        """기본값 확인"""
+        from src.backtesting.backtesting_engine import BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-06-30",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        assert config.risk_level == "moderate"
+        assert config.transaction_cost == 0.001
+        assert config.slippage == 0.0005
+        assert config.use_dynamic_optimization is False
+        assert config.max_drawdown_threshold == 0.20
+
+    def test_advanced_config(self):
+        """고급 설정"""
+        from src.backtesting.backtesting_engine import BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            initial_capital=50000000,
+            rebalance_frequency="weekly",
+            mode=BacktestMode.ADVANCED,
+            risk_level="aggressive",
+            transaction_cost=0.002,
+            slippage=0.001,
+            use_dynamic_optimization=True,
+            stop_loss=0.05,
+            take_profit=0.10
+        )
+
+        assert config.risk_level == "aggressive"
+        assert config.transaction_cost == 0.002
+        assert config.use_dynamic_optimization is True
+        assert config.stop_loss == 0.05
+        assert config.take_profit == 0.10
+
+
+class TestTrade:
+    """Trade 데이터클래스 테스트"""
+
+    def test_trade_creation(self):
+        """거래 기록 생성"""
+        from src.backtesting.backtesting_engine import Trade
+        from datetime import datetime
+
+        trade = Trade(
+            timestamp=datetime(2024, 1, 15),
+            asset="BTC",
+            side="buy",
+            quantity=0.01,
+            price=50000000,
+            amount_krw=500000,
+            fee=500,
+            portfolio_value=10000000,
+            reason="Rebalance"
+        )
+
+        assert trade.asset == "BTC"
+        assert trade.side == "buy"
+        assert trade.quantity == 0.01
+        assert trade.price == 50000000
+        assert trade.amount_krw == 500000
+        assert trade.fee == 500
+
+
+class TestPerformanceMetrics:
+    """PerformanceMetrics 테스트"""
+
+    def test_metrics_creation(self):
+        """성과 지표 생성"""
+        from src.backtesting.backtesting_engine import PerformanceMetrics
+
+        metrics = PerformanceMetrics(
+            total_return=0.25,
+            annualized_return=0.50,
+            volatility=0.20,
+            sharpe_ratio=1.5,
+            max_drawdown=0.15,
+            win_rate=0.55,
+            profit_factor=1.8,
+            total_trades=100,
+            winning_trades=55,
+            losing_trades=45,
+            avg_win=10000,
+            avg_loss=8000,
+            largest_win=50000,
+            largest_loss=30000
+        )
+
+        assert metrics.total_return == 0.25
+        assert metrics.sharpe_ratio == 1.5
+        assert metrics.win_rate == 0.55
+        assert metrics.total_trades == 100
+
+
+class TestBacktestingEngineInit:
+    """BacktestingEngine 초기화 테스트"""
+
+    def test_engine_initialization(self):
+        """엔진 초기화"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+
+        assert engine.config == config
+        assert engine.current_portfolio['total_krw'] == 10000000
+        assert engine.current_portfolio['assets']['KRW'] == 10000000
+        assert len(engine.trade_history) == 0
+
+    def test_engine_with_historical_data(self):
+        """역사적 데이터로 초기화"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        historical_data = {
+            'BTC': pd.DataFrame({
+                'Close': [50000000, 51000000, 52000000],
+                'Volume': [1e9, 1.1e9, 1.2e9]
+            }, index=pd.date_range('2024-01-01', periods=3))
+        }
+
+        engine = BacktestingEngine(config, historical_data)
+
+        assert 'BTC' in engine.historical_data
+        assert len(engine.historical_data['BTC']) == 3
+
+
+class TestBacktestingEngineDataLoading:
+    """데이터 로딩 테스트"""
+
+    def test_load_demo_data(self):
+        """데모 데이터 로드"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        result = engine.load_historical_data("demo")
+
+        assert result is True
+        assert len(engine.historical_data) > 0
+        assert 'BTC' in engine.historical_data
+        assert 'ETH' in engine.historical_data
+
+    def test_unsupported_data_source(self):
+        """지원하지 않는 데이터 소스"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        result = engine.load_historical_data("unsupported_source")
+
+        assert result is False
+
+
+class TestRebalanceDates:
+    """리밸런싱 날짜 테스트"""
+
+    def test_daily_rebalance(self):
+        """일별 리밸런싱"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-01-10",
+            initial_capital=10000000,
+            rebalance_frequency="daily",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        dates = engine._get_rebalance_dates(
+            pd.to_datetime("2024-01-01"),
+            pd.to_datetime("2024-01-10")
+        )
+
+        assert len(dates) == 10
+
+    def test_weekly_rebalance(self):
+        """주별 리밸런싱"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-02-29",
+            initial_capital=10000000,
+            rebalance_frequency="weekly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        dates = engine._get_rebalance_dates(
+            pd.to_datetime("2024-01-01"),
+            pd.to_datetime("2024-02-29")
+        )
+
+        # 약 8-9주
+        assert 8 <= len(dates) <= 10
+
+    def test_monthly_rebalance(self):
+        """월별 리밸런싱"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-06-30",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        dates = engine._get_rebalance_dates(
+            pd.to_datetime("2024-01-01"),
+            pd.to_datetime("2024-06-30")
+        )
+
+        assert len(dates) == 6
+
+
+class TestPortfolioOperations:
+    """포트폴리오 연산 테스트"""
+
+    def test_update_portfolio_value(self):
+        """포트폴리오 가치 업데이트"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+
+        # 수동으로 포트폴리오 설정
+        engine.current_portfolio = {
+            'total_krw': 10000000,
+            'assets': {'KRW': 5000000, 'BTC': 0.1}
+        }
+
+        prices = {'BTC': 50000000}  # 0.1 BTC = 5,000,000 KRW
+
+        engine._update_portfolio_value(prices)
+
+        assert engine.current_portfolio['total_krw'] == 10000000  # 5M KRW + 5M BTC
+
+    def test_get_daily_prices(self):
+        """일별 가격 조회"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        historical_data = {
+            'BTC': pd.DataFrame({
+                'Close': [50000000, 51000000, 52000000],
+                'Volume': [1e9, 1.1e9, 1.2e9]
+            }, index=pd.date_range('2024-01-01', periods=3))
+        }
+
+        engine = BacktestingEngine(config, historical_data)
+        prices = engine._get_daily_prices(pd.to_datetime('2024-01-02'))
+
+        assert 'BTC' in prices
+        assert prices['BTC'] == 51000000
+
+
+class TestBacktestExecution:
+    """백테스트 실행 테스트"""
+
+    def test_run_backtest_with_demo_data(self):
+        """데모 데이터로 백테스트 실행"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+
+        result = engine.run_backtest(calculate_benchmarks=False)
+
+        assert result is not None
+        assert hasattr(result, 'total_return')
+        assert hasattr(result, 'sharpe_ratio')
+        assert hasattr(result, 'max_drawdown')
+
+    def test_run_backtest_no_data(self):
+        """데이터 없이 백테스트 실행 시 오류"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+
+        with pytest.raises(ValueError, match="역사적 데이터"):
+            engine.run_backtest()
+
+
+class TestMarketSeasonDetermination:
+    """시장 계절 판단 테스트"""
+
+    def test_risk_on_season(self):
+        """상승장 (Risk On) 판단"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+        from src.core.market_season_filter import MarketSeason
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        # 상승 추세 데이터 생성
+        dates = pd.date_range('2023-12-01', periods=60)
+        prices = [50000000 * (1 + 0.01 * i) for i in range(60)]  # 지속 상승
+
+        historical_data = {
+            'BTC': pd.DataFrame({
+                'Close': prices,
+                'Volume': [1e9] * 60
+            }, index=dates)
+        }
+
+        engine = BacktestingEngine(config, historical_data)
+        season = engine._determine_market_season(pd.to_datetime('2024-01-15'))
+
+        assert season == MarketSeason.RISK_ON
+
+    def test_risk_off_season(self):
+        """하락장 (Risk Off) 판단"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+        from src.core.market_season_filter import MarketSeason
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        # 하락 추세 데이터 생성
+        dates = pd.date_range('2023-12-01', periods=60)
+        prices = [50000000 * (1 - 0.01 * i) for i in range(60)]  # 지속 하락
+
+        historical_data = {
+            'BTC': pd.DataFrame({
+                'Close': prices,
+                'Volume': [1e9] * 60
+            }, index=dates)
+        }
+
+        engine = BacktestingEngine(config, historical_data)
+        season = engine._determine_market_season(pd.to_datetime('2024-01-15'))
+
+        assert season == MarketSeason.RISK_OFF
+
+
+class TestHistoryRetrieval:
+    """히스토리 조회 테스트"""
+
+    def test_get_portfolio_history(self):
+        """포트폴리오 히스토리 조회"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            initial_capital=10000000,
+            rebalance_frequency="weekly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+        engine.run_backtest(calculate_benchmarks=False)
+
+        history = engine.get_portfolio_history()
+
+        assert isinstance(history, pd.DataFrame)
+        assert 'date' in history.columns
+        assert 'total_value' in history.columns
+        assert len(history) > 0
+
+    def test_get_trade_history(self):
+        """거래 히스토리 조회"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-02-29",
+            initial_capital=10000000,
+            rebalance_frequency="weekly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+        engine.run_backtest(calculate_benchmarks=False)
+
+        trades = engine.get_trade_history()
+
+        assert isinstance(trades, pd.DataFrame)
+
+    def test_empty_trade_history(self):
+        """빈 거래 히스토리"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-03-31",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        trades = engine.get_trade_history()
+
+        assert isinstance(trades, pd.DataFrame)
+        assert len(trades) == 0
+
+
+class TestRiskLevelStrategies:
+    """리스크 수준별 전략 테스트"""
+
+    def test_conservative_strategy(self):
+        """보수적 전략"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-02-29",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE,
+            risk_level="conservative"
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+        result = engine.run_backtest(calculate_benchmarks=False)
+
+        # 보수적 전략은 낮은 변동성을 목표로 함
+        assert result is not None
+
+    def test_aggressive_strategy(self):
+        """공격적 전략"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-02-29",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE,
+            risk_level="aggressive"
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+        result = engine.run_backtest(calculate_benchmarks=False)
+
+        assert result is not None
+
+
+class TestBenchmarkCalculation:
+    """벤치마크 계산 테스트"""
+
+    def test_buy_and_hold_benchmarks(self):
+        """Buy-and-Hold 벤치마크 계산"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-02-29",
+            initial_capital=10000000,
+            rebalance_frequency="monthly",
+            mode=BacktestMode.SIMPLE
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+        engine.run_backtest(calculate_benchmarks=True)
+
+        assert hasattr(engine, 'benchmarks')
+        assert 'BTC' in engine.benchmarks
+        assert 'total_return' in engine.benchmarks['BTC']
+        assert 'annualized_return' in engine.benchmarks['BTC']
+
+
+class TestTransactionCosts:
+    """거래 비용 테스트"""
+
+    def test_high_transaction_costs(self):
+        """높은 거래 비용"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-02-29",
+            initial_capital=10000000,
+            rebalance_frequency="weekly",
+            mode=BacktestMode.SIMPLE,
+            transaction_cost=0.01,  # 1%
+            slippage=0.005  # 0.5%
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+        result = engine.run_backtest(calculate_benchmarks=False)
+
+        # 높은 거래 비용은 수익률에 영향
+        assert result is not None
+
+    def test_zero_transaction_costs(self):
+        """거래 비용 없음"""
+        from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
+
+        config = BacktestConfig(
+            start_date="2024-01-01",
+            end_date="2024-02-29",
+            initial_capital=10000000,
+            rebalance_frequency="weekly",
+            mode=BacktestMode.SIMPLE,
+            transaction_cost=0.0,
+            slippage=0.0
+        )
+
+        engine = BacktestingEngine(config)
+        engine.load_historical_data("demo")
+        result = engine.run_backtest(calculate_benchmarks=False)
+
+        assert result is not None
