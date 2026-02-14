@@ -173,7 +173,10 @@ class CompositeSignalAnalyzer:
 
     def _analyze_rsi(self, prices: pd.Series) -> Tuple[str, float]:
         """
-        RSI 분석
+        RSI 분석 (Wilder's Smoothing 방식)
+
+        Wilder's Smoothing은 EMA의 특수한 형태로, alpha = 1/period를 사용합니다.
+        이는 전통적인 RSI 계산 방식으로 CLAUDE.md 권장사항을 따릅니다.
 
         Args:
             prices: 가격 시리즈
@@ -185,13 +188,16 @@ class CompositeSignalAnalyzer:
             if len(prices) < self.rsi_period + 1:
                 return "neutral", 50.0
 
-            # RSI 계산
+            # RSI 계산 (Wilder's Smoothing 적용)
             delta = prices.diff()
             gain = delta.where(delta > 0, 0.0)
             loss = (-delta).where(delta < 0, 0.0)
 
-            avg_gain = gain.rolling(window=self.rsi_period, min_periods=1).mean()
-            avg_loss = loss.rolling(window=self.rsi_period, min_periods=1).mean()
+            # Wilder's Smoothing: alpha = 1 / rsi_period
+            # 이는 span = 2 * period - 1과 동일한 효과
+            alpha = 1.0 / self.rsi_period
+            avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
 
             rs = avg_gain / avg_loss.replace(0, np.inf)
             rsi = 100 - (100 / (1 + rs))

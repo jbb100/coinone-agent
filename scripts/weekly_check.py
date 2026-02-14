@@ -56,29 +56,43 @@ class WeeklyAnalyzer:
         
         logger.info("WeeklyAnalyzer 초기화 완료")
     
-    def fetch_btc_price_data(self, period: str = "3y") -> pd.DataFrame:
+    def fetch_btc_price_data(self, period: str = "5y") -> pd.DataFrame:
         """
         BTC 가격 데이터 수집
-        
+
         Args:
-            period: 데이터 수집 기간 (기본값: 3년)
-            
+            period: 데이터 수집 기간 (기본값: 5년 - 200주 MA 계산에 필요)
+
         Returns:
             BTC 가격 데이터 DataFrame
+
+        Note:
+            200주 이동평균 계산을 위해 최소 4년(약 208주) 데이터가 필요합니다.
+            5년 데이터를 수집하여 충분한 여유를 확보합니다.
         """
         try:
-            logger.info("BTC 가격 데이터 수집 시작")
-            
+            logger.info("BTC 가격 데이터 수집 시작 (200주 MA 계산용)")
+
             # Yahoo Finance에서 BTC-USD 데이터 수집
             btc_ticker = yf.Ticker("BTC-USD")
             price_data = btc_ticker.history(period=period)
-            
+
             if price_data.empty:
                 raise ValueError("BTC 가격 데이터를 가져올 수 없습니다.")
-            
+
             # 인덱스를 DatetimeIndex로 변환
             price_data.index = pd.to_datetime(price_data.index)
-            
+
+            # 200주 MA 계산을 위한 데이터 충분성 검증
+            weeks_available = len(price_data) / 7
+            if weeks_available < 200:
+                logger.warning(
+                    f"200주 MA 계산에 데이터 부족: {weeks_available:.0f}주 (200주 필요). "
+                    "폴백 로직이 적용될 수 있습니다."
+                )
+            else:
+                logger.info(f"200주 MA 계산에 충분한 데이터: {weeks_available:.0f}주")
+
             logger.info(f"BTC 가격 데이터 수집 완료: {len(price_data)}일치 데이터")
             return price_data
             

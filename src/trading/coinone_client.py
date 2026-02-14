@@ -776,7 +776,6 @@ class CoinoneClient:
             raise
 
 
-# 설정 상수
-SUPPORTED_CRYPTOCURRENCIES = ["BTC", "ETH", "XRP", "SOL"]
-DEFAULT_ORDER_TIMEOUT = 30  # 주문 타임아웃 (초)
-API_RATE_LIMIT = 100  # API 호출 제한 (분당) 
+# 로컬 상수 (constants.py의 SUPPORTED_CRYPTOCURRENCIES, API_RATE_LIMIT_PER_MINUTE 참조)
+# API 요청 타임아웃은 별도 관리 (API_REQUEST_TIMEOUT과 다른 용도)
+DEFAULT_ORDER_TIMEOUT = 30  # 주문 체결 대기 타임아웃 (초)

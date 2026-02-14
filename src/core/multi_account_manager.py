@@ -21,6 +21,7 @@ from .base_service import BaseService, ServiceConfig
 from .exceptions import KairosException, ConfigurationException, APIException
 from ..security.secrets_manager import get_api_key_manager
 from ..trading.coinone_client import CoinoneClient
+from ..utils.constants import MAX_POSITION_SIZE
 
 
 # 기본 계정 설정 파일 경로
@@ -45,7 +46,7 @@ class AccountConfig:
     cash_reserve: float = 0.1  # 현금 보유 비중
     
     # 리스크 관리
-    max_position_size: float = 0.4  # 단일 자산 최대 비중
+    max_position_size: float = MAX_POSITION_SIZE  # 단일 자산 최대 비중 (constants.py: 0.25)
     stop_loss_threshold: Optional[float] = None
     
     # 실행 설정

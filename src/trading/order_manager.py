@@ -496,8 +496,6 @@ class OrderManager:
         return [order.to_dict() for order in self.active_orders.values()]
 
 
-# 설정 상수
-DEFAULT_MAX_RETRY_ATTEMPTS = 3
+# 로컬 상수 (constants.py의 MAX_RETRIES, ORDER_TIMEOUT_SECONDS 참조)
 DEFAULT_RETRY_DELAY = 5         # 5초
-DEFAULT_ORDER_TIMEOUT = 300     # 5분
-DEFAULT_STATUS_CHECK_INTERVAL = 10  # 10초 
+DEFAULT_STATUS_CHECK_INTERVAL = 10  # 10초

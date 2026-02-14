@@ -10,16 +10,44 @@ from dataclasses import dataclass
 from loguru import logger
 import numpy as np
 
+from ..utils.constants import MAX_POSITION_SIZE
+
 
 @dataclass
 class RiskLimits:
     """리스크 제한 설정"""
     max_single_trade: float = 10000000  # 단일 거래 최대 금액 (KRW)
     max_daily_volume: float = 50000000  # 일일 최대 거래 금액 (KRW)
-    max_position_size: float = 0.50     # 최대 포지션 크기 (전체 포트폴리오 대비)
+    max_position_size: float = MAX_POSITION_SIZE  # 최대 포지션 크기 (constants.py: 0.25)
     max_daily_loss: float = 0.05        # 일일 최대 손실률 (5%)
     max_monthly_loss: float = 0.15      # 월간 최대 손실률 (15%)
     drawdown_threshold: float = 0.20    # 드로우다운 임계값 (20%)
+
+
+@dataclass
+class StopLossConfig:
+    """전략별 손절 설정"""
+    dca_stop_loss: float = 0.15         # DCA 전략 손절 비율 (15%)
+    swing_stop_loss: float = 0.08       # SWING 전략 손절 비율 (8%)
+    momentum_stop_loss: float = 0.10    # MOMENTUM 전략 손절 비율 (10%)
+    default_stop_loss: float = 0.10     # 기본 손절 비율 (10%)
+
+
+@dataclass
+class StopLossAlert:
+    """손절 알림 정보"""
+    asset: str
+    action: str  # "STOP_LOSS", "WARNING"
+    current_price: float
+    entry_price: float
+    stop_loss_price: float
+    loss_percent: float
+    strategy: str
+    timestamp: datetime = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
 
 
 @dataclass
@@ -62,7 +90,7 @@ class RiskManager:
         self.risk_limits = RiskLimits(
             max_single_trade=trading_limits.get("max_single_trade", 10000000),
             max_daily_volume=trading_limits.get("max_daily_volume", 50000000),
-            max_position_size=trading_limits.get("max_position_size", 0.50),
+            max_position_size=trading_limits.get("max_position_size", MAX_POSITION_SIZE),
             max_daily_loss=loss_limits.get("max_daily_loss", 0.05),
             max_monthly_loss=loss_limits.get("max_monthly_loss", 0.15),
             drawdown_threshold=loss_limits.get("drawdown_threshold", 0.20)
@@ -581,6 +609,173 @@ class RiskManager:
             return 0
 
         return position_size
+
+    def calculate_stop_loss_price(
+        self,
+        entry_price: float,
+        asset: str,
+        strategy: str = "DCA"
+    ) -> float:
+        """
+        전략별 손절가 계산
+
+        Args:
+            entry_price: 진입 가격 (평균 매수가)
+            asset: 자산 심볼 (예: BTC, ETH)
+            strategy: 거래 전략 (DCA, SWING, MOMENTUM)
+
+        Returns:
+            손절 가격
+
+        Note:
+            - DCA 전략: 15% 손절 (장기 투자, 넓은 손절폭)
+            - SWING 전략: 8% 손절 (중기 트레이딩)
+            - MOMENTUM 전략: 10% 손절 (추세 추종)
+        """
+        stop_loss_config = StopLossConfig()
+
+        strategy_upper = strategy.upper()
+        stop_loss_percentages = {
+            "DCA": stop_loss_config.dca_stop_loss,
+            "SWING": stop_loss_config.swing_stop_loss,
+            "MOMENTUM": stop_loss_config.momentum_stop_loss,
+        }
+
+        stop_loss_percent = stop_loss_percentages.get(
+            strategy_upper,
+            stop_loss_config.default_stop_loss
+        )
+
+        stop_loss_price = entry_price * (1 - stop_loss_percent)
+
+        logger.debug(
+            f"손절가 계산: {asset} | 전략={strategy} | "
+            f"진입가={entry_price:,.0f} | 손절가={stop_loss_price:,.0f} ({stop_loss_percent:.0%})"
+        )
+
+        return stop_loss_price
+
+    def check_stop_loss_trigger(
+        self,
+        portfolio_data: Dict,
+        positions: Dict[str, Dict],
+        strategy: str = "DCA"
+    ) -> List[StopLossAlert]:
+        """
+        손절 트리거 확인 및 알림 생성
+
+        Args:
+            portfolio_data: 현재 포트폴리오 데이터 (assets 포함)
+            positions: 포지션 정보 {asset: {avg_entry_price, quantity, ...}}
+            strategy: 거래 전략
+
+        Returns:
+            손절 알림 리스트
+
+        Example:
+            positions = {
+                "BTC": {"avg_entry_price": 50000000, "quantity": 0.1},
+                "ETH": {"avg_entry_price": 3500000, "quantity": 1.0}
+            }
+        """
+        stop_loss_alerts = []
+        assets_data = portfolio_data.get("assets", {})
+
+        for asset, position in positions.items():
+            if asset == "KRW":
+                continue
+
+            entry_price = position.get("avg_entry_price", 0)
+            if entry_price <= 0:
+                continue
+
+            # 현재 가격 조회
+            asset_info = assets_data.get(asset, {})
+            if isinstance(asset_info, dict):
+                current_price = asset_info.get("price", 0)
+            else:
+                current_price = 0
+
+            if current_price <= 0:
+                continue
+
+            # 손절가 계산
+            stop_loss_price = self.calculate_stop_loss_price(
+                entry_price, asset, strategy
+            )
+
+            # 손실률 계산
+            loss_percent = (current_price - entry_price) / entry_price
+
+            # 손절 트리거 확인
+            if current_price <= stop_loss_price:
+                alert = StopLossAlert(
+                    asset=asset,
+                    action="STOP_LOSS",
+                    current_price=current_price,
+                    entry_price=entry_price,
+                    stop_loss_price=stop_loss_price,
+                    loss_percent=loss_percent,
+                    strategy=strategy
+                )
+                stop_loss_alerts.append(alert)
+                logger.warning(
+                    f"🚨 손절 트리거 발동: {asset} | "
+                    f"현재가={current_price:,.0f} <= 손절가={stop_loss_price:,.0f} | "
+                    f"손실률={loss_percent:.2%}"
+                )
+
+            # 경고 수준 (손절가 근접 - 2% 이내)
+            elif current_price <= stop_loss_price * 1.02:
+                alert = StopLossAlert(
+                    asset=asset,
+                    action="WARNING",
+                    current_price=current_price,
+                    entry_price=entry_price,
+                    stop_loss_price=stop_loss_price,
+                    loss_percent=loss_percent,
+                    strategy=strategy
+                )
+                stop_loss_alerts.append(alert)
+                logger.warning(
+                    f"⚠️ 손절 경고: {asset} | "
+                    f"현재가={current_price:,.0f} → 손절가={stop_loss_price:,.0f} 근접 | "
+                    f"손실률={loss_percent:.2%}"
+                )
+
+        if stop_loss_alerts:
+            logger.info(f"손절 체크 완료: {len(stop_loss_alerts)}개 알림 생성")
+        else:
+            logger.debug("손절 체크 완료: 트리거 없음")
+
+        return stop_loss_alerts
+
+    def should_execute_stop_loss(
+        self,
+        alert: StopLossAlert,
+        confirm_with_volume: bool = False,
+        volume_threshold: float = 1.5
+    ) -> Tuple[bool, str]:
+        """
+        손절 실행 여부 최종 결정
+
+        Args:
+            alert: 손절 알림
+            confirm_with_volume: 거래량 확인 여부
+            volume_threshold: 거래량 임계값 (평균 대비 배수)
+
+        Returns:
+            (실행 여부, 사유)
+        """
+        if alert.action != "STOP_LOSS":
+            return False, "손절 트리거가 아닌 경고 상태"
+
+        # 손실률이 너무 크면 (25% 이상) 즉시 실행
+        if alert.loss_percent <= -0.25:
+            return True, f"심각한 손실 ({alert.loss_percent:.2%}) - 즉시 손절 권장"
+
+        # 일반 손절 트리거
+        return True, f"손절 조건 충족 ({alert.loss_percent:.2%})"
 
     def _calculate_volatility_risk(self, portfolio_data: Dict) -> float:
         """

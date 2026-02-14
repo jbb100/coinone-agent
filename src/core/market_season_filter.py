@@ -302,12 +302,13 @@ class MarketSeasonFilter:
             
             # 각 분석 모듈의 영향 가중치
             analysis_weights = {
-                "multi_timeframe": 0.3,
-                "macro_economic": 0.25,
-                "onchain_data": 0.15,
-                "scenario_response": 0.15,
-                "behavioral_bias": 0.1,
-                "performance_analytics": 0.05
+                "multi_timeframe": 0.25,
+                "macro_economic": 0.20,
+                "onchain_data": 0.10,
+                "scenario_response": 0.10,
+                "behavioral_bias": 0.10,
+                "performance_analytics": 0.05,
+                "composite_signal": 0.20  # RSI/MACD/BB 복합 신호 (CLAUDE.md 기준)
             }
             
             total_adjustment = 0.0
@@ -515,7 +516,24 @@ class MarketSeasonFilter:
                     return -0.1
                 elif risk_level == "low":
                     return 0.05
-            
+
+            elif analysis_type == "composite_signal":
+                # RSI/MACD/BB 복합 신호 (CLAUDE.md 3개 지표 정렬 전략)
+                signal = result_data.get("signal", "NEUTRAL")
+                signal_confidence = result_data.get("confidence", 0.5)
+
+                # STRONG_BUY/SELL은 신뢰도 80% 이상일 때만 강하게 반영
+                if signal == "STRONG_BUY" and signal_confidence >= 0.8:
+                    logger.info(f"복합 신호 STRONG_BUY 반영 (신뢰도: {signal_confidence:.0%})")
+                    return 0.10  # 암호화폐 비중 +10%
+                elif signal == "STRONG_SELL" and signal_confidence >= 0.8:
+                    logger.info(f"복합 신호 STRONG_SELL 반영 (신뢰도: {signal_confidence:.0%})")
+                    return -0.10  # 암호화폐 비중 -10%
+                elif signal == "BUY" and signal_confidence >= 0.6:
+                    return 0.05  # 약한 매수 신호
+                elif signal == "SELL" and signal_confidence >= 0.6:
+                    return -0.05  # 약한 매도 신호
+
             return 0.0
             
         except Exception as e:

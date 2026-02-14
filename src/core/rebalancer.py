@@ -15,7 +15,8 @@ from .market_season_filter import MarketSeasonFilter, MarketSeason
 from .smart_execution_engine import SmartExecutionEngine, SmartOrderParams, ExecutionStrategy, MarketCondition
 from ..utils.constants import (
     REBALANCE_THRESHOLD, MAX_SLIPPAGE, ORDER_TIMEOUT_SECONDS,
-    SAFETY_MARGIN, MA_CALCULATION_FALLBACK_RATIO, MARKET_ANALYSIS_MAX_AGE_DAYS
+    SAFETY_MARGIN, MA_CALCULATION_FALLBACK_RATIO, MARKET_ANALYSIS_MAX_AGE_DAYS,
+    MAX_POSITION_SIZE
 )
 from ..utils.market_data_provider import MarketDataProvider
 
@@ -39,9 +40,9 @@ def load_config() -> Dict:
             }
         },
         'risk_management': {
-            'max_position_size': 0.4,
+            'max_position_size': MAX_POSITION_SIZE,  # constants.py: 0.25
             'stop_loss': -0.15,
-            'max_slippage': 0.01
+            'max_slippage': MAX_SLIPPAGE
         },
         'execution': {
             'order_timeout': 300,
@@ -92,6 +93,8 @@ class Rebalancer:
         market_season_filter: Optional[MarketSeasonFilter] = None,
         db_manager: Optional["DatabaseManager"] = None,
         order_manager: Optional[OrderManager] = None,
+        # 리스크 관리자 (선택적)
+        risk_manager: Optional["RiskManager"] = None,
         # 고급 분석 시스템들 (선택적)
         multi_timeframe_analyzer=None,
         onchain_analyzer=None,
@@ -108,6 +111,7 @@ class Rebalancer:
             market_season_filter: 시장 계절 필터
             db_manager: 데이터베이스 관리자
             order_manager: 주문 관리자
+            risk_manager: 리스크 관리자 (포지션 사이징, 손절 관리)
             multi_timeframe_analyzer: 멀티 타임프레임 분석기
             onchain_analyzer: 온체인 데이터 분석기
             macro_analyzer: 매크로 경제 분석기
@@ -117,11 +121,12 @@ class Rebalancer:
         """
         # 테스트 호환성을 위한 기본값 처리
         self.config = config or load_config()
-        
+
         self.coinone_client = coinone_client
         self.portfolio_manager = portfolio_manager
         self.market_season_filter = market_season_filter
         self.db_manager = db_manager
+        self.risk_manager = risk_manager  # 리스크 기반 포지션 사이징용
         
         # 필수 컴포넌트 초기화 (테스트에서는 None일 수 있음)
         if coinone_client and order_manager is None:
@@ -787,9 +792,40 @@ class Rebalancer:
             try:
                 amount_krw = abs(order_info["amount_diff_krw"])
                 side = order_info["action"]
-                
+
+                # 리스크 기반 포지션 사이징 적용 (매수 시)
+                if side == "buy" and self.risk_manager and total_value > 0:
+                    try:
+                        # 현재 가격 조회
+                        current_price = current_portfolio.get("assets", {}).get(
+                            asset, {}
+                        ).get("price", 0)
+
+                        if current_price > 0:
+                            # 8% 손절 기준으로 최대 포지션 계산 (DCA 전략)
+                            stop_loss_price = current_price * 0.92
+
+                            max_position = self.risk_manager.calculate_position_size_with_kelly(
+                                account_size=total_value,
+                                entry_price=current_price,
+                                stop_loss=stop_loss_price,
+                                win_rate=0.45,  # 보수적 승률 가정
+                                risk_reward=2.0,  # 1:2 손익비
+                                max_risk_percent=0.01,  # 1% 규칙
+                                use_half_kelly=True
+                            )
+
+                            if max_position > 0 and amount_krw > max_position:
+                                logger.warning(
+                                    f"⚠️ {asset} 리스크 기반 포지션 제한: "
+                                    f"{amount_krw:,.0f} → {max_position:,.0f} KRW"
+                                )
+                                amount_krw = max_position
+                    except Exception as risk_e:
+                        logger.warning(f"리스크 포지션 계산 실패: {risk_e} - 원래 금액 사용")
+
                 logger.info(f"🎯 {asset} 스마트 주문 준비: {side} {amount_krw:,.0f} KRW")
-                
+
                 # 5. 스마트 주문 파라미터 생성
                 smart_params = self._create_smart_order_params(
                     asset=asset,
@@ -1390,8 +1426,5 @@ class Rebalancer:
             )
 
 
-# 설정 상수
-DEFAULT_REBALANCE_THRESHOLD = 0.01  # 1%
-DEFAULT_MAX_SLIPPAGE = 0.005        # 0.5%
-DEFAULT_ORDER_TIMEOUT = 300         # 5분
-QUARTER_MONTHS = [1, 4, 7, 10]     # 분기별 리밸런싱 월 
+# 분기별 리밸런싱 월 (constants.py의 상수들은 import로 사용)
+QUARTER_MONTHS = [1, 4, 7, 10]

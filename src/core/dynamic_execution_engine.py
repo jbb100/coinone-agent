@@ -19,7 +19,11 @@ import uuid
 from ..trading.coinone_client import CoinoneClient
 from ..trading.order_manager import OrderStatus
 from ..utils.database_manager import DatabaseManager
-from ..utils.constants import MIN_ORDER_AMOUNTS_KRW, COINONE_SAFE_ORDER_LIMIT_KRW
+from ..utils.constants import (
+    MIN_ORDER_AMOUNTS_KRW, COINONE_SAFE_ORDER_LIMIT_KRW,
+    MIN_ORDER_KRW, MIN_ORDER_KRW_BUFFER, COINONE_MAX_ORDER_AMOUNT_KRW,
+    MAX_SLICES_PER_ORDER, MIN_ORDER_QUANTITIES
+)
 from .system_coordinator import get_system_coordinator, OperationType
 from .system_integration_helper import with_asset_protection, check_api_rate_limit
 
@@ -269,32 +273,9 @@ class DynamicExecutionEngine:
             TWAP 주문 리스트
         """
         try:
-            # 상수 정의
-            MIN_ORDER_KRW = 1000  # 코인원 최소 주문 금액 (KRW)
-            MIN_ORDER_KRW_BUFFER = 1.05  # 5% 안전 마진
-            
-            # 코인원 거래소 제한사항
-            COINONE_MAX_ORDER_AMOUNT_KRW = 500_000_000  # 500M KRW - 코인원 최대 주문 금액
-            MAX_SLICES_PER_ORDER = 24  # 최대 슬라이스 개수
-
-            # 암호화폐별 최소 주문 수량 (코인원 기준)
-            MIN_ORDER_QUANTITIES = {
-                "BTC": 0.0001,      # 최소 0.0001 BTC
-                "ETH": 0.0001,      # 최소 0.0001 ETH  
-                "XRP": 1.0,         # 최소 1 XRP
-                "SOL": 0.01,        # 최소 0.01 SOL
-                "ADA": 2.0,         # 최소 2 ADA
-                "DOT": 1.0,         # 최소 1 DOT
-                "DOGE": 10.0,       # 최소 10 DOGE
-                "TRX": 10.0,        # 최소 10 TRX
-                "XLM": 10.0,        # 최소 10 XLM
-                "ATOM": 0.2,        # 최소 0.2 ATOM
-                "ALGO": 5.0,        # 최소 5 ALGO
-                "VET": 50.0,        # 최소 50 VET
-            }
-
-            # 최소 주문 금액을 만족하는 KRW 기준 최소 금액 (각 암호화폐별)
-            # 이 값들은 현재가 × 최소 수량으로 동적 계산될 예정
+            # 상수는 constants.py에서 import:
+            # MIN_ORDER_KRW, MIN_ORDER_KRW_BUFFER, COINONE_MAX_ORDER_AMOUNT_KRW,
+            # MAX_SLICES_PER_ORDER, MIN_ORDER_QUANTITIES
 
             # 실행 파라미터 계산
             exec_params = self._get_execution_parameters()

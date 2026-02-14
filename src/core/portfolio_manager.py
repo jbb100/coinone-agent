@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from .dynamic_portfolio_optimizer import DynamicPortfolioOptimizer, PortfolioWeights, AssetMetrics
+from ..utils.constants import MAX_POSITION_SIZE, MAX_SLIPPAGE
 
 
 def load_config() -> Dict:
@@ -31,7 +32,7 @@ def load_config() -> Dict:
             }
         },
         'risk_management': {
-            'max_position_size': 0.4,
+            'max_position_size': MAX_POSITION_SIZE,  # constants.py: 0.25
             'stop_loss': -0.15
         }
     }
@@ -994,14 +995,7 @@ class PortfolioManager:
             return {'error': str(e)}
 
 
-# 설정 상수
-DEFAULT_CRYPTO_ALLOCATION = {
-    "RISK_ON": 0.70,    # 강세장
-    "RISK_OFF": 0.30,   # 약세장
-    "NEUTRAL": 0.50     # 중립
-}
-
-
-# 설정 상수  
-MIN_REBALANCE_THRESHOLD = 0.01  # 1% 이상 차이날 때 리밸런싱
-MIN_TRADE_AMOUNT_KRW = 10000   # 최소 거래 금액 10,000원
+# 중복 상수 제거됨 - constants.py에서 import하여 사용:
+# - DEFAULT_CRYPTO_ALLOCATION
+# - REBALANCE_THRESHOLD (MIN_REBALANCE_THRESHOLD 대체)
+# - MIN_TRADE_AMOUNT_KRW

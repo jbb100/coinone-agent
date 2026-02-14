@@ -12,7 +12,9 @@ from typing import Dict
 
 # Rebalancing thresholds
 REBALANCE_THRESHOLD = 0.01  # 1% - 리밸런싱 임계값
-MIN_TRADE_AMOUNT_KRW = 10_000  # 10,000 KRW - 최소 거래 금액
+MIN_ORDER_KRW = 1_000  # 1,000 KRW - 거래소 기술적 최소값 (Coinone API 기준)
+MIN_TRADE_AMOUNT_KRW = 10_000  # 10,000 KRW - 운영상 최소 거래 금액 (수수료/슬리피지 고려)
+MIN_ORDER_KRW_BUFFER = 1.05  # 5% 안전 마진
 SAFETY_MARGIN = 0.99  # 99% - 안전 마진 (수수료 고려)
 
 # Order limits and safety

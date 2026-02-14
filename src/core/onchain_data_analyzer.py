@@ -18,6 +18,20 @@ import numpy as np
 import requests
 from loguru import logger
 
+# 스텁 데이터 경고 메시지
+STUB_DATA_WARNING = (
+    "⚠️ 실제 데이터 아님 (예시 데이터 사용 중). "
+    "실제 온체인 데이터를 위해 Glassnode 또는 CryptoQuant API 연동이 필요합니다."
+)
+STUB_DATA_LOGGED = set()  # 중복 로깅 방지
+
+
+def _log_stub_warning(method_name: str):
+    """스텁 데이터 사용 시 경고 로그 (중복 방지)"""
+    if method_name not in STUB_DATA_LOGGED:
+        logger.warning(f"{method_name}: {STUB_DATA_WARNING}")
+        STUB_DATA_LOGGED.add(method_name)
+
 
 class OnchainTrend(Enum):
     """온체인 트렌드"""
@@ -593,127 +607,120 @@ class OnchainDataAnalyzer:
                 "error": str(e)
             }
     
-    # 데이터 수집 메서드들 (예시 - 실제로는 API 호출)
+    # 데이터 수집 메서드들
+    # ⚠️ 대부분 스텁 데이터 사용 중 - 유료 API (Glassnode/CryptoQuant) 필요
+
     def _get_whale_count(self, asset: str) -> int:
-        """고래 주소 수 조회"""
-        try:
-            # 실제로는 Glassnode API 호출
-            return 2150  # 예시 데이터
-        except:
-            return 2000
-    
+        """고래 주소 수 조회 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_whale_count")
+        # TODO: Glassnode API 연동 시 실제 구현
+        return 2150  # 예시 데이터
+
     def _get_whale_balance(self, asset: str) -> float:
-        """고래 총 보유량 조회"""
-        try:
-            return 8500000  # BTC 기준 예시
-        except:
-            return 8000000
-    
+        """고래 총 보유량 조회 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_whale_balance")
+        return 8500000  # BTC 기준 예시
+
     def _get_whale_flow(self, asset: str) -> float:
-        """고래 24시간 순 흐름"""
-        try:
-            return 2500  # BTC 기준 예시 (양수 = 축적)
-        except:
-            return 0
-    
+        """고래 24시간 순 흐름 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_whale_flow")
+        return 2500  # BTC 기준 예시 (양수 = 축적)
+
     def _get_exchange_inflow(self, asset: str) -> float:
-        """거래소 유입량"""
-        try:
-            return 25000  # 예시
-        except:
-            return 20000
-    
+        """거래소 유입량 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_exchange_inflow")
+        return 25000  # 예시
+
     def _get_exchange_outflow(self, asset: str) -> float:
-        """거래소 유출량"""
-        try:
-            return 28000  # 예시
-        except:
-            return 25000
-    
+        """거래소 유출량 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_exchange_outflow")
+        return 28000  # 예시
+
     def _get_exchange_netflow(self, asset: str) -> float:
         """거래소 순 흐름 (유입 - 유출)"""
         return self._get_exchange_inflow(asset) - self._get_exchange_outflow(asset)
-    
+
     def _get_exchange_reserves(self, asset: str) -> float:
-        """거래소 보유량"""
-        try:
-            return 2800000  # 예시
-        except:
-            return 3000000
-    
+        """거래소 보유량 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_exchange_reserves")
+        return 2800000  # 예시
+
     def _get_lth_supply(self, asset: str) -> float:
-        """장기보유자 공급량 (%)"""
-        try:
-            return 68.5  # 예시
-        except:
-            return 65.0
-    
+        """장기보유자 공급량 (%) (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_lth_supply")
+        return 68.5  # 예시
+
     def _get_sth_supply(self, asset: str) -> float:
         """단기보유자 공급량 (%)"""
         return 100 - self._get_lth_supply(asset)
-    
+
     def _get_lth_position_change(self, asset: str) -> float:
-        """장기보유자 포지션 변화"""
-        try:
-            return 150  # 예시 (BTC)
-        except:
-            return 0
-    
+        """장기보유자 포지션 변화 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_lth_position_change")
+        return 150  # 예시 (BTC)
+
     def _get_active_addresses(self, asset: str) -> int:
-        """활성 주소 수"""
-        try:
-            return 750000  # 예시
-        except:
-            return 700000
-    
+        """활성 주소 수 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_active_addresses")
+        return 750000  # 예시
+
     def _get_hash_rate(self, asset: str) -> float:
-        """해시레이트"""
-        try:
-            return 450.5  # EH/s 기준 예시
-        except:
-            return 400.0
-    
+        """해시레이트 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_hash_rate")
+        return 450.5  # EH/s 기준 예시
+
     def _get_transaction_count(self, asset: str) -> int:
-        """트랜잭션 수"""
-        try:
-            return 280000  # 예시
-        except:
-            return 250000
-    
+        """트랜잭션 수 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_transaction_count")
+        return 280000  # 예시
+
     def _get_nvl(self, asset: str) -> float:
-        """네트워크 잠금 가치"""
-        try:
-            return 450000000000  # USD 기준 예시
-        except:
-            return 400000000000
-    
+        """네트워크 잠금 가치 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_nvl")
+        return 450000000000  # USD 기준 예시
+
     def _get_stablecoin_supply(self) -> float:
-        """스테이블코인 총 공급량"""
-        try:
-            return 130000000000  # USD 기준 예시
-        except:
-            return 120000000000
-    
+        """스테이블코인 총 공급량 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_stablecoin_supply")
+        return 130000000000  # USD 기준 예시
+
     def _get_stablecoin_dominance(self) -> float:
-        """스테이블코인 도미넌스"""
-        try:
-            return 8.5  # % 기준 예시
-        except:
-            return 10.0
-    
+        """스테이블코인 도미넌스 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_stablecoin_dominance")
+        return 8.5  # % 기준 예시
+
     def _get_stablecoin_flow(self) -> float:
-        """스테이블코인 24시간 흐름"""
-        try:
-            return 2500000000  # USD 기준 예시
-        except:
-            return 2000000000
-    
+        """스테이블코인 24시간 흐름 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_stablecoin_flow")
+        return 2500000000  # USD 기준 예시
+
     def _get_fear_greed_index(self) -> float:
-        """공포탐욕지수"""
+        """
+        공포탐욕지수 조회 (무료 API 연동)
+
+        Returns:
+            공포탐욕지수 (0-100)
+            - 0-24: Extreme Fear (역발상 매수 기회)
+            - 25-44: Fear
+            - 45-55: Neutral
+            - 56-74: Greed
+            - 75-100: Extreme Greed (역발상 매도 기회)
+        """
         try:
-            return 55  # 0-100 기준
-        except:
-            return 50
+            # ExternalAPIClient 사용 시도
+            from ..utils.external_api_client import ExternalAPIClient
+            client = ExternalAPIClient()
+            value = client.get_fear_greed_index()
+            if value is not None:
+                logger.debug(f"Fear & Greed Index 조회 성공: {value}")
+                return float(value)
+        except ImportError:
+            logger.warning("ExternalAPIClient import 실패 - 기본값 사용")
+        except Exception as e:
+            logger.warning(f"Fear & Greed API 오류: {e} - 기본값 사용")
+
+        # 폴백: 기본값 반환
+        return 50.0
     
     def _get_funding_rates(self, asset: str) -> Dict[str, float]:
         """펀딩비율"""

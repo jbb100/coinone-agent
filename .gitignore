@@ -98,8 +98,10 @@ celerybeat.pid
 .env.test.local
 .env.production.local
 
-# VS Code
-.vscode/
+# VS Code (settings.json은 팀 공유를 위해 제외)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 *.code-workspace
 
 # PyCharm

@@ -674,7 +674,39 @@ class KairosSystem:
                     logger.info(f"온체인 데이터 분석 완료: {result.get('market_phase', 'N/A')}")
                 except Exception as e:
                     logger.warning(f"온체인 데이터 분석 실패: {e}")
-            
+
+            # 4. 시나리오 대응 시스템 (로깅만)
+            if hasattr(self, 'scenario_response_system') and self.scenario_response_system:
+                try:
+                    from src.core.scenario_response_system import ScenarioSeverity
+
+                    # 시장 데이터 수집 (기본 데이터)
+                    market_data = {
+                        "price_change_24h": 0.0,
+                        "volume_surge": 1.0,
+                        "fear_greed_index": 50,
+                    }
+
+                    # 시나리오 감지
+                    scenarios = self.scenario_response_system.detect_scenarios(market_data)
+
+                    if scenarios:
+                        for scenario in scenarios:
+                            # 로깅만 (자동 리밸런싱 없음)
+                            if scenario.severity == ScenarioSeverity.CRITICAL:
+                                logger.critical(f"[SCENARIO] CRITICAL: {scenario.scenario_type.value}")
+                            elif scenario.severity == ScenarioSeverity.HIGH:
+                                logger.warning(f"[SCENARIO] HIGH: {scenario.scenario_type.value}")
+                            else:
+                                logger.info(f"[SCENARIO] {scenario.severity.value}: {scenario.scenario_type.value}")
+
+                        logger.info(f"시나리오 감지 완료: {len(scenarios)}개 활성 시나리오")
+                    else:
+                        logger.debug("시나리오 감지 완료: 활성 시나리오 없음")
+
+                except Exception as e:
+                    logger.warning(f"시나리오 대응 시스템 실행 실패: {e}")
+
             logger.info("고급 분석 모듈 실행 완료")
             
         except Exception as e:
