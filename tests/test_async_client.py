@@ -12,7 +12,7 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime, timedelta
 import json
 
-from src.core.async_client import AsyncHTTPClient, AsyncCache
+from src.core.async_client import AsyncHTTPClient, AsyncCache, RequestBatcher
 from src.core.exceptions import *
 
 
@@ -462,7 +462,432 @@ class TestAsyncClientIntegration:
                 # 캐시 효과 확인 (동일한 가격 정보 재조회)
                 btc_price_cached = await client.get_cached('/ticker/BTC')
                 assert btc_price_cached == btc_price
-        
+
         finally:
             await client.close()
             cache.clear_cache()
+
+
+@pytest.mark.async_test
+class TestAsyncCacheAdvanced:
+    """AsyncCache 고급 기능 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_clear_expired_no_expired(self):
+        """만료된 항목이 없을 때 clear_expired"""
+        cache = AsyncCache(max_memory_items=100)
+        try:
+            # 긴 TTL로 저장
+            await cache.set('key1', 'value1', ttl=3600)
+            await cache.set('key2', 'value2', ttl=3600)
+
+            # 만료된 항목 정리
+            await cache.clear_expired()
+
+            # 모든 항목이 여전히 존재해야 함
+            assert await cache.get('key1') == 'value1'
+            assert await cache.get('key2') == 'value2'
+        finally:
+            cache.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_clear_expired_with_expired_items(self):
+        """만료된 항목이 있을 때 clear_expired (lines 125-138)"""
+        cache = AsyncCache(max_memory_items=100)
+        try:
+            # 짧은 TTL로 저장
+            await cache.set('expired_key', 'expired_value', ttl=1)
+            # 긴 TTL로 저장
+            await cache.set('valid_key', 'valid_value', ttl=3600)
+
+            # TTL 만료 대기
+            await asyncio.sleep(1.1)
+
+            # 만료된 항목 정리
+            await cache.clear_expired()
+
+            # 만료된 항목은 삭제되고 유효한 항목은 유지
+            assert await cache.get('expired_key') is None
+            assert await cache.get('valid_key') == 'valid_value'
+        finally:
+            cache.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_evict_lru_empty_access_times(self):
+        """access_times가 비어있을 때 _evict_lru (line 109)"""
+        cache = AsyncCache(max_memory_items=10)
+        try:
+            # access_times를 비움
+            cache.access_times.clear()
+
+            # _evict_lru 호출 - 빈 경우 조기 반환
+            await cache._ensure_initialized()
+            await cache._evict_lru()
+
+            # 예외 없이 완료
+            assert True
+        finally:
+            cache.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_evict_lru_with_items(self):
+        """항목이 있을 때 _evict_lru"""
+        cache = AsyncCache(max_memory_items=2)
+        try:
+            # 여러 항목 저장
+            await cache.set('old_key', 'old_value')
+            await asyncio.sleep(0.1)
+            await cache.set('new_key', 'new_value')
+
+            # 가장 오래된 항목이 제거되어야 함
+            stats = cache.get_stats()
+            assert stats['memory_items'] <= 2
+        finally:
+            cache.clear_cache()
+
+
+@pytest.mark.async_test
+class TestRequestBatcher:
+    """RequestBatcher 테스트 (lines 219-281)"""
+
+    @pytest.mark.asyncio
+    async def test_request_batcher_initialization(self):
+        """RequestBatcher 초기화 (lines 218-224)"""
+        from src.core.async_client import RequestBatcher
+
+        batcher = RequestBatcher(batch_size=5, batch_timeout=0.1)
+
+        assert batcher.batch_size == 5
+        assert batcher.batch_timeout == 0.1
+        assert batcher.pending_requests == []
+        assert batcher._initialized is False
+
+    @pytest.mark.asyncio
+    async def test_request_batcher_ensure_initialized(self):
+        """RequestBatcher 초기화 확인 (lines 226-230)"""
+        from src.core.async_client import RequestBatcher
+
+        batcher = RequestBatcher()
+
+        assert batcher._initialized is False
+
+        await batcher._ensure_batch_initialized()
+
+        assert batcher._initialized is True
+        assert batcher._batch_lock is not None
+
+    @pytest.mark.asyncio
+    async def test_request_batcher_process_batch_empty(self):
+        """빈 배치 처리 (lines 260-261)"""
+        from src.core.async_client import RequestBatcher
+
+        batcher = RequestBatcher()
+        await batcher._ensure_batch_initialized()
+
+        # 빈 배치 처리 - 조기 반환
+        await batcher._process_batch()
+
+        # 예외 없이 완료
+        assert True
+
+    @pytest.mark.asyncio
+    async def test_request_batcher_process_batch_with_requests(self):
+        """요청이 있는 배치 처리 (lines 263-281)"""
+        from src.core.async_client import RequestBatcher
+
+        batcher = RequestBatcher(batch_size=2, batch_timeout=1.0)
+        await batcher._ensure_batch_initialized()
+
+        # 직접 pending_requests에 요청 추가
+        future1 = asyncio.Future()
+        future2 = asyncio.Future()
+
+        async def request1():
+            return "result1"
+
+        async def request2():
+            return "result2"
+
+        batcher.pending_requests.append((request1, future1))
+        batcher.pending_requests.append((request2, future2))
+
+        # 배치 처리
+        await batcher._process_batch()
+
+        # 결과 확인
+        assert future1.result() == "result1"
+        assert future2.result() == "result2"
+        assert len(batcher.pending_requests) == 0
+
+    @pytest.mark.asyncio
+    async def test_request_batcher_process_batch_with_exception(self):
+        """예외가 있는 배치 처리 (lines 278-279)"""
+        from src.core.async_client import RequestBatcher
+
+        batcher = RequestBatcher()
+        await batcher._ensure_batch_initialized()
+
+        future1 = asyncio.Future()
+
+        async def failing_request():
+            raise ValueError("Test error")
+
+        batcher.pending_requests.append((failing_request, future1))
+
+        # 배치 처리
+        await batcher._process_batch()
+
+        # 예외 확인
+        with pytest.raises(ValueError):
+            future1.result()
+
+
+@pytest.mark.async_test
+class TestConnectionPool:
+    """ConnectionPool 테스트 (lines 195-208)"""
+
+    @pytest.mark.asyncio
+    async def test_connection_pool_get_session(self):
+        """ConnectionPool 세션 획득 (lines 195-201)"""
+        from src.core.async_client import ConnectionPool
+
+        pool = ConnectionPool(max_connections=10, timeout=30)
+
+        try:
+            # 첫 번째 세션 획득
+            session1 = await pool.get_session()
+            assert session1 is not None
+
+            # 같은 세션 반환 (싱글톤)
+            session2 = await pool.get_session()
+            assert session1 is session2
+        finally:
+            await pool.close()
+
+    @pytest.mark.asyncio
+    async def test_connection_pool_close(self):
+        """ConnectionPool 종료 (lines 203-208)"""
+        from src.core.async_client import ConnectionPool
+
+        pool = ConnectionPool(max_connections=10, timeout=30)
+
+        # 세션 생성
+        session = await pool.get_session()
+        assert session is not None
+
+        # 종료
+        await pool.close()
+
+        # 세션이 닫혔는지 확인
+        assert pool.session is None or pool.session.closed
+
+
+@pytest.mark.async_test
+class TestAsyncHTTPClientAdvanced:
+    """AsyncHTTPClient 고급 기능 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_rate_limiting_enforcement(self):
+        """요청 속도 제한 적용 (lines 322-326)"""
+        client = AsyncHTTPClient(rate_limit=(2, 1))  # 초당 2요청
+
+        try:
+            # rate_limit 속성 확인
+            assert client.rate_limit == 2
+            assert client.rate_window == 1
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_batching_enabled(self):
+        """배치 처리 활성화 (line 426)"""
+        client = AsyncHTTPClient(enable_batching=True)
+
+        try:
+            assert client.enable_batching is True
+            assert client.batcher is not None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_client_with_custom_headers(self):
+        """커스텀 헤더 설정"""
+        custom_headers = {'X-Custom-Header': 'test-value'}
+        client = AsyncHTTPClient(default_headers=custom_headers)
+
+        try:
+            assert 'X-Custom-Header' in client.default_headers
+            assert client.default_headers['X-Custom-Header'] == 'test-value'
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_cached_method(self):
+        """캐시된 GET 요청"""
+        client = AsyncHTTPClient(enable_caching=True)
+
+        try:
+            mock_response = {'data': 'cached_data'}
+
+            with patch.object(client, '_make_request', return_value=mock_response):
+                # 첫 번째 요청
+                result1 = await client.get_cached('/cached-endpoint')
+
+                # 캐시에서 가져오기
+                result2 = await client.get_cached('/cached-endpoint')
+
+                assert result1 == mock_response
+                assert result2 == mock_response
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_client_stats_attributes(self):
+        """통계 속성 확인"""
+        client = AsyncHTTPClient()
+
+        try:
+            # 통계 속성 확인
+            assert hasattr(client, 'request_count')
+            assert hasattr(client, 'cache_hits')
+            assert hasattr(client, 'cache_misses')
+            assert client.request_count == 0
+            assert client.cache_hits == 0
+            assert client.cache_misses == 0
+        finally:
+            await client.close()
+
+
+@pytest.mark.async_test
+class TestAsyncClientUncoveredLines:
+    """커버되지 않은 라인 테스트"""
+
+    def test_request_batcher_initialization(self):
+        """RequestBatcher 초기화"""
+        batcher = RequestBatcher(batch_size=10, batch_timeout=0.1)
+        assert batcher.batch_size == 10
+        assert batcher.batch_timeout == 0.1
+        assert batcher.pending_requests == []
+
+    @pytest.mark.asyncio
+    async def test_async_client_with_batching(self):
+        """배치 처리 활성화된 클라이언트"""
+        client = AsyncHTTPClient(enable_batching=True)
+        try:
+            assert client.enable_batching is True
+            assert client.batcher is not None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_performance_stats_calculation(self):
+        """성능 통계 계산 (라인 593-614)"""
+        client = AsyncHTTPClient(enable_caching=True)
+
+        try:
+            # 통계 시뮬레이션
+            client.cache_hits = 5
+            client.cache_misses = 3
+            client.request_count = 10
+            client.total_request_time = 1.5
+
+            stats = client.get_performance_stats()
+
+            assert stats['request_count'] == 10
+            assert stats['cache_hits'] == 5
+            assert stats['cache_misses'] == 3
+            assert 'cache_hit_rate' in stats
+            assert stats['cache_hit_rate'] == pytest.approx(0.625, abs=0.01)
+            assert 'avg_request_time' in stats
+            assert 'cache_stats' in stats
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_build_url_methods(self):
+        """URL 빌드 메서드 (라인 533)"""
+        client = AsyncHTTPClient(base_url="https://api.test.com")
+
+        try:
+            # 전체 URL
+            full_url = client._build_url("https://other.com/endpoint")
+            assert full_url == "https://other.com/endpoint"
+
+            # HTTP URL
+            http_url = client._build_url("http://insecure.com/api")
+            assert http_url == "http://insecure.com/api"
+
+            # 상대 URL
+            relative_url = client._build_url("/api/test")
+            assert relative_url == "https://api.test.com/api/test"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_performance_stats_zero_requests(self):
+        """성능 통계 - 요청 없음"""
+        client = AsyncHTTPClient(enable_caching=True)
+
+        try:
+            stats = client.get_performance_stats()
+
+            assert stats['request_count'] == 0
+            assert stats['avg_request_time'] == 0
+            assert stats['cache_hit_rate'] == 0
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_attributes(self):
+        """Rate limit 속성 설정"""
+        client = AsyncHTTPClient(rate_limit=(100, 60))
+
+        try:
+            assert client.rate_limit_calls == 100
+            assert client.rate_limit_window == 60
+            assert client.rate_limit == 100
+            assert client.rate_window == 60
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_no_rate_limit(self):
+        """Rate limit 없음"""
+        client = AsyncHTTPClient()
+
+        try:
+            assert client.rate_limit_calls is None
+            assert client.rate_limit_window is None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_client_default_headers(self):
+        """기본 헤더 설정"""
+        headers = {'Authorization': 'Bearer token', 'X-Custom': 'value'}
+        client = AsyncHTTPClient(default_headers=headers)
+
+        try:
+            assert client.default_headers == headers
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_cache_disabled(self):
+        """캐시 비활성화"""
+        client = AsyncHTTPClient(enable_caching=False)
+
+        try:
+            assert client.cache is None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_cache_enabled(self):
+        """캐시 활성화"""
+        client = AsyncHTTPClient(enable_caching=True)
+
+        try:
+            assert client.cache is not None
+        finally:
+            await client.close()

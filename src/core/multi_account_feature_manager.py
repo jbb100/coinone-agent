@@ -493,7 +493,7 @@ class MultiAccountFeatureManager(BaseService):
             
         except Exception as e:
             logger.error(f"❌ 통합 분석 정보 생성 실패: {e}")
-            return {}
+            return None
     
     async def start(self):
         """서비스 시작"""

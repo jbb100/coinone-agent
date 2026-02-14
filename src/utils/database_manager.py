@@ -1190,7 +1190,7 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"전체 분석 결과 조회 실패: {e}")
-            return {}
+            return None
     
     def mark_analysis_as_used(self, analysis_type: str, analysis_date: str):
         """

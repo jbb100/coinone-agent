@@ -140,7 +140,7 @@ crontab -e
 
 # 다음 내용 추가:
 # 주간 시장 분석 (매주 월요일 09:00)
-0 9 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/weekly_check.py
+0 9 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --weekly-analysis
 
 # 분기별 리밸런싱 (분기 첫째주 월요일 09:00)
 0 9 1-7 1,4,7,10 1 /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/quarterly_rebalance.py

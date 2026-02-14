@@ -714,7 +714,7 @@ class PortfolioManager:
             
         except Exception as e:
             logger.error(f"Failed to calculate target amounts: {e}")
-            return {}
+            return None
     
     def calculate_rebalance_trades(self, current_weights_or_portfolio, target_weights: Dict[str, float], portfolio_value: float = None) -> List[Dict]:
         """리밸런싱 거래 계산"""
@@ -900,7 +900,7 @@ class PortfolioManager:
             return self.asset_allocation.get_crypto_weights()
         except Exception as e:
             logger.error(f"Failed to get asset allocation: {e}")
-            return {}
+            return None
     
     
     def _calculate_max_drawdown(self, portfolio_history: List[Dict]) -> float:

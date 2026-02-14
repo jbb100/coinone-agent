@@ -261,7 +261,7 @@ class AdvancedPerformanceAnalytics:
                     dd_start = date
                     dd_peak = dd
                     dd_peak_date = date
-                elif dd < dd_peak and in_drawdown:  # 드로우다운 심화
+                elif in_drawdown and dd < dd_peak:  # 드로우다운 심화
                     dd_peak = dd
                     dd_peak_date = date
                 elif dd >= -0.001 and in_drawdown:  # 드로우다운 회복

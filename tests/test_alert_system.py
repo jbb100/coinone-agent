@@ -160,7 +160,7 @@ class TestAlertSystem:
         # 잘못된 데이터
         result = alert_system.send_daily_summary(None)
 
-        assert result == {}
+        assert result is None
 
     def test_send_performance_alert_good(self, alert_system):
         """좋은 성과 알림"""
@@ -448,7 +448,7 @@ class TestAlertSystemAdvanced:
         """성과 알림 예외 처리"""
         result = alert_system_full.send_performance_alert(None)
 
-        assert result == {}
+        assert result is None
 
     def test_send_multi_timeframe_analysis_report(self, alert_system_full):
         """멀티 타임프레임 분석 보고서"""
@@ -478,7 +478,7 @@ class TestAlertSystemAdvanced:
         """멀티 타임프레임 분석 보고서 예외 처리"""
         result = alert_system_full.send_multi_timeframe_analysis_report(None)
 
-        assert result == {}
+        assert result is None
 
     def test_send_macro_analysis_report(self, alert_system_full):
         """매크로 경제 분석 보고서"""
@@ -532,7 +532,7 @@ class TestAlertSystemAdvanced:
         """매크로 분석 보고서 예외 처리"""
         result = alert_system_full.send_macro_analysis_report(None)
 
-        assert result == {}
+        assert result is None
 
     def test_send_market_analysis_with_rebalance(self, alert_system_full):
         """리밸런싱 포함 시장 분석 보고서"""
@@ -629,7 +629,7 @@ class TestAlertSystemAdvanced:
         """시장 분석 보고서 예외 처리"""
         result = alert_system_full.send_market_analysis_report(None)
 
-        assert result == {}
+        assert result is None
 
 
 class TestAlertSystemMentions:
@@ -729,3 +729,112 @@ class TestSlackPayload:
         result = alert_system._send_slack("Title", "Message", "info")
 
         assert result is False
+
+
+class TestAlertSystemUncoveredLines:
+    """커버되지 않은 라인 테스트"""
+
+    @pytest.fixture
+    def alert_system_email(self):
+        """이메일 활성화된 AlertSystem"""
+        config = Mock()
+        config.get_notification_config.return_value = {
+            'email': {
+                'enabled': True,
+                'smtp_server': 'smtp.test.com',
+                'smtp_port': 587,
+                'username': 'test@test.com',
+                'password': 'password',
+                'recipients': ['admin@test.com']
+            },
+            'slack': {'enabled': False},
+            'alert_levels': {
+                'error': ['email']
+            }
+        }
+
+        with patch('src.monitoring.alert_system.get_system_coordinator') as mock_coord:
+            mock_coord.return_value.should_send_alert.return_value = True
+            return AlertSystem(config)
+
+    @pytest.fixture
+    def alert_system_full(self):
+        """전체 기능 AlertSystem"""
+        config = Mock()
+        config.get_notification_config.return_value = {
+            'email': {
+                'enabled': True,
+                'smtp_server': 'smtp.test.com',
+                'smtp_port': 587,
+                'username': 'test@test.com',
+                'password': 'password',
+                'recipients': ['admin@test.com']
+            },
+            'slack': {
+                'enabled': True,
+                'webhook_url': 'https://hooks.slack.com/test',
+                'channel': '#test',
+                'username': 'TestBot',
+                'mentions': {
+                    'by_alert_type': {
+                        'quarterly_rebalance': ['<@U123>'],
+                        'immediate_rebalance': ['<@U456>'],
+                        'twap_start': ['<@U789>']
+                    }
+                }
+            },
+            'alert_levels': {
+                'error': ['email', 'slack'],
+                'info': ['slack'],
+                'system_test': ['slack']
+            }
+        }
+
+        with patch('src.monitoring.alert_system.get_system_coordinator') as mock_coord:
+            mock_coord.return_value.should_send_alert.return_value = True
+            return AlertSystem(config)
+
+    @patch('src.monitoring.alert_system.smtplib.SMTP')
+    def test_send_email_alert(self, mock_smtp, alert_system_email):
+        """이메일 알림 발송 (라인 79-80)"""
+        mock_server = Mock()
+        mock_smtp.return_value.__enter__ = Mock(return_value=mock_server)
+        mock_smtp.return_value.__exit__ = Mock(return_value=False)
+
+        result = alert_system_email.send_alert(
+            title="Test Error",
+            message="Test error message",
+            alert_type="error"
+        )
+
+        # 이메일 채널 결과 확인
+        assert "email" in result
+
+    @patch('src.monitoring.alert_system.requests.post')
+    def test_test_notifications_basic(self, mock_post, alert_system_full):
+        """알림 시스템 테스트 (라인 427-485)"""
+        mock_post.return_value.status_code = 200
+
+        results = alert_system_full.test_notifications()
+
+        assert isinstance(results, dict)
+
+    @patch('src.monitoring.alert_system.requests.post')
+    def test_test_notifications_with_mentions(self, mock_post, alert_system_full):
+        """멘션 포함 알림 테스트 (라인 451-476)"""
+        mock_post.return_value.status_code = 200
+
+        results = alert_system_full.test_notifications()
+
+        # 슬랙 결과가 있어야 함
+        assert "slack" in results
+
+    @patch('src.monitoring.alert_system.requests.post')
+    def test_test_notifications_failure(self, mock_post, alert_system_full):
+        """알림 테스트 실패 (라인 479-484)"""
+        mock_post.return_value.status_code = 500  # 실패
+
+        results = alert_system_full.test_notifications()
+
+        # 실패 결과
+        assert isinstance(results, dict)

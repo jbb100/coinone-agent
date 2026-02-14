@@ -627,7 +627,7 @@ class MultiAccountManager(BaseService):
             
         except Exception as e:
             logger.error(f"❌ 통합 포트폴리오 조회 실패: {e}")
-            return {}
+            return None
     
     async def start(self):
         """서비스 시작"""

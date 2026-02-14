@@ -179,6 +179,53 @@ kelly_fraction = (win_rate * risk_reward - (1 - win_rate)) / risk_reward
 
 ---
 
+## 9. TDD (Test-Driven Development) 원칙
+
+### 필수 개발 프로세스
+새로운 기능을 추가하거나 버그를 수정할 때 반드시 TDD 사이클을 따를 것:
+
+1. **Red**: 실패하는 테스트 먼저 작성
+   - 요구사항을 명확히 정의
+   - 예상 동작을 테스트 코드로 표현
+   - 테스트 실행하여 실패 확인 (반드시 실패해야 함)
+
+2. **Green**: 테스트를 통과하는 최소한의 코드 작성
+   - 테스트를 통과시키는 것에만 집중
+   - 과도한 구현 금지
+
+3. **Refactor**: 코드 개선
+   - 중복 제거, 가독성 향상
+   - 테스트가 여전히 통과하는지 확인
+
+### TDD 체크리스트
+- [ ] 구현 전에 테스트 케이스를 먼저 작성했는가?
+- [ ] 테스트가 요구사항을 명확히 표현하는가?
+- [ ] 테스트 실행 시 예상대로 실패하는가?
+- [ ] 테스트 통과 후 리팩토링을 수행했는가?
+
+### 테스트 작성 가이드
+```python
+# 좋은 테스트의 예시
+def test_should_reject_order_when_risk_exceeds_limit():
+    """단일 거래 리스크가 2%를 초과하면 주문을 거부해야 함"""
+    # Given: 리스크 한도 초과 상황 설정
+    risk_manager = RiskManager(max_single_trade_risk=0.02)
+    order = Order(size=1000, stop_loss=0.05)  # 5% 리스크
+
+    # When: 주문 검증 시도
+    result = risk_manager.validate_order(order)
+
+    # Then: 주문 거부 확인
+    assert result.is_rejected
+    assert "risk limit exceeded" in result.reason
+```
+
+### 예외 상황
+- 탐색적 프로토타이핑: 가능성 검증 후 TDD로 재구현
+- 긴급 핫픽스: 배포 후 즉시 테스트 추가 (기술 부채로 기록)
+
+---
+
 ## 참고 자료
 
 - 기술적 분석: https://www.youhodler.com/education/introduction-to-technical-indicators

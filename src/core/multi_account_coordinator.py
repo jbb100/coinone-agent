@@ -664,7 +664,7 @@ class MultiAccountCoordinator(BaseService):
             return await self.multi_account_manager.get_aggregate_portfolio()
         except Exception as e:
             logger.error(f"❌ 통합 포트폴리오 조회 실패: {e}")
-            return {}
+            return None
     
     async def _execute_account_trades(self, account_id: AccountID, trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         """계정별 거래 실행"""
@@ -794,7 +794,7 @@ class MultiAccountCoordinator(BaseService):
         try:
             account_info = await self.multi_account_manager.get_account_info(account_id)
             if not account_info:
-                return {}
+                return None
             
             return {
                 'account_id': account_id,
@@ -806,7 +806,7 @@ class MultiAccountCoordinator(BaseService):
             
         except Exception as e:
             logger.error(f"❌ 계정 {account_id} 성과 데이터 조회 실패: {e}")
-            return {}
+            return None
     
     async def execute_coordinated_rebalancing(self, rebalancing_plan: Dict[str, List[Dict]]) -> Dict[str, Any]:
         """조정된 리밸런싱 실행"""

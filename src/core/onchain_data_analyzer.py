@@ -18,6 +18,11 @@ import numpy as np
 import requests
 from loguru import logger
 
+from .onchain_stub_data import (
+    WHALE_DATA, EXCHANGE_DATA, HOLDER_DATA,
+    NETWORK_DATA, STABLECOIN_DATA, FUNDING_RATES
+)
+
 # 스텁 데이터 경고 메시지
 STUB_DATA_WARNING = (
     "⚠️ 실제 데이터 아님 (예시 데이터 사용 중). "
@@ -613,28 +618,27 @@ class OnchainDataAnalyzer:
     def _get_whale_count(self, asset: str) -> int:
         """고래 주소 수 조회 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_whale_count")
-        # TODO: Glassnode API 연동 시 실제 구현
-        return 2150  # 예시 데이터
+        return WHALE_DATA["count"]
 
     def _get_whale_balance(self, asset: str) -> float:
         """고래 총 보유량 조회 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_whale_balance")
-        return 8500000  # BTC 기준 예시
+        return WHALE_DATA["balance"]
 
     def _get_whale_flow(self, asset: str) -> float:
         """고래 24시간 순 흐름 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_whale_flow")
-        return 2500  # BTC 기준 예시 (양수 = 축적)
+        return WHALE_DATA["flow"]
 
     def _get_exchange_inflow(self, asset: str) -> float:
         """거래소 유입량 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_exchange_inflow")
-        return 25000  # 예시
+        return EXCHANGE_DATA["inflow"]
 
     def _get_exchange_outflow(self, asset: str) -> float:
         """거래소 유출량 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_exchange_outflow")
-        return 28000  # 예시
+        return EXCHANGE_DATA["outflow"]
 
     def _get_exchange_netflow(self, asset: str) -> float:
         """거래소 순 흐름 (유입 - 유출)"""
@@ -643,12 +647,12 @@ class OnchainDataAnalyzer:
     def _get_exchange_reserves(self, asset: str) -> float:
         """거래소 보유량 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_exchange_reserves")
-        return 2800000  # 예시
+        return EXCHANGE_DATA["reserves"]
 
     def _get_lth_supply(self, asset: str) -> float:
         """장기보유자 공급량 (%) (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_lth_supply")
-        return 68.5  # 예시
+        return HOLDER_DATA["lth_supply"]
 
     def _get_sth_supply(self, asset: str) -> float:
         """단기보유자 공급량 (%)"""
@@ -657,42 +661,42 @@ class OnchainDataAnalyzer:
     def _get_lth_position_change(self, asset: str) -> float:
         """장기보유자 포지션 변화 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_lth_position_change")
-        return 150  # 예시 (BTC)
+        return HOLDER_DATA["lth_position_change"]
 
     def _get_active_addresses(self, asset: str) -> int:
         """활성 주소 수 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_active_addresses")
-        return 750000  # 예시
+        return NETWORK_DATA["active_addresses"]
 
     def _get_hash_rate(self, asset: str) -> float:
         """해시레이트 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_hash_rate")
-        return 450.5  # EH/s 기준 예시
+        return NETWORK_DATA["hash_rate"]
 
     def _get_transaction_count(self, asset: str) -> int:
         """트랜잭션 수 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_transaction_count")
-        return 280000  # 예시
+        return NETWORK_DATA["transaction_count"]
 
     def _get_nvl(self, asset: str) -> float:
         """네트워크 잠금 가치 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_nvl")
-        return 450000000000  # USD 기준 예시
+        return NETWORK_DATA["nvl"]
 
     def _get_stablecoin_supply(self) -> float:
         """스테이블코인 총 공급량 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_stablecoin_supply")
-        return 130000000000  # USD 기준 예시
+        return STABLECOIN_DATA["supply"]
 
     def _get_stablecoin_dominance(self) -> float:
         """스테이블코인 도미넌스 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_stablecoin_dominance")
-        return 8.5  # % 기준 예시
+        return STABLECOIN_DATA["dominance"]
 
     def _get_stablecoin_flow(self) -> float:
         """스테이블코인 24시간 흐름 (스텁 - 유료 API 필요)"""
         _log_stub_warning("_get_stablecoin_flow")
-        return 2500000000  # USD 기준 예시
+        return STABLECOIN_DATA["flow"]
 
     def _get_fear_greed_index(self) -> float:
         """
@@ -723,15 +727,9 @@ class OnchainDataAnalyzer:
         return 50.0
     
     def _get_funding_rates(self, asset: str) -> Dict[str, float]:
-        """펀딩비율"""
-        try:
-            return {
-                "binance": 0.0025,
-                "bybit": 0.0030,
-                "okx": 0.0020
-            }
-        except:
-            return {"average": 0.0025}
+        """펀딩비율 (스텁 - 유료 API 필요)"""
+        _log_stub_warning("_get_funding_rates")
+        return FUNDING_RATES.copy()
     
     def _get_fallback_metrics(self) -> OnchainMetrics:
         """폴백 메트릭스"""
@@ -775,6 +773,7 @@ class OnchainDataAnalyzer:
                 "long_term": 0.0
             },
             confidence_level=0.3,
+            overall_signal=0.5,
             created_at=datetime.now()
         )
     

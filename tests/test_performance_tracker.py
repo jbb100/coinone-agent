@@ -394,14 +394,14 @@ class TestGetCurrentAllocation:
         """빈 포트폴리오"""
         allocation = tracker._get_current_allocation({})
 
-        assert allocation == {}
+        assert allocation is None
 
     def test_zero_total_value(self, tracker):
         """총 가치 0"""
         snapshot = {"total_value_krw": 0}
         allocation = tracker._get_current_allocation(snapshot)
 
-        assert allocation == {}
+        assert allocation is None
 
     def test_krw_only(self, tracker):
         """KRW만 보유"""

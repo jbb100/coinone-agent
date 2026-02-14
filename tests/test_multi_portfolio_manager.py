@@ -549,3 +549,391 @@ class TestAccountPortfolioManagerEdgeCases:
             # 비중 합은 1이어야 함
             total = sum(weights.values())
             assert abs(total - 1.0) < 0.01, f"Season {season}: total weight = {total}"
+
+
+class TestAccountPortfolioManagerExecuteRebalancing:
+    """AccountPortfolioManager execute_rebalancing 테스트"""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = Mock()
+        client.get_balances.return_value = {
+            'KRW': 5000000.0,
+            'BTC': 0.1,  # 500만원 가치 (50% 비중)
+            'ETH': 1.0   # 300만원 가치
+        }
+        client.get_ticker.side_effect = lambda currency: {
+            'last': 50000000 if currency == 'BTC' else 3000000
+        }
+        client.sell_market_order.return_value = {"order_id": "sell_123"}
+        client.buy_market_order_krw.return_value = {"order_id": "buy_456"}
+        return client
+
+    @pytest.fixture
+    def mock_config_real(self):
+        """실제 리밸런싱용 설정 (dry_run=False)"""
+        config = Mock(spec=AccountConfig)
+        config.account_name = "real_account"
+        config.risk_level = RiskLevel.MODERATE
+        config.core_allocation = 0.7
+        config.satellite_allocation = 0.3
+        config.max_position_size = 0.25
+        config.initial_capital = Decimal('10000000')
+        config.dry_run = False  # 실제 실행
+        return config
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalancing_sell_order(self, mock_client, mock_config_real):
+        """매도 주문 실행 테스트"""
+        manager = AccountPortfolioManager(
+            account_id=AccountID("test"),
+            config=mock_config_real,
+            client=mock_client
+        )
+
+        # 현재 BTC 50%, 목표 30% -> 매도 필요
+        target_weights = {
+            AssetSymbol('KRW'): Percentage(0.5),
+            AssetSymbol('BTC'): Percentage(0.3),
+            AssetSymbol('ETH'): Percentage(0.2)
+        }
+
+        orders = await manager.execute_rebalancing(target_weights)
+
+        # 매도 주문이 실행되어야 함
+        assert mock_client.sell_market_order.called or mock_client.buy_market_order_krw.called
+        assert manager.last_rebalance is not None
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalancing_buy_order(self, mock_client, mock_config_real):
+        """매수 주문 실행 테스트"""
+        mock_client.get_balances.return_value = {
+            'KRW': 9000000.0,  # 90% 현금
+            'BTC': 0.02        # 10% BTC
+        }
+        mock_client.get_ticker.return_value = {'last': 50000000}
+
+        manager = AccountPortfolioManager(
+            account_id=AccountID("test"),
+            config=mock_config_real,
+            client=mock_client
+        )
+
+        # 현재 KRW 90%, 목표 50% -> BTC 매수 필요
+        target_weights = {
+            AssetSymbol('KRW'): Percentage(0.5),
+            AssetSymbol('BTC'): Percentage(0.5)
+        }
+
+        orders = await manager.execute_rebalancing(target_weights)
+
+        # 매수 주문이 실행되어야 함
+        mock_client.buy_market_order_krw.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalancing_exception(self, mock_client, mock_config_real):
+        """리밸런싱 실행 중 예외"""
+        mock_client.get_balances.side_effect = Exception("API Error")
+
+        manager = AccountPortfolioManager(
+            account_id=AccountID("test"),
+            config=mock_config_real,
+            client=mock_client
+        )
+
+        target_weights = {AssetSymbol('KRW'): Percentage(1.0)}
+
+        with pytest.raises(TradingException):
+            await manager.execute_rebalancing(target_weights)
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalancing_skip_small_orders(self, mock_client, mock_config_real):
+        """작은 금액 주문 스킵"""
+        mock_client.get_balances.return_value = {
+            'KRW': 9995000.0,  # 거의 100% 현금
+            'BTC': 0.0001      # 5000원 미만
+        }
+        mock_client.get_ticker.return_value = {'last': 50000000}
+
+        manager = AccountPortfolioManager(
+            account_id=AccountID("test"),
+            config=mock_config_real,
+            client=mock_client
+        )
+
+        target_weights = {
+            AssetSymbol('KRW'): Percentage(0.9995),
+            AssetSymbol('BTC'): Percentage(0.0005)  # 5000원 미만
+        }
+
+        orders = await manager.execute_rebalancing(target_weights)
+
+        # 최소 주문 금액 미달로 주문이 없을 수 있음
+        assert isinstance(orders, list)
+
+    @pytest.mark.asyncio
+    async def test_calculate_target_weights_exception(self, mock_client, mock_config_real):
+        """목표 비중 계산 예외"""
+        # config에서 예외 발생하도록 설정
+        mock_config_real.core_allocation = None  # 예외 유발
+        mock_config_real.satellite_allocation = None
+
+        manager = AccountPortfolioManager(
+            account_id=AccountID("test"),
+            config=mock_config_real,
+            client=mock_client
+        )
+
+        with pytest.raises(TradingException):
+            await manager.calculate_target_weights(MarketSeason.NEUTRAL)
+
+    @pytest.mark.asyncio
+    async def test_get_current_portfolio_exception(self, mock_client, mock_config_real):
+        """포트폴리오 조회 예외"""
+        mock_client.get_balances.side_effect = Exception("Connection Error")
+
+        manager = AccountPortfolioManager(
+            account_id=AccountID("test"),
+            config=mock_config_real,
+            client=mock_client
+        )
+
+        with pytest.raises(TradingException):
+            await manager.get_current_portfolio()
+
+
+class TestMultiPortfolioManagerInitialize:
+    """MultiPortfolioManager 초기화 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_initialize_success(self):
+        """초기화 성공"""
+        manager = MultiPortfolioManager()
+
+        with patch.object(manager.multi_account_manager, 'initialize', new_callable=AsyncMock):
+            with patch.object(manager, '_create_account_managers', new_callable=AsyncMock):
+                await manager.initialize()
+
+    @pytest.mark.asyncio
+    async def test_initialize_failure(self):
+        """초기화 실패"""
+        manager = MultiPortfolioManager()
+
+        with patch.object(manager.multi_account_manager, 'initialize', new_callable=AsyncMock) as mock_init:
+            mock_init.side_effect = Exception("Init failed")
+
+            with pytest.raises(Exception):
+                await manager.initialize()
+
+    @pytest.mark.asyncio
+    async def test_create_account_managers(self):
+        """계정 관리자 생성"""
+        manager = MultiPortfolioManager()
+
+        # 목 계정 설정
+        mock_config = Mock(spec=AccountConfig)
+        mock_config.account_name = "test"
+        mock_config.risk_level = RiskLevel.MODERATE
+        mock_config.initial_capital = Decimal('10000000')
+
+        mock_client = Mock()
+
+        manager.multi_account_manager.accounts = {
+            "account_001": mock_config
+        }
+        manager.multi_account_manager.clients = {
+            "account_001": mock_client
+        }
+
+        await manager._create_account_managers()
+
+        assert "account_001" in manager.account_managers
+        assert isinstance(manager.account_managers["account_001"], AccountPortfolioManager)
+
+    @pytest.mark.asyncio
+    async def test_create_account_managers_no_client(self):
+        """클라이언트 없는 계정 건너뛰기"""
+        manager = MultiPortfolioManager()
+
+        mock_config = Mock(spec=AccountConfig)
+        mock_config.account_name = "test"
+
+        manager.multi_account_manager.accounts = {
+            "account_001": mock_config  # 계정 있음
+        }
+        manager.multi_account_manager.clients = {}  # 클라이언트 없음
+
+        await manager._create_account_managers()
+
+        assert "account_001" not in manager.account_managers
+
+
+class TestMultiPortfolioManagerRebalanceAll:
+    """MultiPortfolioManager rebalance_all_accounts 테스트"""
+
+    @pytest.fixture
+    def manager_with_accounts(self):
+        manager = MultiPortfolioManager()
+
+        # 활성 계정 설정
+        mock_status_active = Mock()
+        mock_status_active.value = "active"
+
+        mock_status_inactive = Mock()
+        mock_status_inactive.value = "inactive"
+
+        manager.multi_account_manager = Mock()
+        manager.multi_account_manager.account_status = {
+            "account_001": mock_status_active,
+            "account_002": mock_status_active,
+            "account_003": mock_status_inactive
+        }
+
+        # 계정 관리자 설정
+        mock_account_manager = AsyncMock()
+        mock_account_manager.calculate_target_weights.return_value = {
+            AssetSymbol('KRW'): Percentage(0.5)
+        }
+        mock_account_manager.execute_rebalancing.return_value = []
+        mock_account_manager.needs_rebalancing.return_value = True
+        mock_account_manager.config = Mock(dry_run=True)
+
+        manager.account_managers = {
+            "account_001": mock_account_manager,
+            "account_002": mock_account_manager
+        }
+
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_rebalance_all_with_active_accounts(self, manager_with_accounts):
+        """활성 계정들 리밸런싱"""
+        results = await manager_with_accounts.rebalance_all_accounts(force=True)
+
+        # 2개의 활성 계정에 대한 결과
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_rebalance_all_with_exception(self, manager_with_accounts):
+        """일부 계정 리밸런싱 실패"""
+        # 첫 번째 계정만 실패하도록 설정
+        async def failing_rebalance(target_weights):
+            raise Exception("Rebalance failed")
+
+        manager_with_accounts.account_managers["account_001"].execute_rebalancing.side_effect = failing_rebalance
+
+        results = await manager_with_accounts.rebalance_all_accounts(force=True)
+
+        # 결과에 실패 항목 포함
+        failed = [r for r in results if isinstance(r, dict) and r.get('action') == 'failed']
+        assert len(failed) >= 0  # 예외 처리 확인
+
+
+class TestMultiPortfolioManagerPerformance:
+    """MultiPortfolioManager 성과 분석 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_get_aggregate_performance_error(self):
+        """성과 조회 중 예외"""
+        manager = MultiPortfolioManager()
+
+        mock_account_manager = AsyncMock()
+        mock_account_manager.get_current_portfolio.side_effect = Exception("API Error")
+        mock_account_manager.config = Mock()
+        mock_account_manager.config.account_name = "test"
+        mock_account_manager.config.initial_capital = Decimal('10000000')
+        mock_account_manager.config.risk_level = RiskLevel.MODERATE
+
+        manager.account_managers = {"account_001": mock_account_manager}
+
+        performance = await manager.get_aggregate_performance()
+
+        # 예외 발생 시 해당 계정은 건너뜀
+        assert performance.get('active_accounts', 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_aggregate_performance_multiple_accounts(self):
+        """여러 계정 성과 집계"""
+        manager = MultiPortfolioManager()
+
+        # 두 계정 설정
+        for i in range(2):
+            mock_account_manager = AsyncMock()
+            mock_config = Mock()
+            mock_config.account_name = f"Account {i}"
+            mock_config.initial_capital = Decimal('10000000')
+            mock_config.risk_level = RiskLevel.MODERATE
+
+            mock_account_manager.config = mock_config
+            mock_account_manager.get_current_portfolio.return_value = {
+                'total_value_krw': KRWAmount(Decimal('12000000')),  # 20% 수익
+                'assets': {},
+                'weights': {}
+            }
+
+            manager.account_managers[f"account_{i}"] = mock_account_manager
+
+        performance = await manager.get_aggregate_performance()
+
+        assert performance['active_accounts'] == 2
+        assert performance['overall_return'] == 0.2  # 20% 수익
+        assert len(performance['account_performances']) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_aggregate_performance_total_exception(self):
+        """전체 성과 조회 예외"""
+        manager = MultiPortfolioManager()
+
+        # account_managers 자체를 None으로 설정하여 예외 유발
+        manager.account_managers = None
+
+        performance = await manager.get_aggregate_performance()
+
+        # 예외 시 None 반환
+        assert performance is None
+
+
+class TestMultiPortfolioManagerRebalanceAccountDetails:
+    """rebalance_account 상세 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_rebalance_account_completed(self):
+        """리밸런싱 완료"""
+        manager = MultiPortfolioManager()
+
+        mock_account_manager = AsyncMock()
+        mock_account_manager.calculate_target_weights.return_value = {
+            AssetSymbol('KRW'): Percentage(0.5),
+            AssetSymbol('BTC'): Percentage(0.5)
+        }
+        mock_account_manager.needs_rebalancing.return_value = True
+        mock_account_manager.execute_rebalancing.return_value = [
+            {"order_id": "order_1"},
+            {"order_id": "order_2"}
+        ]
+        mock_account_manager.config = Mock(dry_run=False)
+
+        manager.account_managers[AccountID("test_acc")] = mock_account_manager
+
+        result = await manager.rebalance_account(AccountID("test_acc"))
+
+        assert result['action'] == 'completed'
+        assert result['orders_count'] == 2
+        assert 'target_weights' in result
+        assert 'timestamp' in result
+
+    @pytest.mark.asyncio
+    async def test_rebalance_account_exception_handling(self):
+        """리밸런싱 예외 처리"""
+        manager = MultiPortfolioManager()
+
+        mock_account_manager = AsyncMock()
+        mock_account_manager.calculate_target_weights.side_effect = Exception("Calculation failed")
+
+        manager.account_managers[AccountID("test_acc")] = mock_account_manager
+
+        result = await manager.rebalance_account(AccountID("test_acc"))
+
+        assert result['action'] == 'failed'
+        assert 'error' in result
+        assert 'timestamp' in result

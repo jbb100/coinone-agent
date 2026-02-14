@@ -472,7 +472,7 @@ class BacktestReportGenerator:
             
         except Exception as e:
             logger.warning(f"차트 데이터 준비 실패: {e}")
-            return {}
+            return None
     
     def save_report_to_file(self, report: Dict[str, Any], filename: str = None) -> str:
         """리포트를 파일로 저장"""

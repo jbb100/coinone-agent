@@ -451,7 +451,7 @@ class RiskParityModel:
             
         except Exception as e:
             logger.error(f"포트폴리오 비교 실패: {e}")
-            return {}
+            return None
     
     def generate_rebalancing_signals(
         self,
@@ -530,7 +530,7 @@ class RiskParityModel:
             portfolio_returns = returns_data @ weight_array
             
             if len(portfolio_returns) == 0:
-                return {}
+                return None
             
             # 기본 지표
             annual_return = portfolio_returns.mean() * 252
@@ -567,7 +567,7 @@ class RiskParityModel:
             
         except Exception as e:
             logger.error(f"리스크 조정 수익률 계산 실패: {e}")
-            return {}
+            return None
 
 
 # 유틸리티 함수들

@@ -189,7 +189,7 @@ class Rebalancer:
             return deviations
         except Exception as e:
             logger.error(f"가중치 편차 계산 실패: {e}")
-            return {}
+            return None
     
     def needs_rebalancing(self, current_weights_or_deviations: Dict[str, float], target_weights: Dict[str, float] = None, threshold: float = 0.05) -> bool:
         """리밸런싱 필요 여부 판단"""

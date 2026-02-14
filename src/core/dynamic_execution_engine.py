@@ -1235,7 +1235,7 @@ class DynamicExecutionEngine:
         try:
             total_value = portfolio.get("total_krw", 0)
             if total_value <= 0:
-                return {}
+                return None
             
             weights = {}
             for asset, asset_info in portfolio.get("assets", {}).items():
@@ -1252,7 +1252,7 @@ class DynamicExecutionEngine:
             
         except Exception as e:
             logger.error(f"현재 비중 계산 실패: {e}")
-            return {} 
+            return None 
 
     def _cancel_pending_exchange_orders(self, twap_orders: List[TWAPOrder]) -> Dict:
         """

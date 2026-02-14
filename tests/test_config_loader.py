@@ -323,3 +323,348 @@ class TestRequiredConfigKeys:
     def test_logging_level_required(self):
         """logging.level이 필수 키에 포함"""
         assert 'logging.level' in REQUIRED_CONFIG_KEYS
+
+
+class TestConfigLoaderEnvVarSubstitution:
+    """환경 변수 치환 추가 테스트"""
+
+    def test_substitute_env_var_in_list(self):
+        """리스트 내 환경 변수 치환 (라인 68-70)"""
+        config_data = {
+            'items': ['${TEST_LIST_VAR}', 'normal_item']
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config_data, f)
+            temp_path = f.name
+
+        try:
+            os.environ['TEST_LIST_VAR'] = 'list_substituted'
+            loader = ConfigLoader(temp_path)
+            result = loader.get('items')
+            assert result[0] == 'list_substituted'
+            assert result[1] == 'normal_item'
+        finally:
+            os.unlink(temp_path)
+            del os.environ['TEST_LIST_VAR']
+
+    def test_substitute_env_var_no_substitution(self):
+        """환경 변수 패턴이 아닌 문자열"""
+        config_data = {
+            'normal': 'not_a_variable',
+            'partial': '$NOT_COMPLETE'
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config_data, f)
+            temp_path = f.name
+
+        try:
+            loader = ConfigLoader(temp_path)
+            assert loader.get('normal') == 'not_a_variable'
+            assert loader.get('partial') == '$NOT_COMPLETE'
+        finally:
+            os.unlink(temp_path)
+
+
+class TestConfigLoaderEncryptionKeyLoading:
+    """암호화 키 로딩 테스트"""
+
+    def test_encryption_key_file_not_found(self, tmp_path):
+        """암호화 키 파일 없음 (라인 100-101)"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'security': {
+                'encryption': {
+                    'enabled': True,
+                    'key_file': str(tmp_path / 'nonexistent_key')
+                }
+            }
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        # 암호화 키가 없어야 함
+        assert loader._encryption_key is None
+
+    def test_encryption_key_load_exception(self, tmp_path):
+        """암호화 키 로드 예외 (라인 103-104)"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'security': {
+                'encryption': {
+                    'enabled': True,
+                    'key_file': str(tmp_path / 'bad_key')
+                }
+            }
+        }
+
+        # 읽을 수 없는 파일 생성 (디렉토리로 생성)
+        bad_key_path = tmp_path / 'bad_key'
+        bad_key_path.mkdir()
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        # 예외 발생해도 초기화 성공
+        assert loader is not None
+
+
+class TestConfigLoaderGetSetExceptions:
+    """get/set 메서드 예외 처리 테스트"""
+
+    def test_get_exception_handling(self, tmp_path):
+        """get 메서드 예외 처리 (라인 133-135)"""
+        config_data = {'logging': {'level': 'INFO'}}
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+
+        # _config_data를 예외를 발생시키는 객체로 교체
+        class BadDict:
+            def __getitem__(self, key):
+                raise Exception("Get error")
+
+        loader._config_data = BadDict()
+
+        result = loader.get('any.key', 'default')
+        assert result == 'default'
+
+    def test_set_exception_handling(self, tmp_path):
+        """set 메서드 예외 처리 (라인 158-159)"""
+        config_data = {'logging': {'level': 'INFO'}}
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+
+        # _config_data를 예외를 발생시키는 객체로 교체
+        class BadDict:
+            def __setitem__(self, key, value):
+                raise Exception("Set error")
+            def __contains__(self, key):
+                return False
+
+        loader._config_data = BadDict()
+
+        # 예외 발생해도 크래시 안함
+        loader.set('any.key', 'value')
+
+
+class TestConfigLoaderDecryption:
+    """복호화 테스트"""
+
+    def test_decrypt_value_no_key(self, tmp_path):
+        """암호화 키 없이 복호화 시도 (라인 170-172)"""
+        config_data = {'logging': {'level': 'INFO'}}
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        loader._encryption_key = None
+
+        result = loader._decrypt_value('encrypted:abc123')
+        assert result == 'encrypted:abc123'
+
+    def test_decrypt_value_exception(self, tmp_path):
+        """복호화 예외 (라인 182-184)"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'security': {
+                'encryption': {
+                    'enabled': True,
+                    'key_file': str(tmp_path / '.key')
+                }
+            }
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+
+        # 암호화 키 수동 설정
+        from cryptography.fernet import Fernet
+        loader._encryption_key = Fernet.generate_key()
+
+        # 잘못된 암호화 데이터로 복호화 시도
+        result = loader._decrypt_value('encrypted:invalid_data')
+        assert result == 'encrypted:invalid_data'
+
+
+class TestConfigLoaderEncryptValue:
+    """암호화 테스트"""
+
+    def test_encrypt_value_success(self, tmp_path):
+        """값 암호화 성공"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'security': {
+                'encryption': {
+                    'enabled': True,
+                    'key_file': str(tmp_path / '.key')
+                }
+            }
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+
+        encrypted = loader.encrypt_value('my_secret')
+        assert encrypted.startswith('encrypted:')
+
+    def test_encrypt_value_exception(self, tmp_path):
+        """암호화 예외 (라인 206-208)"""
+        config_data = {'logging': {'level': 'INFO'}}
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        loader._encryption_key = b'invalid_key'  # 잘못된 키
+
+        result = loader.encrypt_value('my_secret')
+        assert result == 'my_secret'  # 실패 시 원본 반환
+
+
+class TestConfigLoaderReloadException:
+    """설정 재로드 예외 테스트"""
+
+    def test_reload_config_exception(self, tmp_path):
+        """reload_config 예외 (라인 303-305)"""
+        config_data = {'logging': {'level': 'INFO'}}
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+
+        # 파일 삭제
+        os.unlink(config_path)
+
+        with pytest.raises(FileNotFoundError):
+            loader.reload_config()
+
+
+class TestConfigLoaderMaskSensitiveData:
+    """민감 정보 마스킹 테스트"""
+
+    def test_mask_sensitive_data_in_list(self, tmp_path):
+        """리스트 내 민감 정보 마스킹 (라인 337-339)"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'accounts': [
+                {'api_key': 'secret_key_1234', 'name': 'account1'},
+                {'api_key': 'another_key_5678', 'name': 'account2'}
+            ]
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        result = loader.to_dict()
+
+        # 리스트 내 api_key가 마스킹되어야 함
+        for account in result['accounts']:
+            if len(account['api_key']) > 4:
+                assert '*' in account['api_key']
+
+    def test_mask_sensitive_data_short_value(self, tmp_path):
+        """짧은 민감 값 마스킹 (라인 333-334)"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'api': {
+                'api_key': 'ab'  # 4자 이하
+            }
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        result = loader.to_dict()
+
+        # 짧은 값은 ***로 마스킹
+        assert result['api']['api_key'] == '***'
+
+    def test_mask_sensitive_data_nested_list(self, tmp_path):
+        """중첩된 리스트 마스킹"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'configs': [
+                [{'password': 'nested_secret_123'}],
+                {'token': 'token_value_456'}
+            ]
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        result = loader.to_dict()
+
+        # 중첩 구조도 마스킹
+        assert '*' in result['configs'][0][0]['password']
+        assert '*' in result['configs'][1]['token']
+
+
+class TestConfigLoaderValidation:
+    """설정 검증 추가 테스트"""
+
+    def test_validate_with_custom_keys(self, tmp_path):
+        """커스텀 필수 키로 검증"""
+        config_data = {
+            'logging': {'level': 'INFO'},
+            'custom': {'required_key': 'present'}
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+
+        # 커스텀 키 검증 - 존재하는 키
+        result = loader.validate_required_config(['custom.required_key'])
+        assert result is True
+
+        # 커스텀 키 검증 - 없는 키
+        result = loader.validate_required_config(['nonexistent.key'])
+        assert result is False
+
+    def test_validate_with_empty_value(self, tmp_path):
+        """빈 값 검증"""
+        config_data = {
+            'logging': {'level': ''}
+        }
+
+        config_path = tmp_path / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        loader = ConfigLoader(str(config_path))
+        result = loader.validate_required_config(['logging.level'])
+
+        assert result is False

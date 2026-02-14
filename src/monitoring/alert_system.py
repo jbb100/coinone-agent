@@ -523,7 +523,7 @@ class AlertSystem:
             
         except Exception as e:
             logger.error(f"일일 요약 알림 발송 실패: {e}")
-            return {}
+            return None
     
     def send_performance_alert(self, performance_data: Dict) -> Dict[str, bool]:
         """
@@ -569,7 +569,7 @@ class AlertSystem:
             
         except Exception as e:
             logger.error(f"성과 알림 발송 실패: {e}")
-            return {}
+            return None
     
     def send_weekly_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
         """주간 분석 보고서 전송 (하위 호환성 유지)"""
@@ -712,7 +712,7 @@ class AlertSystem:
             
         except Exception as e:
             logger.error(f"주간 분석 보고서 발송 실패: {e}")
-            return {}
+            return None
     
     def send_multi_timeframe_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
         """
@@ -776,7 +776,7 @@ class AlertSystem:
             
         except Exception as e:
             logger.error(f"멀티 타임프레임 분석 보고서 발송 실패: {e}")
-            return {}
+            return None
     
     def send_macro_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
         """
@@ -831,7 +831,7 @@ class AlertSystem:
             
         except Exception as e:
             logger.error(f"매크로 경제 분석 보고서 발송 실패: {e}")
-            return {}
+            return None
 
 
 # 설정 상수

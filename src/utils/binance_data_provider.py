@@ -227,7 +227,7 @@ class BinanceDataProvider:
             
         except Exception as e:
             logger.error(f"멀티 타임프레임 데이터 수집 실패: {e}")
-            return {}
+            return None
     
     def convert_usdt_to_krw(
         self,

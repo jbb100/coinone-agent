@@ -419,7 +419,7 @@ class MultiPortfolioManager(BaseService):
             
         except Exception as e:
             logger.error(f"❌ 통합 성과 분석 실패: {e}")
-            return {}
+            return None
     
     async def start(self):
         """서비스 시작"""

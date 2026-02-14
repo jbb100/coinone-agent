@@ -440,7 +440,7 @@ class PerformanceTracker:
         """
         total_value = portfolio_snapshot.get("total_value_krw", 0)
         if total_value <= 0:
-            return {}
+            return None
         
         allocation = {}
         

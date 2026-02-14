@@ -907,7 +907,7 @@ class BacktestingEngine:
             
         except Exception as e:
             logger.error(f"벤치마크 계산 실패: {e}")
-            return {}
+            return None
     
     def get_benchmark_comparison(self) -> Dict[str, Any]:
         """전략과 벤치마크 비교 데이터 반환"""

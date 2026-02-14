@@ -279,7 +279,7 @@ class SmartExecutionEngine:
             combined_signal = self._calculate_combined_signal(params)
             
             # 2. 시장 상황별 전략 조정
-            if params.market_condition in [MarketCondition.VERY_VOLATILE, MarketCondition.BEARISH]:
+            if params.market_condition in [MarketCondition.VERY_BEARISH, MarketCondition.BEARISH]:
                 # 변동성 높거나 약세장: 보수적 접근
                 if params.strategy == ExecutionStrategy.MARKET:
                     params.strategy = ExecutionStrategy.LIMIT_CONSERVATIVE

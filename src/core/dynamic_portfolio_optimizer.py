@@ -185,7 +185,7 @@ class DynamicPortfolioOptimizer:
             
         except Exception as e:
             logger.error(f"자산 분석 실패: {e}")
-            return {}
+            return None
     
     def _analyze_single_asset(self, symbol: str) -> Optional[AssetMetrics]:
         """단일 자산 분석"""

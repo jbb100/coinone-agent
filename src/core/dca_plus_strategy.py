@@ -345,7 +345,7 @@ class DCAPlus:
             
         except Exception as e:
             logger.error(f"DCA+ 매수 금액 계산 실패: {e}")
-            return {}
+            return None
     
     def _analyze_market_conditions(self, market_data: Dict[str, pd.DataFrame], date: datetime) -> Dict[str, Any]:
         """시장 상황 종합 분석"""
@@ -685,7 +685,7 @@ class DCAPlus:
         """DCA 성과 지표 계산"""
         
         if not dca_history:
-            return {}
+            return None
         
         try:
             # 자산별 통계
@@ -738,7 +738,7 @@ class DCAPlus:
             
         except Exception as e:
             logger.error(f"DCA 성과 지표 계산 실패: {e}")
-            return {}
+            return None
     
     def _save_dca_signal_to_db(self, signal: DCASignal, asset: str):
         """DCA 신호를 DB에 저장"""

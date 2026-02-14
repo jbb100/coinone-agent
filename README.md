@@ -337,9 +337,8 @@ python kairos1_main.py --test-alerts
 
 ### 개별 스크립트 실행
 ```bash
-# 종합 시장 분석 (구 주간 시장 분석)
-# 기본: 일별 분석 (analysis_interval="daily")
-python scripts/weekly_check.py
+# 종합 시장 분석 (Binance API 사용)
+python kairos1_main.py --weekly-analysis
 
 # 시간별 분석용 스크립트 (예시)
 # scripts/market_analysis_hourly.py 생성 후 사용

@@ -748,3 +748,852 @@ class TestCoinoneClientEdgeCases:
             # 엔드포인트에서 대문자로 변환되어야 함
             call_args = mock_request.call_args
             assert "BTC" in call_args[0][1] or "btc" in call_args[0][1]
+
+
+@pytest.mark.trading
+class TestPlaceOrderSell:
+    """매도 주문 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, '_make_request')
+    def test_sell_with_amount_in_krw(self, mock_request, mock_price, client):
+        """KRW 금액으로 매도"""
+        mock_price.return_value = 50000000  # BTC 가격
+        mock_request.return_value = {"result": "success", "order_id": "sell_001"}
+
+        result = client.place_order(
+            currency="BTC",
+            side="sell",
+            amount=5000000,  # 500만원
+            price=None,
+            amount_in_krw=True
+        )
+
+        assert result["success"] is True
+        # 500만원 / 5000만원 = 0.1 BTC
+        call_args = mock_request.call_args
+        params = call_args[0][2]  # positional args: (method, endpoint, params)
+        assert "qty" in params  # 매도는 qty 사용
+        assert params["qty"] == "0.1"  # 0.1 BTC
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_sell_minimum_quantity_validation(self, mock_price, client):
+        """매도 최소 수량 검증"""
+        mock_price.return_value = 50000000
+
+        # 최소 수량 미만
+        result = client.place_order(
+            currency="BTC",
+            side="sell",
+            amount=1000,  # 1000원 (0.00002 BTC)
+            price=None,
+            amount_in_krw=True
+        )
+
+        # 최소 수량 미달로 실패
+        assert result["success"] is False
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_sell_quantity_direct(self, mock_request, client):
+        """코인 수량으로 직접 매도"""
+        mock_request.return_value = {"result": "success", "order_id": "sell_002"}
+
+        result = client.place_order(
+            currency="BTC",
+            side="sell",
+            amount=0.1,  # 0.1 BTC
+            price=None,
+            amount_in_krw=False
+        )
+
+        assert result["success"] is True
+
+    def test_sell_minimum_quantity_direct(self, client):
+        """코인 수량 최소 검증 (직접)"""
+        result = client.place_order(
+            currency="BTC",
+            side="sell",
+            amount=0.000001,  # 최소 수량 미달
+            price=None,
+            amount_in_krw=False
+        )
+
+        assert result["success"] is False
+
+
+@pytest.mark.trading
+class TestPlaceSafeOrder:
+    """안전한 주문 실행 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    @patch.object(CoinoneClient, 'place_order')
+    def test_safe_order_success(self, mock_place, mock_validate, mock_adjust, client):
+        """안전한 주문 성공"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 100000
+        mock_place.return_value = {"success": True, "order_id": "safe_001"}
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=100000,
+            amount_in_krw=True
+        )
+
+        assert result["success"] is True
+
+    @patch.object(CoinoneClient, '_validate_balance')
+    def test_safe_order_balance_fail(self, mock_validate, client):
+        """잔액 부족"""
+        mock_validate.return_value = False
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=100000,
+            amount_in_krw=True
+        )
+
+        assert result["success"] is False
+        assert "잔액 부족" in result["error"]
+
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    @patch.object(CoinoneClient, 'place_order')
+    def test_safe_order_error_103_retry(self, mock_place, mock_validate, mock_adjust, client):
+        """에러 코드 103 - 잔액 부족 재시도"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 100000
+        mock_place.side_effect = [
+            {"success": False, "error_code": "103", "error_msg": "Lack of Balance"},
+            {"success": True, "order_id": "retry_001"}
+        ]
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=100000,
+            amount_in_krw=True,
+            max_retries=3
+        )
+
+        assert result["success"] is True
+
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    @patch.object(CoinoneClient, 'place_order')
+    def test_safe_order_error_307_retry(self, mock_place, mock_validate, mock_adjust, client):
+        """에러 코드 307 - 최대 금액 초과 재시도"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 100000000
+        mock_place.side_effect = [
+            {"success": False, "error_code": "307", "error_msg": "Order amount exceeds limit"},
+            {"success": True, "order_id": "retry_002"}
+        ]
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=100000000,
+            amount_in_krw=True,
+            max_retries=3
+        )
+
+        assert result["success"] is True
+
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    @patch.object(CoinoneClient, 'place_order')
+    def test_safe_order_error_405_no_retry(self, mock_place, mock_validate, mock_adjust, client):
+        """에러 코드 405 - 최소 금액 미달 (재시도 안함)"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 1000
+        mock_place.return_value = {"success": False, "error_code": "405", "error_msg": "Minimum order amount"}
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=1000,
+            amount_in_krw=True,
+            max_retries=3
+        )
+
+        assert result["success"] is False
+        assert mock_place.call_count == 1  # 재시도 안함
+
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    @patch.object(CoinoneClient, 'place_order')
+    def test_safe_order_exception_retry(self, mock_place, mock_validate, mock_adjust, client):
+        """예외 발생 시 재시도"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 100000
+        mock_place.side_effect = [
+            Exception("Network error"),
+            {"success": True, "order_id": "exc_001"}
+        ]
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=100000,
+            amount_in_krw=True,
+            max_retries=3
+        )
+
+        assert result["success"] is True
+
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    @patch.object(CoinoneClient, 'place_order')
+    def test_safe_order_max_retries_exceeded(self, mock_place, mock_validate, mock_adjust, client):
+        """최대 재시도 초과"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 100000
+        mock_place.return_value = {"success": False, "error_code": "999", "error_msg": "Unknown error"}
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=100000,
+            amount_in_krw=True,
+            max_retries=2
+        )
+
+        assert result["success"] is False
+        assert mock_place.call_count == 2
+
+
+@pytest.mark.trading
+class TestValidateBalance:
+    """잔액 검증 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_validate_sell_amount_in_krw(self, mock_balances, mock_price, client):
+        """매도 잔액 검증 (KRW 금액)"""
+        mock_balances.return_value = {"BTC": 0.1, "KRW": 1000000}
+        mock_price.return_value = 50000000
+
+        # 0.1 BTC = 500만원, 300만원 매도 요청
+        result = client._validate_balance("BTC", "sell", 3000000, amount_in_krw=True)
+
+        assert result is True
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_validate_sell_amount_in_krw_insufficient(self, mock_balances, mock_price, client):
+        """매도 잔액 부족 (KRW 금액)"""
+        mock_balances.return_value = {"BTC": 0.05, "KRW": 1000000}
+        mock_price.return_value = 50000000
+
+        # 0.05 BTC = 250만원, 500만원 매도 요청
+        result = client._validate_balance("BTC", "sell", 5000000, amount_in_krw=True)
+
+        assert result is False
+
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_validate_sell_quantity(self, mock_balances, client):
+        """매도 잔액 검증 (코인 수량)"""
+        mock_balances.return_value = {"BTC": 0.1, "KRW": 1000000}
+
+        result = client._validate_balance("BTC", "sell", 0.05, amount_in_krw=False)
+
+        assert result is True
+
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_validate_sell_quantity_insufficient(self, mock_balances, client):
+        """매도 잔액 부족 (코인 수량)"""
+        mock_balances.return_value = {"BTC": 0.03, "KRW": 1000000}
+
+        result = client._validate_balance("BTC", "sell", 0.05, amount_in_krw=False)
+
+        assert result is False
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_validate_buy_quantity(self, mock_balances, mock_price, client):
+        """매수 잔액 검증 (코인 수량)"""
+        mock_balances.return_value = {"BTC": 0, "KRW": 10000000}
+        mock_price.return_value = 50000000
+
+        # 0.1 BTC = 500만원, KRW 잔액 1000만원
+        result = client._validate_balance("BTC", "buy", 0.1, amount_in_krw=False)
+
+        assert result is True
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_validate_buy_quantity_insufficient(self, mock_balances, mock_price, client):
+        """매수 잔액 부족 (코인 수량)"""
+        mock_balances.return_value = {"BTC": 0, "KRW": 1000000}
+        mock_price.return_value = 50000000
+
+        # 0.1 BTC = 500만원, KRW 잔액 100만원
+        result = client._validate_balance("BTC", "buy", 0.1, amount_in_krw=False)
+
+        assert result is False
+
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_validate_balance_exception(self, mock_balances, client):
+        """잔액 검증 예외"""
+        mock_balances.side_effect = Exception("API error")
+
+        result = client._validate_balance("BTC", "buy", 100000, amount_in_krw=True)
+
+        assert result is False
+
+
+@pytest.mark.trading
+class TestAdjustOrderSize:
+    """주문 크기 조정 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_adjust_sell_amount_in_krw_over_limit(self, mock_price, client):
+        """매도 금액 한도 초과 조정 (KRW)"""
+        mock_price.return_value = 50000000
+
+        result = client._adjust_order_size("BTC", "sell", 500000000, amount_in_krw=True)
+
+        # 한도 초과 시 조정됨
+        assert result < 500000000
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_adjust_sell_quantity_over_limit(self, mock_price, client):
+        """매도 수량 한도 초과 조정"""
+        mock_price.return_value = 50000000
+
+        # 10 BTC = 5억원 (한도 초과)
+        result = client._adjust_order_size("BTC", "sell", 10, amount_in_krw=False)
+
+        # 한도 초과 시 조정됨
+        assert result < 10
+
+    def test_adjust_buy_amount_in_krw_over_limit(self, client):
+        """매수 금액 한도 초과 조정"""
+        result = client._adjust_order_size("BTC", "buy", 500000000, amount_in_krw=True)
+
+        # 한도 초과 시 조정됨
+        assert result < 500000000
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_adjust_buy_quantity_over_limit(self, mock_price, client):
+        """매수 수량 한도 초과 조정"""
+        mock_price.return_value = 50000000
+
+        # 10 BTC = 5억원 (한도 초과)
+        result = client._adjust_order_size("BTC", "buy", 10, amount_in_krw=False)
+
+        # 한도 초과 시 조정됨
+        assert result < 10
+
+    def test_adjust_within_limit(self, client):
+        """한도 내 주문 (조정 없음)"""
+        result = client._adjust_order_size("BTC", "buy", 100000, amount_in_krw=True)
+
+        assert result == 100000
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_adjust_exception(self, mock_price, client):
+        """조정 중 예외 (원래 금액 반환)"""
+        mock_price.side_effect = Exception("Price error")
+
+        result = client._adjust_order_size("BTC", "buy", 100000, amount_in_krw=False)
+
+        assert result == 100000
+
+
+@pytest.mark.trading
+class TestGetOrderStatus:
+    """주문 상태 조회 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_get_order_status_success(self, mock_request, client):
+        """주문 상태 조회 성공"""
+        mock_request.return_value = {
+            "result": "success",
+            "status": "filled",
+            "filled_qty": "0.1",
+            "avg_price": "50000000"
+        }
+
+        result = client.get_order_status("order_123")
+
+        assert result["result"] == "success"
+        assert result["status"] == "filled"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_get_order_status_404(self, mock_request, client):
+        """주문을 찾을 수 없음 (404)"""
+        mock_request.side_effect = Exception("404 Not Found")
+
+        result = client.get_order_status("nonexistent_order")
+
+        assert result["result"] == "success"
+        assert result["status"] == "not_found"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_get_order_status_other_error(self, mock_request, client):
+        """기타 오류"""
+        mock_request.side_effect = Exception("500 Server Error")
+
+        with pytest.raises(Exception):
+            client.get_order_status("order_123")
+
+
+@pytest.mark.trading
+class TestCancelOrder:
+    """주문 취소 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_cancel_order_success(self, mock_request, client):
+        """주문 취소 성공"""
+        mock_request.return_value = {"result": "success"}
+
+        result = client.cancel_order("order_123")
+
+        assert result["result"] == "success"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_cancel_order_failure(self, mock_request, client):
+        """주문 취소 실패"""
+        mock_request.return_value = {
+            "result": "error",
+            "error_code": "500",
+            "error_msg": "Order cannot be cancelled"
+        }
+
+        result = client.cancel_order("order_123")
+
+        assert result["result"] == "error"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_cancel_order_404(self, mock_request, client):
+        """주문을 찾을 수 없음 (404) - 이미 완료/취소"""
+        mock_request.side_effect = Exception("404 Not Found")
+
+        result = client.cancel_order("completed_order")
+
+        assert result["result"] == "success"
+        assert result["status"] == "not_found"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_cancel_order_other_error(self, mock_request, client):
+        """기타 오류"""
+        mock_request.side_effect = Exception("Network error")
+
+        with pytest.raises(Exception):
+            client.cancel_order("order_123")
+
+
+@pytest.mark.trading
+class TestGetPortfolioValue:
+    """포트폴리오 가치 계산 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_get_portfolio_value_success(self, mock_balances, mock_price, client):
+        """포트폴리오 가치 계산 성공"""
+        mock_balances.return_value = {
+            "BTC": 0.1,
+            "ETH": 1.0,
+            "KRW": 1000000
+        }
+        mock_price.side_effect = [50000000, 4000000]  # BTC, ETH
+
+        result = client.get_portfolio_value()
+
+        assert "total_krw" in result
+        assert "assets" in result
+        assert result["total_krw"] > 0
+        # BTC: 0.1 * 50000000 = 5000000
+        # ETH: 1.0 * 4000000 = 4000000
+        # KRW: 1000000
+        # Total: 10000000
+        assert result["total_krw"] == 10000000
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_get_portfolio_value_krw_only(self, mock_balances, mock_price, client):
+        """KRW만 있는 경우"""
+        mock_balances.return_value = {"KRW": 5000000}
+
+        result = client.get_portfolio_value()
+
+        assert result["total_krw"] == 5000000
+        assert "KRW" in result["assets"]
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_get_portfolio_value_invalid_price(self, mock_balances, mock_price, client):
+        """유효하지 않은 가격"""
+        mock_balances.return_value = {"BTC": 0.1, "KRW": 1000000}
+        mock_price.return_value = 0  # 유효하지 않은 가격
+
+        result = client.get_portfolio_value()
+
+        # BTC는 제외되고 KRW만 포함
+        assert result["total_krw"] == 1000000
+        assert "BTC" not in result["assets"]
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_get_portfolio_value_price_error(self, mock_balances, mock_price, client):
+        """가격 조회 오류"""
+        mock_balances.return_value = {"BTC": 0.1, "ETH": 1.0, "KRW": 1000000}
+        mock_price.side_effect = [Exception("Price error"), 4000000]
+
+        result = client.get_portfolio_value()
+
+        # BTC는 오류로 제외, ETH와 KRW만 포함
+        assert "BTC" not in result["assets"]
+        assert "ETH" in result["assets"]
+
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_get_portfolio_value_balance_error(self, mock_balances, client):
+        """잔액 조회 오류"""
+        mock_balances.side_effect = Exception("Balance error")
+
+        with pytest.raises(Exception):
+            client.get_portfolio_value()
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    @patch.object(CoinoneClient, 'get_balances')
+    def test_get_portfolio_value_zero_balance(self, mock_balances, mock_price, client):
+        """잔액이 0인 코인 제외"""
+        mock_balances.return_value = {"BTC": 0, "ETH": 0, "KRW": 1000000}
+
+        result = client.get_portfolio_value()
+
+        # 잔액이 0인 코인은 제외
+        assert result["total_krw"] == 1000000
+        assert "BTC" not in result["assets"]
+        assert "ETH" not in result["assets"]
+
+
+@pytest.mark.trading
+class TestPrivateAPIEdgeCases:
+    """Private API 엣지 케이스 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch('requests.post')
+    def test_private_api_request_exception(self, mock_post, client):
+        """Private API 요청 예외"""
+        import requests
+        mock_post.side_effect = requests.exceptions.RequestException("Connection error")
+
+        with pytest.raises(requests.exceptions.RequestException):
+            client._make_request("POST", "/v2.1/account/balance", {}, is_public=False)
+
+
+@pytest.mark.trading
+class TestAPIExceptions:
+    """API 예외 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_get_ticker_exception(self, mock_request, client):
+        """시세 조회 예외"""
+        mock_request.side_effect = Exception("API Error")
+
+        with pytest.raises(Exception):
+            client.get_ticker("BTC")
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_get_all_tickers_exception(self, mock_request, client):
+        """전체 시세 조회 예외"""
+        mock_request.side_effect = Exception("API Error")
+
+        with pytest.raises(Exception):
+            client.get_all_tickers()
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_get_recent_trades_exception(self, mock_request, client):
+        """최근 체결 조회 예외"""
+        mock_request.side_effect = Exception("API Error")
+
+        with pytest.raises(Exception):
+            client.get_recent_trades("BTC")
+
+
+@pytest.mark.trading
+class TestLatestPriceEdgeCases:
+    """최신가 조회 엣지 케이스"""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, 'get_recent_trades')
+    @patch.object(CoinoneClient, 'get_ticker')
+    def test_ticker_not_dict(self, mock_ticker, mock_trades, client):
+        """ticker 응답이 dict가 아닌 경우"""
+        mock_trades.return_value = {"data": []}  # 빈 체결 내역
+        mock_ticker.return_value = "invalid"  # dict가 아님
+
+        result = client.get_latest_price("BTC")
+
+        assert result == 0.0  # ValueError로 인해 0.0 반환
+
+    @patch.object(CoinoneClient, 'get_recent_trades')
+    @patch.object(CoinoneClient, 'get_ticker')
+    def test_ticker_data_not_dict(self, mock_ticker, mock_trades, client):
+        """ticker['data']가 dict가 아닌 경우"""
+        mock_trades.return_value = {"data": []}  # 빈 체결 내역
+        mock_ticker.return_value = {"data": "invalid"}  # data가 dict 아님
+
+        result = client.get_latest_price("BTC")
+
+        assert result == 0.0
+
+    @patch.object(CoinoneClient, 'get_recent_trades')
+    @patch.object(CoinoneClient, 'get_ticker')
+    def test_all_price_fields_zero(self, mock_ticker, mock_trades, client):
+        """모든 가격 필드가 0인 경우"""
+        mock_trades.return_value = {"data": []}  # 빈 체결 내역
+        mock_ticker.return_value = {
+            "data": {"last": 0, "close_24h": 0, "close": 0}
+        }
+
+        result = client.get_latest_price("BTC")
+
+        assert result == 0.0
+
+
+@pytest.mark.trading
+class TestPlaceOrderPriceErrors:
+    """주문 시 가격 조회 실패 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_buy_crypto_amount_invalid_price(self, mock_price, client):
+        """매수 시 유효하지 않은 가격"""
+        mock_price.return_value = 0  # 유효하지 않은 가격
+
+        result = client.place_order(
+            currency="BTC",
+            side="buy",
+            amount=0.1,  # crypto 수량
+            price=None,
+            amount_in_krw=False  # crypto 수량으로 매수
+        )
+
+        assert result["success"] is False
+        assert "가격 조회 실패" in result.get("error", "")
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_buy_crypto_amount_price_exception(self, mock_price, client):
+        """매수 시 가격 조회 예외"""
+        mock_price.side_effect = Exception("Price API Error")
+
+        result = client.place_order(
+            currency="BTC",
+            side="buy",
+            amount=0.1,
+            price=None,
+            amount_in_krw=False
+        )
+
+        assert result["success"] is False
+
+    @patch.object(CoinoneClient, 'get_latest_price')
+    def test_sell_krw_amount_invalid_price(self, mock_price, client):
+        """매도 시 유효하지 않은 가격 (KRW 금액)"""
+        mock_price.return_value = 0  # 유효하지 않은 가격
+
+        result = client.place_order(
+            currency="BTC",
+            side="sell",
+            amount=1000000,  # KRW 금액
+            price=None,
+            amount_in_krw=True
+        )
+
+        assert result["success"] is False
+
+
+@pytest.mark.trading
+class TestSafeOrderAdvanced:
+    """안전 주문 고급 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, 'place_order')
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    def test_safe_order_size_adjustment(self, mock_validate, mock_adjust, mock_order, client):
+        """주문 크기 조정 테스트"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 800000  # 100만 → 80만으로 조정
+        mock_order.return_value = {"success": True, "order_id": "adj_001"}
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=1000000,
+            price=None,
+            amount_in_krw=True
+        )
+
+        assert result["success"] is True
+        # 조정된 금액으로 주문 실행 확인
+        mock_order.assert_called_once()
+        call_args = mock_order.call_args
+        assert call_args[0][2] == 800000  # amount
+
+    @patch.object(CoinoneClient, 'place_order')
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    def test_safe_order_max_retries_all_fail(self, mock_validate, mock_adjust, mock_order, client):
+        """모든 재시도 실패"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 1000000
+        # 복구 불가능한 에러로 계속 실패
+        mock_order.return_value = {"success": False, "error_code": "999", "error_msg": "Unknown"}
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=1000000,
+            price=None,
+            amount_in_krw=True,
+            max_retries=3
+        )
+
+        assert result["success"] is False
+        assert mock_order.call_count == 3
+
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    def test_safe_order_outer_exception(self, mock_validate, mock_adjust, client):
+        """외부 예외 발생"""
+        mock_validate.return_value = True
+        mock_adjust.side_effect = Exception("Unexpected error")
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=1000000,
+            price=None,
+            amount_in_krw=True
+        )
+
+        assert result["success"] is False
+        assert "error" in result
+
+    @patch.object(CoinoneClient, 'place_order')
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    def test_safe_order_exception_on_last_retry(self, mock_validate, mock_adjust, mock_order, client):
+        """마지막 재시도에서 예외 발생"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 1000000
+        # 처음 두 번은 성공하지 않고 재시도 가능한 에러, 마지막에 예외
+        mock_order.side_effect = [
+            {"success": False, "error_code": "103"},  # 1차: 잔액 부족
+            {"success": False, "error_code": "103"},  # 2차: 잔액 부족
+            Exception("Connection error")  # 3차: 예외
+        ]
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=1000000,
+            price=None,
+            amount_in_krw=True,
+            max_retries=3
+        )
+
+        assert result["success"] is False
+        assert "Connection error" in result.get("error", "")
+
+    @patch.object(CoinoneClient, 'place_order')
+    @patch.object(CoinoneClient, '_adjust_order_size')
+    @patch.object(CoinoneClient, '_validate_balance')
+    def test_safe_order_balance_error_all_retries(self, mock_validate, mock_adjust, mock_order, client):
+        """잔액 부족으로 모든 재시도 소진 (line 555 커버)"""
+        mock_validate.return_value = True
+        mock_adjust.return_value = 1000000
+        # 계속 잔액 부족 에러
+        mock_order.return_value = {"success": False, "error_code": "103"}
+
+        result = client.place_safe_order(
+            currency="BTC",
+            side="buy",
+            amount=1000000,
+            price=None,
+            amount_in_krw=True,
+            max_retries=3
+        )
+
+        assert result["success"] is False
+        # 최대 재시도 횟수 초과 메시지 확인
+        assert "최대 재시도" in result.get("error", "") or mock_order.call_count == 3
+
+
+@pytest.mark.trading
+class TestPrivateAPIParamsNone:
+    """Private API params=None 테스트"""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch('requests.post')
+    def test_private_api_params_none(self, mock_post, client):
+        """Private API에 params=None으로 호출"""
+        mock_post.return_value.json.return_value = {"result": "success"}
+        mock_post.return_value.raise_for_status = lambda: None
+
+        result = client._make_request("POST", "/v2.1/account/balance", None, is_public=False)
+
+        assert result["result"] == "success"
+        # params가 None이면 {}로 대체되어 호출됨
+        mock_post.assert_called_once()

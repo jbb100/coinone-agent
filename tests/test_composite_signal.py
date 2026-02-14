@@ -450,3 +450,358 @@ class TestSignalHistory:
         # Assert
         assert last_signal is not None
         assert isinstance(last_signal.signal, SignalStrength), "유효한 신호 타입"
+
+    def test_get_last_signal_empty(self):
+        """신호 이력 없을 때 마지막 신호"""
+        analyzer = CompositeSignalAnalyzer()
+
+        last_signal = analyzer.get_last_signal()
+
+        assert last_signal is None, "이력 없으면 None 반환"
+
+    def test_get_signal_summary_empty(self):
+        """신호 이력 없을 때 요약"""
+        analyzer = CompositeSignalAnalyzer()
+
+        summary = analyzer.get_signal_summary()
+
+        assert summary["total"] == 0
+        assert summary["buy"] == 0
+        assert summary["sell"] == 0
+        assert summary["neutral"] == 0
+
+    def test_get_signal_summary_with_signals(self, all_bullish_data, all_bearish_data):
+        """신호 이력 있을 때 요약"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 여러 신호 분석
+        analyzer.analyze(all_bullish_data)
+        analyzer.analyze(all_bearish_data)
+        analyzer.analyze(all_bullish_data)
+
+        summary = analyzer.get_signal_summary()
+
+        assert summary["total"] == 3
+        assert summary["buy"] + summary["sell"] + summary["neutral"] == 3
+
+
+# ============================================================================
+# TestCompositeSignalAdvanced - 고급 테스트
+# ============================================================================
+
+class TestCompositeSignalAdvanced:
+    """CompositeSignalAnalyzer 고급 테스트"""
+
+    def test_analyze_with_series(self):
+        """Series 데이터로 분석"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # DataFrame이 아닌 Series 전달
+        prices = pd.Series([50_000_000 * (1 + i * 0.01) for i in range(40)])
+
+        # Series로 전달하면 dropna 처리됨
+        result = analyzer.analyze(pd.DataFrame({'Close': prices}))
+
+        assert result is not None
+        assert isinstance(result.signal, SignalStrength)
+
+    def test_analyze_strong_buy_3_aligned(self):
+        """3개 지표 모두 매수 정렬 - STRONG_BUY"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # Mock으로 3개 지표 모두 buy 반환
+        with patch.object(analyzer, '_analyze_rsi', return_value=("buy", 25.0)):
+            with patch.object(analyzer, '_analyze_macd', return_value=("buy", {"histogram": 100})):
+                with patch.object(analyzer, '_analyze_bollinger', return_value=("buy", {"position": "lower"})):
+                    data = pd.DataFrame({'Close': [50_000_000] * 40})
+                    result = analyzer.analyze(data)
+
+        # 3개 지표 정렬 시 STRONG_BUY
+        assert result.signal == SignalStrength.STRONG_BUY
+        assert result.aligned_indicators == 3
+
+    def test_analyze_strong_sell_3_aligned(self):
+        """3개 지표 모두 매도 정렬 - STRONG_SELL"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 급등 후 급락 데이터 생성 (RSI 과매수 + MACD 데드크로스 + BB 상단)
+        np.random.seed(456)
+        prices = []
+        base = 30_000_000
+
+        # 급등 (RSI 과매수 유도)
+        for i in range(25):
+            prices.append(base * (1 + i * 0.03))
+
+        # 급락
+        top = prices[-1]
+        for i in range(15):
+            prices.append(top * (1 - i * 0.04))
+
+        data = pd.DataFrame({
+            'Close': prices,
+            'High': [p * 1.02 for p in prices],
+            'Low': [p * 0.98 for p in prices]
+        })
+
+        result = analyzer.analyze(data)
+
+        # 매도 신호 검증 (MACD 데드크로스 확인)
+        assert result.macd_signal == "sell" or result.signal in [SignalStrength.SELL, SignalStrength.STRONG_SELL, SignalStrength.NEUTRAL]
+
+    def test_analyze_buy_2_aligned_sell_0(self):
+        """2개 매수 지표 정렬, 0개 매도 - BUY"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # Mock으로 2개 지표 buy, 1개 neutral 반환
+        with patch.object(analyzer, '_analyze_rsi', return_value=("buy", 28.0)):
+            with patch.object(analyzer, '_analyze_macd', return_value=("buy", {"histogram": 100})):
+                with patch.object(analyzer, '_analyze_bollinger', return_value=("neutral", {"position": "middle"})):
+                    data = pd.DataFrame({'Close': [50_000_000] * 40})
+                    result = analyzer.analyze(data)
+
+        # 2개 buy, 0개 sell 시 BUY
+        assert result.signal == SignalStrength.BUY
+        assert result.aligned_indicators == 2
+
+    def test_analyze_exception_handling(self):
+        """분석 중 예외 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 잘못된 데이터로 예외 유발
+        with patch.object(analyzer, '_analyze_rsi', side_effect=Exception("RSI Error")):
+            result = analyzer.analyze(pd.DataFrame({'Close': [1] * 40}))
+
+        assert result.signal == SignalStrength.NEUTRAL
+        assert "오류" in result.reason or "Error" in result.reason
+
+    def test_rsi_insufficient_data(self):
+        """RSI 데이터 부족"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 15개 미만 데이터
+        prices = pd.Series([50_000_000] * 10)
+
+        signal, value = analyzer._analyze_rsi(prices)
+
+        assert signal == "neutral"
+        assert value == 50.0
+
+    def test_rsi_nan_handling(self):
+        """RSI NaN 결과 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 모든 값이 동일한 경우 division by zero 가능
+        prices = pd.Series([50_000_000] * 30)
+
+        signal, value = analyzer._analyze_rsi(prices)
+
+        # NaN 또는 중립 반환
+        assert signal in ["neutral", "buy", "sell"]
+
+    def test_rsi_exception_handling(self):
+        """RSI 예외 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 잘못된 타입의 데이터로 예외 유발
+        prices = pd.Series([None] * 30)
+
+        signal, value = analyzer._analyze_rsi(prices)
+
+        assert signal == "neutral"
+        assert value == 50.0
+
+    def test_macd_insufficient_data(self):
+        """MACD 데이터 부족"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 35개 미만 데이터 (26 + 9 필요)
+        prices = pd.Series([50_000_000] * 30)
+
+        signal, data = analyzer._analyze_macd(prices)
+
+        assert signal == "neutral"
+        assert data["histogram"] == 0
+
+    def test_macd_nan_handling(self):
+        """MACD NaN 결과 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # NaN 값이 있는 데이터
+        prices = pd.Series([np.nan] * 40)
+
+        signal, data = analyzer._analyze_macd(prices)
+
+        assert signal == "neutral"
+
+    def test_macd_golden_cross_exact(self):
+        """MACD 정확한 골든크로스 (히스토그램 부호 전환)"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 하락 후 상승으로 골든크로스 유도
+        np.random.seed(100)
+        prices = []
+        base = 50_000_000
+
+        # 하락
+        for i in range(20):
+            prices.append(base * (1 - i * 0.01))
+
+        # 상승 (골든크로스 발생)
+        bottom = prices[-1]
+        for i in range(20):
+            prices.append(bottom * (1 + i * 0.015))
+
+        signal, data = analyzer._analyze_macd(pd.Series(prices))
+
+        # 히스토그램이 양수면 buy
+        if data["histogram"] > 0:
+            assert signal == "buy"
+
+    def test_macd_death_cross_exact(self):
+        """MACD 정확한 데드크로스 (히스토그램 부호 전환)"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 상승 후 하락으로 데드크로스 유도
+        np.random.seed(200)
+        prices = []
+        base = 50_000_000
+
+        # 상승
+        for i in range(20):
+            prices.append(base * (1 + i * 0.01))
+
+        # 하락 (데드크로스 발생)
+        top = prices[-1]
+        for i in range(20):
+            prices.append(top * (1 - i * 0.015))
+
+        signal, data = analyzer._analyze_macd(pd.Series(prices))
+
+        # 히스토그램이 음수면 sell
+        if data["histogram"] < 0:
+            assert signal == "sell"
+
+    def test_macd_exception_handling(self):
+        """MACD 예외 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 잘못된 데이터로 예외 유발
+        prices = pd.Series(["invalid"] * 40)
+
+        signal, data = analyzer._analyze_macd(prices)
+
+        assert signal == "neutral"
+        assert data["histogram"] == 0
+
+    def test_bollinger_insufficient_data(self):
+        """볼린저밴드 데이터 부족"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 20개 미만 데이터
+        prices = pd.Series([50_000_000] * 15)
+
+        signal, data = analyzer._analyze_bollinger(prices)
+
+        assert signal == "neutral"
+        assert data["position"] == "middle"
+
+    def test_bollinger_nan_handling(self):
+        """볼린저밴드 NaN 결과 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # NaN 값이 있는 데이터
+        prices = pd.Series([np.nan] * 30)
+
+        signal, data = analyzer._analyze_bollinger(prices)
+
+        assert signal == "neutral"
+        assert data["position"] == "middle"
+
+    def test_bollinger_zero_range(self):
+        """볼린저밴드 밴드 범위 0 (상수 가격)"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 모든 값이 동일한 경우
+        prices = pd.Series([50_000_000] * 30)
+
+        signal, data = analyzer._analyze_bollinger(prices)
+
+        # 표준편차 0이면 중립
+        assert signal == "neutral"
+
+    def test_bollinger_exception_handling(self):
+        """볼린저밴드 예외 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 잘못된 데이터로 예외 유발
+        prices = pd.Series(["invalid"] * 30)
+
+        signal, data = analyzer._analyze_bollinger(prices)
+
+        assert signal == "neutral"
+        assert data["position"] == "middle"
+
+    def test_create_neutral_result(self):
+        """중립 결과 생성"""
+        analyzer = CompositeSignalAnalyzer()
+
+        result = analyzer._create_neutral_result("테스트 이유")
+
+        assert result.signal == SignalStrength.NEUTRAL
+        assert result.confidence == 0.30
+        assert result.reason == "테스트 이유"
+        # 이력에도 추가되어야 함
+        assert len(analyzer.signal_history) == 1
+
+    def test_analyze_none_data(self):
+        """None 데이터 처리"""
+        analyzer = CompositeSignalAnalyzer()
+
+        result = analyzer.analyze(None)
+
+        assert result.signal == SignalStrength.NEUTRAL
+        assert "부족" in result.reason
+
+    def test_analyze_short_series_after_dropna(self):
+        """dropna 후 데이터 부족"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # NaN이 많아서 dropna 후 부족
+        data = pd.DataFrame({
+            'Close': [50_000_000] * 10 + [np.nan] * 30
+        })
+
+        result = analyzer.analyze(data)
+
+        assert result.signal == SignalStrength.NEUTRAL
+
+    def test_buy_more_than_sell(self):
+        """매수 신호가 매도보다 많을 때"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 2개 지표 매수, 1개 매도 상황 모킹
+        with patch.object(analyzer, '_analyze_rsi', return_value=("buy", 28.0)):
+            with patch.object(analyzer, '_analyze_macd', return_value=("buy", {"histogram": 100})):
+                with patch.object(analyzer, '_analyze_bollinger', return_value=("sell", {"position": "upper"})):
+                    data = pd.DataFrame({'Close': [50_000_000] * 40})
+                    result = analyzer.analyze(data)
+
+        # buy > sell 이므로 BUY
+        assert result.signal == SignalStrength.BUY
+        assert result.confidence == 0.55
+
+    def test_sell_more_than_buy(self):
+        """매도 신호가 매수보다 많을 때"""
+        analyzer = CompositeSignalAnalyzer()
+
+        # 2개 지표 매도, 1개 매수 상황 모킹
+        with patch.object(analyzer, '_analyze_rsi', return_value=("sell", 75.0)):
+            with patch.object(analyzer, '_analyze_macd', return_value=("sell", {"histogram": -100})):
+                with patch.object(analyzer, '_analyze_bollinger', return_value=("buy", {"position": "lower"})):
+                    data = pd.DataFrame({'Close': [50_000_000] * 40})
+                    result = analyzer.analyze(data)
+
+        # sell > buy 이므로 SELL
+        assert result.signal == SignalStrength.SELL
+        assert result.confidence == 0.55

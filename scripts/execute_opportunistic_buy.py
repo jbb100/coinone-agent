@@ -44,7 +44,7 @@ async def main():
             class SimpleConfig:
                 def get(self, key, default=None):
                     if key == "database.sqlite_path":
-                        return str(project_root / "data" / "kairos.db")
+                        return str(project_root / "data" / "kairos1.db")
                     elif key == "logging.level":
                         return "INFO"
                     return default
