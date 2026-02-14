@@ -436,3 +436,510 @@ class TestRebalancerIntegration:
             # So we adjust the test to match the actual implementation
             assert 'success' in results
             assert results['success'] is True
+
+
+@pytest.mark.rebalancing
+class TestRebalanceResult:
+    """RebalanceResult 클래스 테스트"""
+
+    def test_init_defaults(self):
+        """기본값 초기화 테스트"""
+        from src.core.rebalancer import RebalanceResult
+
+        result = RebalanceResult()
+
+        assert result.success is False
+        assert result.executed_orders == []
+        assert result.failed_orders == []
+        assert result.total_value_before == 0
+        assert result.total_value_after == 0
+        assert result.rebalance_summary == {}
+        assert result.error_message is None
+        assert result.timestamp is not None
+
+    def test_to_dict(self):
+        """딕셔너리 변환 테스트"""
+        from src.core.rebalancer import RebalanceResult
+
+        result = RebalanceResult()
+        result.success = True
+        result.total_value_before = 1000000
+        result.total_value_after = 1050000
+        result.executed_orders = [{'asset': 'BTC', 'status': 'filled'}]
+        result.rebalance_summary = {'market_season': 'risk_on'}
+
+        result_dict = result.to_dict()
+
+        assert result_dict['success'] is True
+        assert result_dict['total_value_before'] == 1000000
+        assert result_dict['total_value_after'] == 1050000
+        assert len(result_dict['executed_orders']) == 1
+        assert 'timestamp' in result_dict
+
+
+@pytest.mark.rebalancing
+class TestLoadConfig:
+    """load_config 함수 테스트"""
+
+    def test_load_config_defaults(self):
+        """기본 설정 로드 테스트"""
+        from src.core.rebalancer import load_config
+
+        config = load_config()
+
+        assert 'strategy' in config
+        assert 'risk_management' in config
+        assert 'execution' in config
+        assert config['strategy']['portfolio']['core']['BTC'] == 40
+        assert config['strategy']['portfolio']['core']['ETH'] == 30
+
+
+@pytest.mark.rebalancing
+class TestRebalancerWeightCalculations:
+    """가중치 계산 관련 추가 테스트"""
+
+    @pytest.fixture
+    def rebalancer(self):
+        """기본 Rebalancer 인스턴스"""
+        mock_pm = Mock()
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_pm)
+
+    def test_calculate_weight_deviation_empty(self, rebalancer):
+        """빈 가중치로 편차 계산"""
+        result = rebalancer.calculate_weight_deviation({}, {})
+        assert result == {}
+
+    def test_calculate_weight_deviation_missing_current(self, rebalancer):
+        """현재 가중치 누락 시"""
+        current = {}
+        target = {'BTC': 0.4, 'ETH': 0.3}
+
+        result = rebalancer.calculate_weight_deviation(current, target)
+
+        assert result['BTC'] == -0.4  # 0 - 0.4
+        assert result['ETH'] == -0.3  # 0 - 0.3
+
+    def test_calculate_weight_deviation_precision(self, rebalancer):
+        """부동소수점 정밀도 처리"""
+        current = {'BTC': 0.333333333}
+        target = {'BTC': 0.333333334}
+
+        result = rebalancer.calculate_weight_deviation(current, target)
+
+        # 매우 작은 차이는 반올림 처리됨
+        assert abs(result['BTC']) < 0.0001
+
+    def test_needs_rebalancing_boundary(self, rebalancer):
+        """임계값 경계 테스트"""
+        # 정확히 임계값 (5%)
+        deviations = {'BTC': 0.05}
+        assert rebalancer.needs_rebalancing(deviations, threshold=0.05) is False
+
+        # 임계값 초과
+        deviations = {'BTC': 0.051}
+        assert rebalancer.needs_rebalancing(deviations, threshold=0.05) is True
+
+    def test_needs_rebalancing_with_target_weights(self, rebalancer):
+        """target_weights 인자 제공 시"""
+        current = {'BTC': 0.5, 'ETH': 0.3}
+        target = {'BTC': 0.4, 'ETH': 0.3}
+
+        result = rebalancer.needs_rebalancing(current, target, threshold=0.05)
+
+        assert result is True  # BTC 10% 편차
+
+
+@pytest.mark.rebalancing
+class TestRebalancerAnalysis:
+    """포트폴리오 분석 추가 테스트"""
+
+    @pytest.fixture
+    def mock_portfolio_manager(self):
+        """Mock PortfolioManager"""
+        manager = Mock()
+        manager.get_portfolio_status = AsyncMock(return_value={
+            'total_value': 5000000,
+            'assets': {
+                'BTC': {'value_krw': 3500000},
+                'ETH': {'value_krw': 1000000},
+                'KRW': {'value_krw': 500000}
+            }
+        })
+        return manager
+
+    @pytest.fixture
+    def rebalancer(self, mock_portfolio_manager):
+        """Rebalancer 인스턴스"""
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_portfolio_manager)
+
+    @pytest.mark.asyncio
+    async def test_analyze_portfolio_concentration_risk_high(self, rebalancer, mock_portfolio_manager):
+        """높은 집중 위험도 테스트"""
+        mock_portfolio_manager.get_portfolio_status.return_value = {
+            'total_value': 1000000,
+            'assets': {
+                'BTC': {'value_krw': 800000},  # 80%
+                'KRW': {'value_krw': 200000}
+            }
+        }
+
+        analysis = await rebalancer.analyze_portfolio()
+
+        assert analysis['concentration_risk'] == 'high'
+        assert analysis['largest_position'] == 0.8
+
+    @pytest.mark.asyncio
+    async def test_analyze_portfolio_concentration_risk_medium(self, rebalancer, mock_portfolio_manager):
+        """중간 집중 위험도 테스트"""
+        mock_portfolio_manager.get_portfolio_status.return_value = {
+            'total_value': 1000000,
+            'assets': {
+                'BTC': {'value_krw': 500000},  # 50%
+                'ETH': {'value_krw': 300000},
+                'KRW': {'value_krw': 200000}
+            }
+        }
+
+        analysis = await rebalancer.analyze_portfolio()
+
+        assert analysis['concentration_risk'] == 'medium'
+
+    @pytest.mark.asyncio
+    async def test_analyze_portfolio_with_provided_data(self, rebalancer):
+        """제공된 포트폴리오 데이터로 분석"""
+        portfolio_data = {
+            'total_value': 2000000,
+            'assets': {
+                'BTC': {'value_krw': 800000},
+                'ETH': {'value_krw': 600000},
+                'KRW': {'value_krw': 600000}
+            }
+        }
+
+        analysis = await rebalancer.analyze_portfolio(portfolio_data)
+
+        assert analysis['total_value'] == 2000000
+        assert analysis['asset_count'] == 3
+
+    @pytest.mark.asyncio
+    async def test_analyze_portfolio_zero_total_value(self, rebalancer, mock_portfolio_manager):
+        """총 가치가 0인 경우"""
+        mock_portfolio_manager.get_portfolio_status.return_value = {
+            'total_value': 0,
+            'assets': {}
+        }
+
+        analysis = await rebalancer.analyze_portfolio()
+
+        assert analysis['total_value'] == 0
+        assert analysis['current_weights'] == {}
+
+
+@pytest.mark.rebalancing
+class TestRebalancerPlanExecution:
+    """리밸런싱 계획 실행 테스트"""
+
+    @pytest.fixture
+    def mock_portfolio_manager(self):
+        """Mock PortfolioManager"""
+        manager = Mock()
+        manager.execute_trade = AsyncMock(return_value={
+            'status': 'filled',
+            'order_id': 'test_123'
+        })
+        return manager
+
+    @pytest.fixture
+    def rebalancer(self, mock_portfolio_manager):
+        """Rebalancer 인스턴스"""
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_portfolio_manager)
+
+    @pytest.mark.asyncio
+    async def test_execute_plan_dry_run(self, rebalancer):
+        """드라이 런 모드 테스트"""
+        plan = {
+            'trades': [
+                {'asset': 'BTC', 'action': 'buy', 'quantity': 0.01, 'amount': 500000},
+                {'asset': 'ETH', 'action': 'sell', 'quantity': 0.1, 'amount': 250000}
+            ]
+        }
+
+        results = await rebalancer.execute_rebalancing_plan(plan, dry_run=True)
+
+        assert len(results) == 2
+        for result in results:
+            assert result.get('dry_run') is True or result.get('status') == 'would_execute'
+
+    @pytest.mark.asyncio
+    async def test_execute_plan_empty_trades(self, rebalancer):
+        """빈 거래 목록 실행"""
+        plan = {'trades': []}
+
+        results = await rebalancer.execute_rebalancing_plan(plan)
+
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_execute_plan_trade_error(self, rebalancer, mock_portfolio_manager):
+        """개별 거래 오류 처리"""
+        mock_portfolio_manager.execute_trade.side_effect = Exception("Order failed")
+
+        plan = {
+            'trades': [
+                {'asset': 'BTC', 'action': 'buy', 'amount': 100000}
+            ]
+        }
+
+        results = await rebalancer.execute_rebalancing_plan(plan, dry_run=False)
+
+        # 오류가 있어도 결과 반환
+        assert len(results) >= 1
+
+
+@pytest.mark.rebalancing
+class TestRebalancerRiskManagement:
+    """리스크 관리 테스트"""
+
+    @pytest.fixture
+    def rebalancer(self):
+        """기본 Rebalancer"""
+        mock_pm = Mock()
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_pm)
+
+    def test_risk_check_low_risk(self, rebalancer):
+        """낮은 리스크 계획"""
+        plan = {
+            'trades': [
+                {'asset': 'BTC', 'amount': 500000},
+                {'asset': 'ETH', 'amount': 300000}
+            ]
+        }
+
+        result = rebalancer.risk_check(plan)
+
+        assert result['overall_risk'] == 'low'
+        assert result['approved'] is True
+        assert result['trade_count'] == 2
+
+    def test_risk_check_medium_risk(self, rebalancer):
+        """중간 리스크 계획 (10개 초과 거래)"""
+        trades = [{'asset': f'ASSET{i}', 'amount': 100000} for i in range(12)]
+        plan = {'trades': trades}
+
+        result = rebalancer.risk_check(plan)
+
+        assert result['overall_risk'] == 'medium'
+        assert result['trade_count'] == 12
+
+    def test_risk_check_high_risk(self, rebalancer):
+        """높은 리스크 계획 (1억원 초과)"""
+        plan = {
+            'trades': [
+                {'asset': 'BTC', 'amount': 150000000}  # 1.5억원
+            ]
+        }
+
+        result = rebalancer.risk_check(plan)
+
+        assert result['overall_risk'] == 'high'
+        assert result['approved'] is False
+
+    def test_risk_check_empty_plan(self, rebalancer):
+        """빈 계획 리스크 체크"""
+        plan = {'trades': []}
+
+        result = rebalancer.risk_check(plan)
+
+        assert result['trade_count'] == 0
+        assert result['total_amount'] == 0
+        assert result['approved'] is True
+
+
+@pytest.mark.rebalancing
+class TestRebalancerValidation:
+    """유효성 검증 테스트"""
+
+    @pytest.fixture
+    def rebalancer(self):
+        """기본 Rebalancer"""
+        mock_pm = Mock()
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_pm)
+
+    def test_validate_plan_valid(self, rebalancer):
+        """유효한 계획 검증"""
+        plan = {
+            'trades': [
+                {'asset': 'BTC', 'action': 'buy', 'amount': 100000}
+            ]
+        }
+
+        result = rebalancer.validate_rebalancing_plan(plan)
+
+        assert result['valid'] is True
+        assert result['errors'] == []
+
+    def test_validate_plan_invalid_format(self, rebalancer):
+        """잘못된 형식 계획 검증"""
+        plan = {'invalid': 'data'}
+
+        result = rebalancer.validate_rebalancing_plan(plan)
+
+        assert result['valid'] is False
+        assert len(result['errors']) > 0
+
+    def test_validate_plan_none(self, rebalancer):
+        """None 계획 검증"""
+        result = rebalancer.validate_rebalancing_plan(None)
+
+        assert result['valid'] is False
+
+    def test_schedule_validation(self, rebalancer):
+        """스케줄 검증"""
+        result = rebalancer.schedule_validation()
+
+        assert isinstance(result, bool)
+
+    def test_is_rebalancing_time(self, rebalancer):
+        """리밸런싱 시간 확인"""
+        result = rebalancer.is_rebalancing_time()
+
+        assert isinstance(result, bool)
+
+
+@pytest.mark.rebalancing
+class TestRebalancerTradingCosts:
+    """거래 비용 계산 테스트"""
+
+    @pytest.fixture
+    def rebalancer(self):
+        """기본 Rebalancer"""
+        mock_pm = Mock()
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_pm)
+
+    def test_calculate_costs_dict_trades(self, rebalancer):
+        """딕셔너리 형태 거래 비용 계산"""
+        trades = [
+            {'amount': 1000000},
+            {'amount': 500000},
+            {'amount': 250000}
+        ]
+
+        result = rebalancer.calculate_trading_costs(trades)
+
+        # 0.1% 수수료
+        expected = (1000000 + 500000 + 250000) * 0.001
+        assert abs(result - expected) < 1  # 부동소수점 오차 허용
+
+    def test_calculate_costs_empty_trades(self, rebalancer):
+        """빈 거래 목록 비용 계산"""
+        result = rebalancer.calculate_trading_costs([])
+
+        assert result == 0
+
+    def test_calculate_costs_zero_amounts(self, rebalancer):
+        """0원 거래 비용 계산"""
+        trades = [
+            {'amount': 0},
+            {'amount': 0}
+        ]
+
+        result = rebalancer.calculate_trading_costs(trades)
+
+        assert result == 0
+
+
+@pytest.mark.rebalancing
+class TestRebalancerCycleOperations:
+    """리밸런싱 사이클 작업 테스트"""
+
+    @pytest.fixture
+    def mock_portfolio_manager(self):
+        """Mock PortfolioManager"""
+        manager = Mock()
+        manager.get_portfolio_status = AsyncMock(return_value={
+            'total_value': 1000000,
+            'assets': {'BTC': {'value_krw': 700000}, 'KRW': {'value_krw': 300000}}
+        })
+        return manager
+
+    @pytest.fixture
+    def rebalancer(self, mock_portfolio_manager):
+        """Rebalancer 인스턴스"""
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_portfolio_manager)
+
+    @pytest.mark.asyncio
+    async def test_full_rebalancing_cycle_dry_run(self, rebalancer):
+        """전체 사이클 드라이 런"""
+        result = await rebalancer.full_rebalancing_cycle(dry_run=True)
+
+        assert result['success'] is True
+        assert result['dry_run'] is True
+        assert 'timestamp' in result
+
+    @pytest.mark.asyncio
+    async def test_full_rebalancing_cycle_real(self, rebalancer):
+        """전체 사이클 실제 실행 모드"""
+        result = await rebalancer.full_rebalancing_cycle(dry_run=False)
+
+        assert result['success'] is True
+        assert result['dry_run'] is False
+
+    def test_run_rebalancing_cycle_sync(self, rebalancer):
+        """동기 리밸런싱 사이클"""
+        result = rebalancer.run_rebalancing_cycle(dry_run=True)
+
+        assert result['success'] is True
+        assert result['cycle_completed'] is True
+
+
+@pytest.mark.rebalancing
+class TestRebalancerPlanGeneration:
+    """리밸런싱 계획 생성 테스트"""
+
+    @pytest.fixture
+    def mock_portfolio_manager(self):
+        """Mock PortfolioManager"""
+        return Mock()
+
+    @pytest.fixture
+    def rebalancer(self, mock_portfolio_manager):
+        """Rebalancer 인스턴스"""
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            return Rebalancer(portfolio_manager=mock_portfolio_manager)
+
+    @pytest.mark.asyncio
+    async def test_generate_plan_default_weights(self, rebalancer):
+        """기본 가중치로 계획 생성"""
+        plan = await rebalancer.generate_rebalancing_plan()
+
+        assert plan['success'] is True
+        assert 'trades' in plan
+        assert 'summary' in plan
+        assert 'estimated_cost' in plan
+        assert 'risk_assessment' in plan
+
+    @pytest.mark.asyncio
+    async def test_generate_plan_custom_weights(self, rebalancer):
+        """커스텀 가중치로 계획 생성"""
+        custom_weights = {'BTC': 0.5, 'ETH': 0.3, 'KRW': 0.2}
+
+        plan = await rebalancer.generate_rebalancing_plan(target_weights=custom_weights)
+
+        assert plan['success'] is True
+
+    @pytest.mark.asyncio
+    async def test_generate_plan_no_portfolio_manager(self):
+        """포트폴리오 매니저 없이 계획 생성"""
+        with patch('src.core.rebalancer.load_config', return_value={}):
+            rebalancer = Rebalancer(portfolio_manager=None)
+
+        plan = await rebalancer.generate_rebalancing_plan()
+
+        assert 'error' in plan

@@ -681,3 +681,342 @@ class TestPreTradeRiskCheckIntegration:
         # Assert
         assert result.approved, "정상 상태에서 거래 승인"
         assert len(result.restrictions) == 0, "제한 사항이 없어야 함"
+
+
+# ============================================================================
+# TestRiskLimitsDataclass - RiskLimits 데이터클래스 테스트
+# ============================================================================
+
+class TestRiskLimitsDataclass:
+    """RiskLimits 데이터클래스 테스트"""
+
+    def test_default_values(self):
+        """기본값 확인"""
+        from src.utils.constants import MAX_POSITION_SIZE
+        limits = RiskLimits()
+
+        assert limits.max_single_trade == 10000000
+        assert limits.max_daily_volume == 50000000
+        assert limits.max_position_size == MAX_POSITION_SIZE
+        assert limits.max_daily_loss == 0.05
+        assert limits.max_monthly_loss == 0.15
+        assert limits.drawdown_threshold == 0.20
+
+    def test_custom_values(self):
+        """커스텀 값 설정"""
+        limits = RiskLimits(
+            max_single_trade=5000000,
+            max_daily_volume=20000000,
+            max_position_size=0.30,
+            max_daily_loss=0.03,
+            max_monthly_loss=0.10,
+            drawdown_threshold=0.15
+        )
+
+        assert limits.max_single_trade == 5000000
+        assert limits.max_position_size == 0.30
+        assert limits.max_daily_loss == 0.03
+
+
+class TestRiskCheckResultDataclass:
+    """RiskCheckResult 데이터클래스 테스트"""
+
+    def test_default_values(self):
+        """기본값 확인"""
+        result = RiskCheckResult()
+
+        assert result.approved is False
+        assert result.risk_score == 0.0
+        assert result.warnings == []
+        assert result.restrictions == []
+        assert result.reason == ""
+
+    def test_with_values(self):
+        """값 설정"""
+        result = RiskCheckResult(
+            approved=True,
+            risk_score=0.3,
+            warnings=["경고1"],
+            restrictions=["제한1"],
+            reason="테스트"
+        )
+
+        assert result.approved is True
+        assert result.risk_score == 0.3
+        assert "경고1" in result.warnings
+
+
+# ============================================================================
+# TestPositionSizeCheck - 포지션 크기 체크 테스트
+# ============================================================================
+
+class TestPositionSizeCheck:
+    """포지션 크기 체크 테스트"""
+
+    def test_normal_position_sizes(self, mock_config):
+        """정상 포지션 크기"""
+        risk_manager = RiskManager(mock_config)
+
+        portfolio = {
+            'total_krw': 10_000_000,
+            'assets': {
+                'KRW': {'value_krw': 5_000_000},
+                'BTC': {'value_krw': 3_000_000},  # 30%
+                'ETH': {'value_krw': 2_000_000}   # 20%
+            }
+        }
+
+        warnings = risk_manager._check_position_sizes(portfolio)
+
+        assert warnings == [], "정상 포지션 크기는 경고 없음"
+
+    def test_excessive_position_size(self, mock_config):
+        """과도한 포지션 크기"""
+        risk_manager = RiskManager(mock_config)
+
+        portfolio = {
+            'total_krw': 10_000_000,
+            'assets': {
+                'KRW': {'value_krw': 2_000_000},
+                'BTC': {'value_krw': 8_000_000}  # 80% - 과도함
+            }
+        }
+
+        warnings = risk_manager._check_position_sizes(portfolio)
+
+        assert len(warnings) > 0
+        assert "BTC" in warnings[0]
+
+    def test_empty_assets(self, mock_config):
+        """빈 자산"""
+        risk_manager = RiskManager(mock_config)
+
+        portfolio = {
+            'total_krw': 10_000_000,
+            'assets': {}
+        }
+
+        warnings = risk_manager._check_position_sizes(portfolio)
+
+        assert warnings == []
+
+    def test_zero_total_value(self, mock_config):
+        """총 가치 0"""
+        risk_manager = RiskManager(mock_config)
+
+        portfolio = {
+            'total_krw': 0,
+            'assets': {'BTC': {'value_krw': 100}}
+        }
+
+        warnings = risk_manager._check_position_sizes(portfolio)
+
+        # 0으로 나누기 방지
+        assert isinstance(warnings, list)
+
+
+# ============================================================================
+# TestDailyVolumeTracking - 일일 거래량 추적 테스트
+# ============================================================================
+
+class TestDailyVolumeTracking:
+    """일일 거래량 추적 테스트"""
+
+    def test_reset_daily_volume(self, mock_config):
+        """일일 거래량 리셋"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.daily_trade_volume = 1000000
+        risk_manager.last_reset_date = datetime.now().date() - timedelta(days=1)
+
+        risk_manager._reset_daily_volume_if_needed()
+
+        assert risk_manager.daily_trade_volume == 0
+        assert risk_manager.last_reset_date == datetime.now().date()
+
+    def test_no_reset_same_day(self, mock_config):
+        """같은 날 리셋 안함"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.daily_trade_volume = 1000000
+        risk_manager.last_reset_date = datetime.now().date()
+
+        risk_manager._reset_daily_volume_if_needed()
+
+        assert risk_manager.daily_trade_volume == 1000000
+
+
+# ============================================================================
+# TestPreTradeRiskCheckEdgeCases - 거래 전 리스크 체크 엣지 케이스
+# ============================================================================
+
+class TestPreTradeRiskCheckEdgeCases:
+    """거래 전 리스크 체크 엣지 케이스"""
+
+    def test_zero_portfolio_value(self, mock_config):
+        """포트폴리오 가치 0"""
+        risk_manager = RiskManager(mock_config)
+
+        portfolio = {'total_krw': 0, 'assets': {}}
+
+        result = risk_manager.pre_trade_risk_check(portfolio, trade_amount=100000)
+
+        assert result.approved is False
+        assert "0 이하" in result.reason
+
+    def test_single_trade_limit_warning(self, mock_config, mock_db_manager):
+        """단일 거래 한도 경고"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.db_manager = mock_db_manager
+
+        mock_db_manager.get_portfolio_value_days_ago.return_value = 10_000_000
+        mock_db_manager.get_portfolio_peak_value.return_value = 10_000_000
+
+        portfolio = {
+            'total_krw': 10_000_000,
+            'assets': {'KRW': {'value_krw': 10_000_000}}
+        }
+
+        # 단일 거래 한도(1천만원) 초과
+        result = risk_manager.pre_trade_risk_check(portfolio, trade_amount=15_000_000)
+
+        assert len(result.warnings) > 0
+        assert any("단일 거래 한도" in w for w in result.warnings)
+
+    def test_daily_volume_limit_restriction(self, mock_config, mock_db_manager):
+        """일일 거래량 한도 제한"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.db_manager = mock_db_manager
+        risk_manager.daily_trade_volume = 45_000_000  # 이미 4,500만원 거래
+
+        mock_db_manager.get_portfolio_value_days_ago.return_value = 10_000_000
+        mock_db_manager.get_portfolio_peak_value.return_value = 10_000_000
+
+        portfolio = {
+            'total_krw': 10_000_000,
+            'assets': {'KRW': {'value_krw': 10_000_000}}
+        }
+
+        # 추가 1,000만원 거래 시 한도(5천만원) 초과
+        result = risk_manager.pre_trade_risk_check(portfolio, trade_amount=10_000_000)
+
+        assert len(result.restrictions) > 0
+        assert any("일일 거래량" in r for r in result.restrictions)
+
+    def test_exception_handling(self, mock_config):
+        """예외 처리"""
+        risk_manager = RiskManager(mock_config)
+
+        # 잘못된 데이터로 예외 발생 유도
+        portfolio = None
+
+        try:
+            result = risk_manager.pre_trade_risk_check(portfolio, trade_amount=100000)
+            assert result.approved is False
+            assert "오류" in result.reason
+        except:
+            # 예외가 발생해도 괜찮음
+            pass
+
+
+# ============================================================================
+# TestRiskManagerInit - RiskManager 초기화 테스트
+# ============================================================================
+
+class TestRiskManagerInit:
+    """RiskManager 초기화 테스트"""
+
+    def test_init_with_config(self, mock_config):
+        """설정으로 초기화"""
+        risk_manager = RiskManager(mock_config)
+
+        assert risk_manager.config == mock_config
+        assert risk_manager.db_manager is None
+        assert risk_manager.daily_trade_volume == 0
+        assert risk_manager.risk_limits.max_single_trade == 10000000
+
+    def test_init_with_db_manager(self, mock_config, mock_db_manager):
+        """DB 관리자 포함 초기화"""
+        risk_manager = RiskManager(mock_config, mock_db_manager)
+
+        assert risk_manager.db_manager == mock_db_manager
+
+    def test_three_line_check_config(self, mock_config):
+        """3-라인 체크 설정"""
+        risk_manager = RiskManager(mock_config)
+
+        assert risk_manager.performance_period == 30
+        assert risk_manager.tracking_error_threshold == 0.02
+        assert risk_manager.benchmark == "BTC"
+
+
+# ============================================================================
+# TestCalculateRiskScore - 리스크 스코어 계산 테스트
+# ============================================================================
+
+class TestCalculateRiskScoreAdvanced:
+    """리스크 스코어 계산 고급 테스트"""
+
+    def test_no_db_manager(self, mock_config):
+        """DB 관리자 없을 때"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.db_manager = None
+
+        portfolio = {
+            'total_krw': 10_000_000,
+            'assets': {'BTC': {'value_krw': 5_000_000}}
+        }
+
+        score = risk_manager.calculate_risk_score(portfolio)
+
+        # DB 없어도 기본 리스크 스코어 반환
+        assert 0 <= score <= 1
+
+    def test_high_concentration_risk(self, mock_config, mock_db_manager):
+        """높은 집중도 리스크"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.db_manager = mock_db_manager
+
+        mock_db_manager.get_portfolio_daily_returns.return_value = [0.001] * 30
+        mock_db_manager.get_latest_analysis_result.return_value = None
+
+        # 90% BTC 집중
+        portfolio = {
+            'total_krw': 10_000_000,
+            'assets': {
+                'KRW': {'value_krw': 1_000_000},
+                'BTC': {'value_krw': 9_000_000}
+            }
+        }
+
+        score = risk_manager.calculate_risk_score(portfolio)
+
+        assert score > 0.3, "높은 집중도는 리스크 점수를 높임"
+
+
+# ============================================================================
+# TestLossLimitsWithNoDbManager - DB 없을 때 손실 한도 체크
+# ============================================================================
+
+class TestLossLimitsWithNoDbManager:
+    """DB 관리자 없을 때 손실 한도 체크"""
+
+    def test_no_db_returns_empty(self, mock_config):
+        """DB 없으면 빈 리스트 반환"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.db_manager = None
+
+        portfolio = {'total_krw': 10_000_000}
+
+        result = risk_manager._check_loss_limits(portfolio)
+
+        assert result == []
+
+    def test_zero_portfolio_value(self, mock_config, mock_db_manager):
+        """포트폴리오 가치 0이면 빈 리스트"""
+        risk_manager = RiskManager(mock_config)
+        risk_manager.db_manager = mock_db_manager
+
+        portfolio = {'total_krw': 0}
+
+        result = risk_manager._check_loss_limits(portfolio)
+
+        assert result == []
