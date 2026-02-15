@@ -931,25 +931,49 @@ def crossover_prices():
 
 @pytest.fixture
 def golden_cross_prices():
-    """MACD 골든크로스 패턴"""
+    """MACD 골든크로스 패턴 (히스토그램 음수→양수 전환)
+
+    MACD 골든크로스 조건: prev_histogram <= 0 < current_histogram
+    - 69일 지속 하락으로 히스토그램 음수 유지
+    - 마지막 바에서 50% 급등으로 크로스오버 발생
+    """
     import pandas as pd
     import numpy as np
 
     np.random.seed(42)
-    # 상승 추세 시작
-    prices = [50_000_000 * (1 + i * 0.01) for i in range(50)]
+    base = 50_000_000
+
+    # 69일 지속 하락 - 히스토그램 음수 유지
+    down_prices = [base * (1 - i * 0.006) for i in range(69)]
+
+    # 마지막 1바만 급등 (50%) - 히스토그램 양수 전환
+    final_price = down_prices[-1] * 1.50
+
+    prices = down_prices + [final_price]
     return pd.Series(prices)
 
 
 @pytest.fixture
 def death_cross_prices():
-    """MACD 데드크로스 패턴"""
+    """MACD 데드크로스 패턴 (히스토그램 양수→음수 전환)
+
+    MACD 데드크로스 조건: prev_histogram >= 0 > current_histogram
+    - 69일 지속 상승으로 히스토그램 양수 유지
+    - 마지막 바에서 50% 급락으로 크로스오버 발생
+    """
     import pandas as pd
     import numpy as np
 
     np.random.seed(42)
-    # 하락 추세 시작
-    prices = [50_000_000 * (1 - i * 0.008) for i in range(50)]
+    base = 50_000_000
+
+    # 69일 지속 상승 - 히스토그램 양수 유지
+    up_prices = [base * (1 + i * 0.006) for i in range(69)]
+
+    # 마지막 1바만 급락 (50%) - 히스토그램 음수 전환
+    final_price = up_prices[-1] * 0.50
+
+    prices = up_prices + [final_price]
     return pd.Series(prices)
 
 

@@ -138,25 +138,49 @@ class OpportunisticBuyer:
     
     def calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
         """
-        RSI (Relative Strength Index) 계산
-        
+        RSI (Relative Strength Index) 계산 - Wilder's Smoothing 방식
+
         Args:
             prices: 가격 시계열 데이터
             period: RSI 계산 기간
-            
+
         Returns:
             RSI 값 (0-100)
+
+        Note:
+            CLAUDE.md 권장사항에 따라 Wilder's Smoothing(EMA with alpha=1/period) 사용
         """
         try:
+            if len(prices) < period + 1:
+                return 50.0  # 데이터 부족 시 중립값 반환
+
             delta = prices.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-            
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            
-            return rsi.iloc[-1] if not rsi.empty else 50.0
-            
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+
+            # Wilder's Smoothing: EMA with alpha = 1/period
+            alpha = 1.0 / period
+            avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
+
+            # 마지막 값으로 RSI 계산
+            last_avg_gain = float(avg_gain.iloc[-1])
+            last_avg_loss = float(avg_loss.iloc[-1])
+
+            # 엣지 케이스 처리
+            if last_avg_loss == 0:
+                # 손실이 0이면 RSI는 100 (완전 상승 추세)
+                return 100.0 if last_avg_gain > 0 else 50.0
+            if last_avg_gain == 0:
+                # 이익이 0이면 RSI는 0 (완전 하락 추세)
+                return 0.0
+
+            rs = last_avg_gain / last_avg_loss
+            last_rsi = 100 - (100 / (1 + rs))
+
+            # NaN 체크: NaN != NaN 특성 활용
+            return last_rsi if last_rsi == last_rsi else 50.0
+
         except Exception as e:
             logger.error(f"RSI 계산 실패: {e}")
             return 50.0  # 중립값 반환
@@ -314,7 +338,7 @@ class OpportunisticBuyer:
         # 기회 수준 판단
         if max_drop <= -0.30 and (rsi_oversold or extreme_fear):
             return OpportunityLevel.EXTREME
-        elif max_drop <= -0.20 and rsi < FEAR_GREED_FEAR:
+        elif max_drop <= -0.20 and fear_greed < FEAR_GREED_FEAR:
             return OpportunityLevel.MAJOR
         elif max_drop <= -0.10 and rsi < RSI_MIDLINE:
             return OpportunityLevel.MODERATE
@@ -390,9 +414,9 @@ class OpportunisticBuyer:
         fear_score = max(0, (50 - fear_greed) / 50)
         scores.append(fear_score)
         
-        # 7일과 30일 하락률 일관성
+        # 7일과 30일 하락률 일관성 (0-1 범위로 제한)
         consistency_score = 1 - abs(drop_7d - drop_30d) / 0.2
-        scores.append(max(0, consistency_score))
+        scores.append(max(0, min(1, consistency_score)))
         
         # 평균 점수
         return sum(scores) / len(scores)

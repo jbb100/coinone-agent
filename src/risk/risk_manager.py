@@ -19,7 +19,10 @@ class RiskLimits:
     max_single_trade: float = 10000000  # 단일 거래 최대 금액 (KRW)
     max_daily_volume: float = 50000000  # 일일 최대 거래 금액 (KRW)
     max_position_size: float = MAX_POSITION_SIZE  # 최대 포지션 크기 (constants.py: 0.25)
+    max_single_trade_risk: float = 0.02 # 단일 거래 최대 리스크 (2%) - CLAUDE.md: 1-2%
+    max_portfolio_risk: float = 0.08    # 포트폴리오 총 리스크 (8%) - CLAUDE.md: 6-10%
     max_daily_loss: float = 0.05        # 일일 최대 손실률 (5%)
+    max_weekly_loss: float = 0.10       # 주간 최대 손실률 (10%) - CLAUDE.md 권장: 10-15%
     max_monthly_loss: float = 0.15      # 월간 최대 손실률 (15%)
     drawdown_threshold: float = 0.20    # 드로우다운 임계값 (20%)
 
@@ -34,6 +37,15 @@ class StopLossConfig:
 
 
 @dataclass
+class TakeProfitConfig:
+    """전략별 익절 설정 (손익비 기반)"""
+    dca_take_profit: float = 0.30       # DCA 전략 익절 비율 (30%) - 1:2 손익비
+    swing_take_profit: float = 0.16     # SWING 전략 익절 비율 (16%) - 1:2 손익비
+    momentum_take_profit: float = 0.30  # MOMENTUM 전략 익절 비율 (30%) - 1:3 손익비
+    default_take_profit: float = 0.20   # 기본 익절 비율 (20%)
+
+
+@dataclass
 class StopLossAlert:
     """손절 알림 정보"""
     asset: str
@@ -42,6 +54,23 @@ class StopLossAlert:
     entry_price: float
     stop_loss_price: float
     loss_percent: float
+    strategy: str
+    timestamp: datetime = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
+
+
+@dataclass
+class TakeProfitAlert:
+    """익절 알림 정보"""
+    asset: str
+    action: str  # "TAKE_PROFIT", "APPROACHING"
+    current_price: float
+    entry_price: float
+    take_profit_price: float
+    profit_percent: float
     strategy: str
     timestamp: datetime = None
 
@@ -92,6 +121,7 @@ class RiskManager:
             max_daily_volume=trading_limits.get("max_daily_volume", 50000000),
             max_position_size=trading_limits.get("max_position_size", MAX_POSITION_SIZE),
             max_daily_loss=loss_limits.get("max_daily_loss", 0.05),
+            max_weekly_loss=loss_limits.get("max_weekly_loss", 0.10),
             max_monthly_loss=loss_limits.get("max_monthly_loss", 0.15),
             drawdown_threshold=loss_limits.get("drawdown_threshold", 0.20)
         )
@@ -151,14 +181,20 @@ class RiskManager:
             if position_size_check:
                 result.warnings.extend(position_size_check)
                 result.risk_score += 0.2
-            
-            # 5. 손실 한도 체크
+
+            # 5. 포트폴리오 총 리스크 체크 (CLAUDE.md: 6-10% 권장)
+            portfolio_risk_check = self._check_portfolio_total_risk(portfolio_data)
+            if portfolio_risk_check:
+                result.warnings.extend(portfolio_risk_check)
+                result.risk_score += 0.3
+
+            # 7. 손실 한도 체크
             loss_check = self._check_loss_limits(portfolio_data)
             if loss_check:
                 result.restrictions.extend(loss_check)
                 result.risk_score += 0.4
-            
-            # 6. 최종 승인 결정
+
+            # 8. 최종 승인 결정
             if result.risk_score >= 0.5 or result.restrictions:
                 result.approved = False
                 result.reason = "리스크 임계값 초과 또는 제한 사항 발생"
@@ -204,9 +240,88 @@ class RiskManager:
                 warnings.append(
                     f"{asset_name} 포지션 크기 과다: {position_ratio:.1%} > {self.risk_limits.max_position_size:.1%}"
                 )
-        
+
         return warnings
-    
+
+    def _check_portfolio_total_risk(
+        self,
+        portfolio_data: Dict,
+        positions: Dict[str, Dict] = None,
+        strategy: str = "DCA"
+    ) -> List[str]:
+        """
+        포트폴리오 총 리스크 체크 (CLAUDE.md: 6-10% 권장)
+
+        총 리스크 = 각 포지션의 (포지션 비중 × 손절 비율) 합계
+
+        Args:
+            portfolio_data: 포트폴리오 데이터
+            positions: 포지션 정보 (없으면 portfolio_data에서 추출)
+            strategy: 거래 전략 (손절 비율 결정에 사용)
+
+        Returns:
+            경고 메시지 리스트
+        """
+        warnings = []
+        total_value = portfolio_data.get("total_krw", 0)
+
+        if total_value <= 0:
+            return warnings
+
+        assets = portfolio_data.get("assets", {})
+        stop_loss_config = StopLossConfig()
+
+        # 전략별 손절 비율 결정
+        strategy_upper = strategy.upper()
+        stop_loss_percentages = {
+            "DCA": stop_loss_config.dca_stop_loss,
+            "SWING": stop_loss_config.swing_stop_loss,
+            "MOMENTUM": stop_loss_config.momentum_stop_loss,
+        }
+        stop_loss_percent = stop_loss_percentages.get(
+            strategy_upper,
+            stop_loss_config.default_stop_loss
+        )
+
+        # 각 포지션의 리스크 계산
+        total_risk = 0.0
+        risk_breakdown = []
+
+        for asset_name, asset_data in assets.items():
+            if asset_name == "KRW":
+                continue
+
+            if isinstance(asset_data, dict):
+                asset_value = asset_data.get("value_krw", 0)
+            else:
+                asset_value = 0
+
+            if asset_value <= 0:
+                continue
+
+            # 포지션 비중
+            position_ratio = asset_value / total_value
+
+            # 해당 포지션의 리스크 = 포지션 비중 × 손절 비율
+            position_risk = position_ratio * stop_loss_percent
+            total_risk += position_risk
+            risk_breakdown.append((asset_name, position_risk))
+
+        # 총 리스크가 한도 초과 시 경고
+        if total_risk > self.risk_limits.max_portfolio_risk:
+            top_risks = sorted(risk_breakdown, key=lambda x: x[1], reverse=True)[:3]
+            top_risks_str = ", ".join([f"{a}: {r:.1%}" for a, r in top_risks])
+            warnings.append(
+                f"포트폴리오 총 리스크 과다: {total_risk:.1%} > {self.risk_limits.max_portfolio_risk:.0%} "
+                f"(상위 기여: {top_risks_str})"
+            )
+            logger.warning(
+                f"⚠️ 포트폴리오 총 리스크 경고: {total_risk:.2%} "
+                f"(한도: {self.risk_limits.max_portfolio_risk:.0%})"
+            )
+
+        return warnings
+
     def _check_loss_limits(self, portfolio_data: Dict) -> List[str]:
         """
         손실 한도 체크
@@ -233,7 +348,16 @@ class RiskManager:
                         f"일일 손실 한도 초과: {daily_loss:.2%} (한도: -{self.risk_limits.max_daily_loss:.0%})"
                     )
 
-            # 2. 월간 손실 체크
+            # 2. 주간 손실 체크 (CLAUDE.md: 10-15% 권장)
+            week_ago_value = self.db_manager.get_portfolio_value_days_ago(7)
+            if week_ago_value and week_ago_value > 0:
+                weekly_loss = (current_value - week_ago_value) / week_ago_value
+                if weekly_loss < -self.risk_limits.max_weekly_loss:
+                    restrictions.append(
+                        f"주간 손실 한도 초과: {weekly_loss:.2%} (한도: -{self.risk_limits.max_weekly_loss:.0%})"
+                    )
+
+            # 3. 월간 손실 체크
             month_ago_value = self.db_manager.get_portfolio_value_days_ago(30)
             if month_ago_value and month_ago_value > 0:
                 monthly_loss = (current_value - month_ago_value) / month_ago_value
@@ -242,7 +366,7 @@ class RiskManager:
                         f"월간 손실 한도 초과: {monthly_loss:.2%} (한도: -{self.risk_limits.max_monthly_loss:.0%})"
                     )
 
-            # 3. 드로우다운 체크
+            # 4. 드로우다운 체크
             if hasattr(self.db_manager, 'get_portfolio_peak_value'):
                 peak_value = self.db_manager.get_portfolio_peak_value()
                 if peak_value and peak_value > 0:
@@ -776,6 +900,167 @@ class RiskManager:
 
         # 일반 손절 트리거
         return True, f"손절 조건 충족 ({alert.loss_percent:.2%})"
+
+    def calculate_take_profit_price(
+        self,
+        entry_price: float,
+        asset: str,
+        strategy: str = "DCA"
+    ) -> float:
+        """
+        전략별 익절가 계산
+
+        Args:
+            entry_price: 진입 가격 (평균 매수가)
+            asset: 자산 심볼 (예: BTC, ETH)
+            strategy: 거래 전략 (DCA, SWING, MOMENTUM)
+
+        Returns:
+            익절 가격
+
+        Note:
+            - DCA 전략: 30% 익절 (1:2 손익비, 15% 손절 대비)
+            - SWING 전략: 16% 익절 (1:2 손익비, 8% 손절 대비)
+            - MOMENTUM 전략: 30% 익절 (1:3 손익비, 10% 손절 대비)
+        """
+        take_profit_config = TakeProfitConfig()
+
+        strategy_upper = strategy.upper()
+        take_profit_percentages = {
+            "DCA": take_profit_config.dca_take_profit,
+            "SWING": take_profit_config.swing_take_profit,
+            "MOMENTUM": take_profit_config.momentum_take_profit,
+        }
+
+        take_profit_percent = take_profit_percentages.get(
+            strategy_upper,
+            take_profit_config.default_take_profit
+        )
+
+        take_profit_price = entry_price * (1 + take_profit_percent)
+
+        logger.debug(
+            f"익절가 계산: {asset} | 전략={strategy} | "
+            f"진입가={entry_price:,.0f} | 익절가={take_profit_price:,.0f} ({take_profit_percent:.0%})"
+        )
+
+        return take_profit_price
+
+    def check_take_profit_trigger(
+        self,
+        portfolio_data: Dict,
+        positions: Dict[str, Dict],
+        strategy: str = "DCA"
+    ) -> List[TakeProfitAlert]:
+        """
+        익절 트리거 확인 및 알림 생성
+
+        Args:
+            portfolio_data: 현재 포트폴리오 데이터 (assets 포함)
+            positions: 포지션 정보 {asset: {avg_entry_price, quantity, ...}}
+            strategy: 거래 전략
+
+        Returns:
+            익절 알림 리스트
+        """
+        take_profit_alerts = []
+        assets_data = portfolio_data.get("assets", {})
+
+        for asset, position in positions.items():
+            if asset == "KRW":
+                continue
+
+            entry_price = position.get("avg_entry_price", 0)
+            if entry_price <= 0:
+                continue
+
+            # 현재 가격 조회
+            asset_info = assets_data.get(asset, {})
+            if isinstance(asset_info, dict):
+                current_price = asset_info.get("price", 0)
+            else:
+                current_price = 0
+
+            if current_price <= 0:
+                continue
+
+            # 익절가 계산
+            take_profit_price = self.calculate_take_profit_price(
+                entry_price, asset, strategy
+            )
+
+            # 수익률 계산
+            profit_percent = (current_price - entry_price) / entry_price
+
+            # 익절 트리거 확인
+            if current_price >= take_profit_price:
+                alert = TakeProfitAlert(
+                    asset=asset,
+                    action="TAKE_PROFIT",
+                    current_price=current_price,
+                    entry_price=entry_price,
+                    take_profit_price=take_profit_price,
+                    profit_percent=profit_percent,
+                    strategy=strategy
+                )
+                take_profit_alerts.append(alert)
+                logger.info(
+                    f"🎯 익절 트리거 발동: {asset} | "
+                    f"현재가={current_price:,.0f} >= 익절가={take_profit_price:,.0f} | "
+                    f"수익률={profit_percent:.2%}"
+                )
+
+            # 익절 근접 (5% 이내)
+            elif current_price >= take_profit_price * 0.95:
+                alert = TakeProfitAlert(
+                    asset=asset,
+                    action="APPROACHING",
+                    current_price=current_price,
+                    entry_price=entry_price,
+                    take_profit_price=take_profit_price,
+                    profit_percent=profit_percent,
+                    strategy=strategy
+                )
+                take_profit_alerts.append(alert)
+                logger.info(
+                    f"📈 익절 근접: {asset} | "
+                    f"현재가={current_price:,.0f} → 익절가={take_profit_price:,.0f} 근접 | "
+                    f"수익률={profit_percent:.2%}"
+                )
+
+        if take_profit_alerts:
+            logger.info(f"익절 체크 완료: {len(take_profit_alerts)}개 알림 생성")
+        else:
+            logger.debug("익절 체크 완료: 트리거 없음")
+
+        return take_profit_alerts
+
+    def should_execute_take_profit(
+        self,
+        alert: TakeProfitAlert,
+        partial_take_profit: bool = True,
+        partial_ratio: float = 0.5
+    ) -> Tuple[bool, str, float]:
+        """
+        익절 실행 여부 최종 결정
+
+        Args:
+            alert: 익절 알림
+            partial_take_profit: 부분 익절 허용 여부
+            partial_ratio: 부분 익절 비율 (기본 50%)
+
+        Returns:
+            (실행 여부, 사유, 익절 비율)
+        """
+        if alert.action != "TAKE_PROFIT":
+            return False, "익절 트리거가 아닌 근접 상태", 0.0
+
+        # 수익률이 매우 높으면 (50% 이상) 부분 익절 권장
+        if alert.profit_percent >= 0.50 and partial_take_profit:
+            return True, f"높은 수익 ({alert.profit_percent:.2%}) - 부분 익절 권장", partial_ratio
+
+        # 일반 익절 트리거 - 전량 익절
+        return True, f"익절 조건 충족 ({alert.profit_percent:.2%})", 1.0
 
     def _calculate_volatility_risk(self, portfolio_data: Dict) -> float:
         """

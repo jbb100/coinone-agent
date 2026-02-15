@@ -254,18 +254,16 @@ class CompositeSignalAnalyzer:
             if np.isnan(current_macd) or np.isnan(current_signal):
                 return "neutral", data
 
-            # 히스토그램 부호 전환 확인
+            # 히스토그램 부호 전환 확인 (크로스오버만 신호로 사용)
+            # CLAUDE.md: MACD는 골든크로스/데드크로스만 신호로 사용
             if prev_histogram <= 0 < current_histogram:
                 # 골든크로스 (MACD가 시그널을 상향 돌파)
                 return "buy", data
             elif prev_histogram >= 0 > current_histogram:
                 # 데드크로스 (MACD가 시그널을 하향 돌파)
                 return "sell", data
-            elif current_histogram > 0:
-                return "buy", data
-            elif current_histogram < 0:
-                return "sell", data
             else:
+                # 크로스오버가 아닌 경우 중립 (과도한 거래 방지)
                 return "neutral", data
 
         except Exception as e:

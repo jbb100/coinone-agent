@@ -35,7 +35,7 @@ class BacktestConfig:
     mode: BacktestMode          # 백테스팅 모드
     risk_level: str = "moderate" # 리스크 수준
     transaction_cost: float = 0.001  # 거래 수수료 (0.1%)
-    slippage: float = 0.0005    # 슬리피지 (0.05%)
+    slippage: float = 0.002     # 슬리피지 (0.2%) - CLAUDE.md 권장: 0.1-0.3%
     
     # 고급 설정
     use_dynamic_optimization: bool = False

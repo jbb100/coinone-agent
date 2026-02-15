@@ -581,6 +581,11 @@ class KairosSystem:
                                 analysis_result["opportunistic_buy_executed"] = True
                                 analysis_result["opportunistic_buy_result"] = buy_result
                                 logger.info(f"✅ 기회적 매수 실행 완료: {len(buy_result.get('opportunities', []))}개 자산")
+                            elif buy_result.get("reason") == "bias_detected":
+                                # 행동 편향 감지로 매수 보류
+                                analysis_result["buy_blocked_by_bias"] = True
+                                analysis_result["detected_biases"] = buy_result.get("biases", [])
+                                logger.warning(f"🚨 행동 편향 감지로 기회적 매수 보류: {buy_result.get('biases', [])}")
                             else:
                                 logger.info("ℹ️ 기회적 매수 조건을 만족하는 자산이 없습니다.")
                         except Exception as e:
@@ -775,13 +780,65 @@ class KairosSystem:
                 return {"success": True, "opportunities": [], "message": "No opportunities found"}
             else:
                 logger.info(f"📝 결론: 총 {len(opportunities)}개 자산에서 매수 기회 발견!")
-            
+
+            # 행동 편향 체크 (FOMO, 과잉 자신감 등)
+            if self.bias_prevention_system:
+                try:
+                    # 시장 컨텍스트 수집
+                    market_context = {
+                        "opportunity_count": len(opportunities),
+                        "avg_confidence": sum(opp.confidence_score for opp in opportunities) / len(opportunities),
+                        "fear_greed_index": opportunities[0].fear_greed_index if opportunities else 50,
+                    }
+
+                    # 의사결정 데이터
+                    decision_data = {
+                        "action": "buy",
+                        "order_side": "buy",
+                        "urgency_score": max(opp.confidence_score for opp in opportunities),
+                    }
+
+                    bias_result = self.bias_prevention_system.analyze_comprehensive_bias(
+                        decision_data=decision_data,
+                        market_context=market_context
+                    )
+
+                    if bias_result.get("risk_level") in ["high", "critical"]:
+                        biases = bias_result.get("biases_detected", [])
+                        bias_types = [b.get("type", "unknown") for b in biases]
+                        logger.warning(f"🚨 행동 편향 감지로 매수 보류: {bias_types}")
+                        logger.warning(f"   위험 수준: {bias_result.get('risk_level')}")
+
+                        # 알림 발송
+                        if self.alert_system:
+                            self.alert_system.send_alert(
+                                "행동 편향 감지 - 매수 보류",
+                                f"감지된 편향: {', '.join(bias_types)}\n위험 수준: {bias_result.get('risk_level')}",
+                                "warning"
+                            )
+
+                        return {
+                            "success": False,
+                            "reason": "bias_detected",
+                            "biases": bias_types,
+                            "risk_level": bias_result.get("risk_level"),
+                            "opportunities": opportunities
+                        }
+                    elif bias_result.get("biases_detected"):
+                        # 경미한 편향은 경고만 로깅
+                        biases = bias_result.get("biases_detected", [])
+                        bias_types = [b.get("type", "unknown") for b in biases]
+                        logger.info(f"⚠️ 경미한 행동 편향 감지 (진행 허용): {bias_types}")
+
+                except Exception as e:
+                    logger.warning(f"행동 편향 체크 중 오류 (무시하고 진행): {e}")
+
             # 매수 기회가 있으면 Slack 알림 발송
             for opportunity in opportunities:
                 self._send_buy_opportunity_notification(opportunity)
-            
+
             logger.info(f"총 {len(opportunities)}개의 매수 기회 탐지 완료")
-            
+
             # 기회가 있으면 자동으로 매수 실행
             execution_result = None
             if opportunities:
@@ -854,7 +911,194 @@ class KairosSystem:
         
         results["remaining_cash"] = available_cash - results["total_invested"]
         return results
-    
+
+    def check_stop_loss_and_take_profit(self, dry_run: bool = False) -> dict:
+        """
+        손절/익절 트리거 확인 및 자동 실행
+
+        CLAUDE.md: "손절 미루기 방지 (자동 손절 필수)"
+
+        Args:
+            dry_run: True면 시뮬레이션만 실행
+
+        Returns:
+            실행 결과
+        """
+        try:
+            logger.info(f"손절/익절 체크 시작... (드라이런: {dry_run})")
+
+            # 필수 컴포넌트 체크
+            if not self.coinone_client or not self.risk_manager or not self.order_manager:
+                logger.warning("손절/익절 체크에 필요한 컴포넌트가 초기화되지 않음")
+                return {"success": False, "error": "Components not initialized"}
+
+            # 현재 포트폴리오 및 포지션 정보 조회
+            portfolio = self.coinone_client.get_portfolio_value()
+            balances = self.coinone_client.get_balances()
+
+            # 포지션 정보 구성 (평균 매수가 필요)
+            positions = {}
+            for asset, balance in balances.items():
+                if asset.upper() == "KRW" or balance <= 0:
+                    continue
+
+                # DB에서 평균 매수가 조회 (없으면 현재가 사용)
+                avg_entry_price = 0
+                if self.db_manager and hasattr(self.db_manager, 'get_avg_entry_price'):
+                    try:
+                        avg_entry_price = self.db_manager.get_avg_entry_price(asset)
+                    except Exception:
+                        pass
+
+                # 평균 매수가가 없으면 현재가의 90%를 가정 (보수적)
+                if avg_entry_price <= 0:
+                    current_price = self.coinone_client.get_latest_price(asset)
+                    if current_price and current_price > 0:
+                        avg_entry_price = current_price * 0.9  # 가정: 10% 수익 상태
+                    else:
+                        continue
+
+                positions[asset] = {
+                    "avg_entry_price": avg_entry_price,
+                    "quantity": balance
+                }
+
+            if not positions:
+                logger.info("손절/익절 체크 대상 포지션 없음")
+                return {"success": True, "message": "No positions to check"}
+
+            # 손절 트리거 확인
+            stop_loss_alerts = self.risk_manager.check_stop_loss_trigger(
+                portfolio_data=portfolio,
+                positions=positions,
+                strategy="DCA"
+            )
+
+            # 익절 트리거 확인
+            take_profit_alerts = self.risk_manager.check_take_profit_trigger(
+                portfolio_data=portfolio,
+                positions=positions,
+                strategy="DCA"
+            )
+
+            execution_results = {
+                "stop_loss_executed": [],
+                "take_profit_executed": [],
+                "alerts_sent": [],
+                "dry_run": dry_run
+            }
+
+            # 손절 실행
+            for alert in stop_loss_alerts:
+                should_execute, reason = self.risk_manager.should_execute_stop_loss(alert)
+
+                if should_execute:
+                    logger.warning(f"🚨 손절 실행: {alert.asset} | 사유: {reason}")
+
+                    if not dry_run:
+                        try:
+                            # 전량 매도 (currency, side, amount)
+                            sell_result = self.order_manager.submit_market_order(
+                                currency=alert.asset,
+                                side="sell",
+                                amount=balances.get(alert.asset, 0)
+                            )
+
+                            if sell_result and sell_result.status.value != "failed":
+                                execution_results["stop_loss_executed"].append({
+                                    "asset": alert.asset,
+                                    "reason": reason,
+                                    "loss_percent": alert.loss_percent,
+                                    "order_id": getattr(sell_result, 'order_id', None)
+                                })
+                                logger.info(f"✅ {alert.asset} 손절 매도 완료")
+                            else:
+                                logger.error(f"❌ {alert.asset} 손절 매도 실패")
+                        except Exception as e:
+                            logger.error(f"손절 매도 중 오류: {e}")
+                    else:
+                        execution_results["stop_loss_executed"].append({
+                            "asset": alert.asset,
+                            "reason": reason,
+                            "loss_percent": alert.loss_percent,
+                            "status": "SIMULATED"
+                        })
+
+                    # 알림 발송
+                    if self.alert_system:
+                        self.alert_system.send_alert(
+                            f"🚨 손절 실행 - {alert.asset}",
+                            f"손실률: {alert.loss_percent:.2%}\n사유: {reason}",
+                            "critical"
+                        )
+                        execution_results["alerts_sent"].append(alert.asset)
+
+            # 익절 실행
+            for alert in take_profit_alerts:
+                should_execute, reason, sell_ratio = self.risk_manager.should_execute_take_profit(alert)
+
+                if should_execute:
+                    logger.info(f"🎯 익절 실행: {alert.asset} | 사유: {reason} | 비율: {sell_ratio:.0%}")
+
+                    if not dry_run:
+                        try:
+                            # 비율에 따라 매도 (currency, side, amount)
+                            sell_quantity = balances.get(alert.asset, 0) * sell_ratio
+
+                            sell_result = self.order_manager.submit_market_order(
+                                currency=alert.asset,
+                                side="sell",
+                                amount=sell_quantity
+                            )
+
+                            if sell_result and sell_result.status.value != "failed":
+                                execution_results["take_profit_executed"].append({
+                                    "asset": alert.asset,
+                                    "reason": reason,
+                                    "profit_percent": alert.profit_percent,
+                                    "sell_ratio": sell_ratio,
+                                    "order_id": getattr(sell_result, 'order_id', None)
+                                })
+                                logger.info(f"✅ {alert.asset} 익절 매도 완료 ({sell_ratio:.0%})")
+                            else:
+                                logger.error(f"❌ {alert.asset} 익절 매도 실패")
+                        except Exception as e:
+                            logger.error(f"익절 매도 중 오류: {e}")
+                    else:
+                        execution_results["take_profit_executed"].append({
+                            "asset": alert.asset,
+                            "reason": reason,
+                            "profit_percent": alert.profit_percent,
+                            "sell_ratio": sell_ratio,
+                            "status": "SIMULATED"
+                        })
+
+                    # 알림 발송
+                    if self.alert_system:
+                        self.alert_system.send_alert(
+                            f"🎯 익절 실행 - {alert.asset}",
+                            f"수익률: {alert.profit_percent:.2%}\n매도 비율: {sell_ratio:.0%}\n사유: {reason}",
+                            "info"
+                        )
+                        execution_results["alerts_sent"].append(alert.asset)
+
+            # 결과 요약
+            total_executed = len(execution_results["stop_loss_executed"]) + len(execution_results["take_profit_executed"])
+            logger.info(f"손절/익절 체크 완료: {total_executed}건 실행")
+
+            return {
+                "success": True,
+                "stop_loss_count": len(stop_loss_alerts),
+                "take_profit_count": len(take_profit_alerts),
+                "executed": total_executed,
+                "results": execution_results,
+                "timestamp": datetime.now()
+            }
+
+        except Exception as e:
+            logger.error(f"손절/익절 체크 실패: {e}")
+            return {"success": False, "error": str(e)}
+
     def _send_execution_result_notification(self, execution_result):
         """매수 실행 결과 알림"""
         try:

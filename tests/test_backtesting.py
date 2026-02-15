@@ -410,7 +410,7 @@ class TestBacktestConfig:
 
         assert config.risk_level == "moderate"
         assert config.transaction_cost == 0.001
-        assert config.slippage == 0.0005
+        assert config.slippage == 0.002  # CLAUDE.md 권장: 0.1-0.3%
         assert config.use_dynamic_optimization is False
         assert config.max_drawdown_threshold == 0.20
 
