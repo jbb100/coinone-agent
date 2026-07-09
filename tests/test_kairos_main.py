@@ -140,3 +140,16 @@ def test_config_from_loader_defaults():
     config = KairosSimple.config_from_loader(loader)
     assert config.rebalance.crypto_target == 0.60
     assert config.limits.min_krw_ratio == 0.10
+
+
+def test_record_trade_failure_does_not_abort_remaining_orders():
+    """운영 회귀 방지: 주문 체결 후 DB 기록 실패가 나머지 주문 실행을
+    중단시키면 안 된다 (돈은 이미 움직였으므로 기록 실패는 경고로 강등)."""
+    holdings = {"BTC": 50_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000}
+    sys_, executor, alerts = make_system(holdings=holdings, krw=30_000_000)
+    sys_.portfolio.record_trade.side_effect = Exception("table trade_history has no column named currency")
+    result = sys_.run_daily_check(dry_run=False)
+    # 리밸런싱 주문이 여러 건인데, 첫 기록 실패에도 전부 실행 시도되어야 함
+    assert executor.execute.call_count >= 2
+    assert result["executed"] >= 2
+    assert alerts.send_error_alert.called  # 기록 실패는 알림으로 통지

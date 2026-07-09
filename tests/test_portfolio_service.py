@@ -52,6 +52,7 @@ def test_record_trade_persists_to_db():
     svc.record_trade("BTC", "buy", 500_000.0, origin="dca")
     assert db.save_trade.called
     saved = db.save_trade.call_args.args[0]
-    assert saved["currency"] == "BTC"
+    assert saved["asset"] == "BTC"          # trade_history DDL 컬럼과 일치해야 함
     assert saved["side"] == "buy"
-    assert saved["amount"] == 500_000.0
+    assert saved["amount_krw"] == 500_000.0
+    assert saved["origin"] == "dca"

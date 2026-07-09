@@ -46,10 +46,9 @@ class PortfolioService:
 
     def record_trade(self, asset: str, side: str, amount_krw: float, origin: str) -> None:
         self.db.save_trade({
-            "currency": asset,
+            "asset": asset,
             "side": side,
-            "order_type": origin,       # "dca" | "rebalance"
-            "amount": amount_krw,
-            "status": "executed",
-            "created_at": datetime.now(),
+            "amount_krw": amount_krw,
+            "origin": origin,           # "dca" | "rebalance"
+            "trade_date": datetime.now(),
         })

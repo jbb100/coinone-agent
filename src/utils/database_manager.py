@@ -163,9 +163,32 @@ class DatabaseManager:
                         fee_krw REAL,
                         order_id TEXT,
                         execution_id TEXT,
+                        origin TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+
+                # 구버전 DB 마이그레이션: trade_history에 누락된 컬럼 추가
+                # (과거 배포본이 다른 스키마로 테이블을 만든 경우 대비)
+                cursor.execute("PRAGMA table_info(trade_history)")
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                required_cols = {
+                    "trade_date": "TEXT",
+                    "asset": "TEXT",
+                    "side": "TEXT",
+                    "price": "REAL DEFAULT 0",
+                    "quantity": "REAL DEFAULT 0",
+                    "amount_krw": "REAL DEFAULT 0",
+                    "fee_krw": "REAL",
+                    "order_id": "TEXT",
+                    "execution_id": "TEXT",
+                    "origin": "TEXT",
+                }
+                for col, col_type in required_cols.items():
+                    if col not in existing_cols:
+                        cursor.execute(
+                            f"ALTER TABLE trade_history ADD COLUMN {col} {col_type}"
+                        )
 
                 # 리밸런싱 결과 테이블
                 cursor.execute("""
@@ -467,42 +490,42 @@ class DatabaseManager:
     
     def save_trade(self, trade_info: Dict) -> int:
         """
-        거래 내역 저장
-        
+        거래 내역 저장 — trade_history 정식 스키마(asset/amount_krw) 사용
+
         Args:
             trade_info: 거래 정보
-            
+                필수: asset, side, amount_krw
+                선택: price, quantity, fee_krw, order_id, origin, trade_date
+
         Returns:
             저장된 레코드 ID
         """
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 cursor.execute("""
-                    INSERT OR REPLACE INTO trade_history (
-                        order_id, currency, side, order_type, amount, price,
-                        filled_amount, average_price, fee, status, trade_date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO trade_history (
+                        trade_date, asset, side, price, quantity,
+                        amount_krw, fee_krw, order_id, origin
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    trade_info.get("order_id"),
-                    trade_info.get("currency"),
-                    trade_info.get("side"),
-                    trade_info.get("order_type"),
-                    trade_info.get("amount"),
-                    trade_info.get("price"),
-                    trade_info.get("filled_amount", 0),
-                    trade_info.get("average_price", 0),
-                    trade_info.get("fee", 0),
-                    trade_info.get("status"),
-                    trade_info.get("created_at", datetime.now())
+                    str(trade_info.get("trade_date", datetime.now())),
+                    trade_info["asset"],
+                    trade_info["side"],
+                    trade_info.get("price", 0.0),
+                    trade_info.get("quantity", 0.0),
+                    trade_info["amount_krw"],
+                    trade_info.get("fee_krw", 0.0),
+                    trade_info.get("order_id", ""),
+                    trade_info.get("origin", ""),
                 ))
-                
+
                 record_id = cursor.lastrowid
                 conn.commit()
-                
+
                 return record_id
-                
+
         except Exception as e:
             logger.error(f"거래 내역 저장 실패: {e}")
             raise
