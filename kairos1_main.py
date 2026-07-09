@@ -258,13 +258,35 @@ class KairosSystem:
             # 시장 데이터 제공자
             self.market_data_provider = MarketDataProvider()
             
+            # 국면 모델 선택: legacy(기존 추세추종) | valuation(가치 앵커 — 저평가 매집/고평가 분배)
+            regime_model = self.config.get("strategy.regime_model", "legacy")
+            valuation_filter = None
+            if regime_model == "valuation":
+                from src.core.market_valuation_filter import MarketValuationFilter
+                valuation_filter = MarketValuationFilter(
+                    boundaries=self.config.get("strategy.valuation.boundaries", None),
+                    hysteresis=self.config.get("strategy.valuation.hysteresis", 0.05),
+                    max_allocation_step=self.config.get("strategy.valuation.max_allocation_step", 0.10),
+                )
+
+            # 배분 조정자: 기회적 매수분 클로백 면제 + 기회적 매수/매도 밴드 한도
+            from src.core.allocation_arbiter import AllocationArbiter
+            self.allocation_arbiter = AllocationArbiter(
+                db_manager=self.db_manager,
+                band_width=self.config.get("strategy.arbiter.band_width", 0.08),
+                clawback_exempt_days=self.config.get("strategy.arbiter.clawback_exempt_days", 30),
+            )
+
             # 리밸런서
             self.rebalancer = Rebalancer(
                 coinone_client=self.coinone_client,
                 db_manager=self.db_manager,
                 portfolio_manager=self.portfolio_manager,
                 market_season_filter=self.market_filter,
-                order_manager=self.order_manager
+                order_manager=self.order_manager,
+                regime_model=regime_model,
+                valuation_filter=valuation_filter,
+                allocation_arbiter=self.allocation_arbiter
             )
             
             # 리스크 관리자
@@ -296,6 +318,16 @@ class KairosSystem:
                 cash_reserve_ratio=self.config.get("trading.cash_reserve_ratio", 0.15),
                 min_opportunity_threshold=self.config.get("trading.min_opportunity_threshold", 0.05),
                 fear_greed_provider=self.fear_greed_provider
+            )
+
+            # OpportunisticSeller 초기화 (상승장 단계적 익절 — Buyer와 대칭)
+            from src.core.opportunistic_seller import OpportunisticSeller
+            self.opportunistic_seller = OpportunisticSeller(
+                coinone_client=self.coinone_client,
+                db_manager=self.db_manager,
+                order_manager=self.order_manager,
+                fear_greed_provider=self.fear_greed_provider,
+                market_data_provider=self.market_data_provider
             )
             
             # 고급 시스템 컴포넌트 초기화

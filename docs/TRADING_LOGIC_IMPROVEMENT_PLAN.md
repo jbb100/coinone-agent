@@ -28,10 +28,12 @@
 
 - ✅ **Phase 0 완료** — fail-safe 안전장치 (아래 0-1 ~ 0-4)
 - ✅ **Phase 1 완료** — P1 버그 수정 + real-data-only 목업 지표 제거
-- ⬜ Phase 2 — 시장 국면 모델 전환 (가치 앵커)
-- ⬜ Phase 3 — Arbiter + OpportunisticSeller
-- ⬜ Phase 4 — 잔여 코드 정리 (Rebalancer mock 메서드 등)
-- ⬜ Phase 5 — 백테스트 검증 + 롤아웃
+- ✅ **Phase 2 완료** — 가치 앵커 국면 모델 (`market_valuation_filter.py`,
+  config `strategy.regime_model: legacy|valuation` 스위치, 기본값 legacy)
+- ✅ **Phase 3 완료** — `allocation_arbiter.py`(클로백 면제 + 허용 밴드),
+  `opportunistic_seller.py`(4단계 익절), 매수/매도 실행 스크립트에 밴드 한도 적용
+- ⬜ Phase 4 — 잔여 코드 정리 (Rebalancer mock 메서드 제거 — 기존 테스트 마이그레이션 필요)
+- ⬜ Phase 5 — 백테스트 검증 + 롤아웃 (**valuation 모드 라이브 전환의 게이트**)
 
 Phase 0-1 구현 내역 요약:
 - `market_season_filter`: MA 계산 불가 시 None 반환(대체 MA 금지), `determine_market_season`이
@@ -47,6 +49,23 @@ Phase 0-1 구현 내역 요약:
   제거(예산 초과 매수 금지), 매수 이력 DB 영속화 + 재매수 조건(72h 내 직전 매수가 대비 -3%),
   전체 예산 기준 레벨별 배분
 - `tests/test_failsafe.py` 신설 (32개 테스트, 전부 통과)
+
+Phase 2-3 구현 내역 요약:
+- `market_valuation_filter.py` 신설: R = 가격/200주 MA 기준 5국면
+  (DEEP_VALUE 75% / ACCUMULATION 65% / NEUTRAL 50% / DISTRIBUTION 35% / EUPHORIA 25%),
+  경계 ±5% 히스테리시스, 국면 전환 시 회당 최대 10%p 단계 이동, 데이터 없으면 판단 중단
+- `rebalancer.py`: `_get_target_allocation()` 단일 진입점으로 legacy/valuation 스위치,
+  valuation 분석 결과를 DB에 저장해 다음 사이클 히스테리시스에 사용
+- `allocation_arbiter.py` 신설: ① 최근 30일 기회적 매수분을 리밸런싱 매도에서 차감
+  (클로백 면제 — "사자마자 팔리는" 왕복 매매 차단), ② 목표 비중 ±8%p 허용 밴드로
+  기회적 매수/매도 한도 계산
+- `opportunistic_seller.py` 신설: 30일 저점 대비 상승률 + RSI + 실제 탐욕지수 기반
+  4단계 익절 (5%/10%/15%/20%), 탐욕지수·R값 실데이터 없으면 해당 레벨 미발동,
+  재매도 조건(4h 간격 + 72h 내 +5% 추가 상승), 매도 이력 DB 영속화
+- `scripts/execute_opportunistic_sell.py` 신설 (cron 실행용),
+  `execute_opportunistic_buy.py`에 밴드 한도 적용 + 튜플 반환값 버그 수정
+- config: `strategy.regime_model`, `strategy.valuation.*`, `strategy.arbiter.*` 추가
+- `tests/test_valuation_filter.py`(24개), `tests/test_arbiter_and_seller.py`(20개) 신설
 
 ## 전체 로드맵
 

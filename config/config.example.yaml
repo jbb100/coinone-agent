@@ -26,14 +26,37 @@ api:
 # 투자 전략 설정
 # =============================================================================
 strategy:
-  # 시장 계절 필터 설정
+  # 국면 모델 선택 (Phase 2)
+  # - legacy: 기존 200주 MA 추세추종 (강세장에 비중 확대, 약세장에 축소)
+  # - valuation: 가치 앵커 모델 (저평가 구간에 매집, 고평가 구간에 분배)
+  #   ※ 백테스트 검증(Phase 5) 통과 전에는 legacy 유지 권장
+  regime_model: legacy
+
+  # 가치 앵커 모델 설정 (regime_model: valuation일 때만 사용)
+  # R = BTC 현재가 / 200주 이동평균
+  valuation:
+    # 국면 경계 (R 기준): deep_value < 1.0 <= accumulation < 1.4 <= neutral < 2.0 <= distribution < 2.8 <= euphoria
+    boundaries: [1.0, 1.4, 2.0, 2.8]
+    # 경계 히스테리시스 (±5% — 경계 부근 휩쏘 방지)
+    hysteresis: 0.05
+    # 국면 전환 시 회당 최대 비중 이동폭 (10%p — 일괄 매매 방지)
+    max_allocation_step: 0.10
+
+  # 배분 조정자 (Phase 3) — 전략 계층 간 반대 매매 방지
+  arbiter:
+    # 목표 비중 대비 허용 밴드 (±8%p) — 기회적 매수/매도는 이 밴드 안에서만
+    band_width: 0.08
+    # 기회적 매수분의 리밸런싱 매도 면제 기간 (일)
+    clawback_exempt_days: 30
+
+  # 시장 계절 필터 설정 (legacy 모델)
   market_season:
     # 완충 밴드 비율 (기본: 5%)
     buffer_band: 0.05
-    
+
     # 200주 이동평균 계산 최소 데이터 수
     min_data_weeks: 200
-    
+
     # 시장 상황별 암호화폐 비중
     allocations:
       risk_on: 0.70    # 강세장: 암호화폐 70%

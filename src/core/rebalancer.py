@@ -99,7 +99,12 @@ class Rebalancer:
         bias_prevention=None,
         scenario_response=None,
         # 테스트 호환성을 위한 설정
-        config: Optional[Dict] = None
+        config: Optional[Dict] = None,
+        # 국면 모델: "legacy"(200주 MA 추세추종) | "valuation"(가치 앵커 — 저평가 매집/고평가 분배)
+        regime_model: str = "legacy",
+        valuation_filter=None,
+        # 배분 조정자: 기회적 매수분의 리밸런싱 매도 면제 (계층 간 왕복 매매 방지)
+        allocation_arbiter=None
     ):
         """
         Args:
@@ -117,7 +122,18 @@ class Rebalancer:
         """
         # 테스트 호환성을 위한 기본값 처리
         self.config = config or load_config()
-        
+
+        # 국면 모델 설정 (Phase 2: valuation 모드는 백테스트 검증 후 config로 전환)
+        self.regime_model = regime_model
+        self.valuation_filter = valuation_filter
+        if regime_model == "valuation" and valuation_filter is None:
+            from .market_valuation_filter import MarketValuationFilter
+            self.valuation_filter = MarketValuationFilter()
+        if regime_model == "valuation":
+            logger.info("🔄 국면 모델: valuation (가치 앵커 — 저평가 매집/고평가 분배)")
+
+        self.allocation_arbiter = allocation_arbiter
+
         self.coinone_client = coinone_client
         self.portfolio_manager = portfolio_manager
         self.market_season_filter = market_season_filter
@@ -509,26 +525,21 @@ class Rebalancer:
             else:
                 logger.warning(f"assets가 딕셔너리가 아님: {type(assets)}")
             
-            # 2. 시장 계절 판단 (필요시)
-            if target_market_season is None:
-                target_market_season = self._get_current_market_season()
+            # 2-3. 국면 판단 및 목표 자산 배분 계산 (legacy/valuation 공통 진입점)
+            allocation_info = self._get_target_allocation(current_portfolio, target_market_season)
 
-            if target_market_season is None:
+            if allocation_info is None:
                 # fail-safe: 시장 판단 불가 시 리밸런싱 계획을 만들지 않는다
-                logger.error("🚨 시장 계절 판단 불가 — 리밸런싱 계획 수립을 중단합니다 (거래 없음)")
+                logger.error("🚨 시장 국면 판단 불가 — 리밸런싱 계획 수립을 중단합니다 (거래 없음)")
                 return {
                     "success": False,
-                    "error": "시장 계절 판단 불가 (시장 데이터 사용 불가) — 안전을 위해 리밸런싱 중단"
+                    "error": "시장 국면 판단 불가 (시장 데이터 사용 불가) — 안전을 위해 리밸런싱 중단"
                 }
 
-            logger.info(f"목표 시장 계절: {target_market_season}")
-
-            # 3. 목표 자산 배분 계산 (NEUTRAL이면 현재 crypto 비중 유지)
-            current_crypto_weight = self._get_current_crypto_weight(current_portfolio)
-            allocation_weights = self.market_season_filter.get_allocation_weights(
-                target_market_season, current_crypto_weight
-            )
-            logger.info(f"시장 계절별 배분: 암호화폐 {allocation_weights['crypto']:.1%}, KRW {allocation_weights['krw']:.1%}")
+            allocation_weights = allocation_info["weights"]
+            regime_label = allocation_info["label"]
+            logger.info(f"목표 시장 국면: {regime_label}")
+            logger.info(f"국면별 배분: 암호화폐 {allocation_weights['crypto']:.1%}, KRW {allocation_weights['krw']:.1%}")
             
             target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
                 allocation_weights["crypto"],
@@ -596,7 +607,7 @@ class Rebalancer:
                 "rebalance_orders": rebalance_info.get("rebalance_orders", {}),
                 "target_weights": target_weights,
                 "current_weights": current_weights,
-                "market_season": target_market_season.value if target_market_season else "neutral",
+                "market_season": regime_label,
                 "total_orders": len([o for o in rebalance_info.get("rebalance_orders", {}).values() if abs(o["amount_diff_krw"]) > 10000]),
                 "rebalance_summary": rebalance_info.get("rebalance_summary", {}),
                 "timestamp": datetime.now()
@@ -628,22 +639,20 @@ class Rebalancer:
             current_portfolio = self.coinone_client.get_portfolio_value()
             result.total_value_before = current_portfolio["total_krw"]
             
-            # 2. 시장 계절 판단 (필요시)
-            if target_market_season is None:
-                target_market_season = self._get_current_market_season()
+            # 2-3. 국면 판단 및 목표 자산 배분 계산 (legacy/valuation 공통 진입점)
+            allocation_info = self._get_target_allocation(current_portfolio, target_market_season)
 
-            if target_market_season is None:
+            if allocation_info is None:
                 # fail-safe: 시장 판단 불가 시 어떤 주문도 내지 않는다
-                logger.error("🚨 시장 계절 판단 불가 — 분기별 리밸런싱을 중단합니다 (거래 없음)")
+                logger.error("🚨 시장 국면 판단 불가 — 분기별 리밸런싱을 중단합니다 (거래 없음)")
                 result.success = False
-                result.error_message = "시장 계절 판단 불가 (시장 데이터 사용 불가) — 안전을 위해 리밸런싱 중단"
+                result.error_message = "시장 국면 판단 불가 (시장 데이터 사용 불가) — 안전을 위해 리밸런싱 중단"
                 return result
 
-            # 3. 목표 자산 배분 계산 (NEUTRAL이면 현재 crypto 비중 유지)
-            current_crypto_weight = self._get_current_crypto_weight(current_portfolio)
-            allocation_weights = self.market_season_filter.get_allocation_weights(
-                target_market_season, current_crypto_weight
-            )
+            allocation_weights = allocation_info["weights"]
+            regime_label = allocation_info["label"]
+            logger.info(f"목표 시장 국면: {regime_label} — "
+                       f"암호화폐 {allocation_weights['crypto']:.1%} / KRW {allocation_weights['krw']:.1%}")
             target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
                 allocation_weights["crypto"],
                 allocation_weights["krw"],
@@ -686,7 +695,7 @@ class Rebalancer:
             
             result.success = len(crypto_failed) == 0
             result.rebalance_summary = {
-                "market_season": target_market_season.value,
+                "market_season": regime_label,
                 "target_weights": target_weights,
                 "orders_executed": len(result.executed_orders),
                 "orders_failed": len(result.failed_orders),
@@ -761,7 +770,17 @@ class Rebalancer:
             try:
                 amount_krw = abs(order_info["amount_diff_krw"])
                 side = order_info["action"]
-                
+
+                # 클로백 면제: 최근 기회적 매수분은 리밸런싱 매도에서 제외
+                # (급락에 산 물량을 곧바로 되파는 계층 간 왕복 매매 방지)
+                if side == "sell" and self.allocation_arbiter:
+                    adjusted = self.allocation_arbiter.adjust_rebalance_sell(asset, amount_krw)
+                    if adjusted < 10000:  # 최소 거래 금액 미만이면 스킵
+                        logger.info(f"🛡️ {asset}: 클로백 면제로 매도 스킵 "
+                                    f"(원래 {amount_krw:,.0f} KRW → {adjusted:,.0f} KRW)")
+                        continue
+                    amount_krw = adjusted
+
                 logger.info(f"🎯 {asset} 스마트 주문 준비: {side} {amount_krw:,.0f} KRW")
                 
                 # 5. 스마트 주문 파라미터 생성
@@ -986,6 +1005,113 @@ class Rebalancer:
         
         return schedule
     
+    def _get_target_allocation(
+        self,
+        current_portfolio: Dict,
+        target_market_season: Optional[MarketSeason] = None
+    ) -> Optional[Dict]:
+        """
+        국면 모델에 따른 목표 crypto/KRW 배분 산출 (단일 진입점, fail-safe)
+
+        - legacy: 200주 MA 추세추종 (MarketSeasonFilter)
+        - valuation: 가치 앵커 — 저평가 매집/고평가 분배 (MarketValuationFilter)
+
+        Returns:
+            {"weights": {"crypto": x, "krw": y}, "label": 국면 문자열} 또는 None (판단 불가 → 거래 중단)
+        """
+        current_crypto_weight = self._get_current_crypto_weight(current_portfolio)
+
+        if self.regime_model == "valuation":
+            result = self._analyze_valuation_phase(current_crypto_weight)
+            if not result or not result.get("success"):
+                return None
+            return {
+                "weights": result["allocation_weights"],
+                "label": result["valuation_phase"],
+            }
+
+        # legacy 모드
+        season = target_market_season if target_market_season is not None \
+            else self._get_current_market_season()
+        if season is None:
+            return None
+        weights = self.market_season_filter.get_allocation_weights(season, current_crypto_weight)
+        return {"weights": weights, "label": season.value, "season": season}
+
+    def _analyze_valuation_phase(self, current_crypto_weight: Optional[float]) -> Optional[Dict]:
+        """
+        가치 국면(valuation) 분석 실행 및 결과 DB 저장 (다음 사이클 히스테리시스용)
+
+        실데이터(코인원 현재가 + 200주 MA)로만 판단하고, 불가 시 None을 반환한다.
+        """
+        from .market_valuation_filter import phase_from_string
+
+        try:
+            # BTC 현재가 (코인원, KRW)
+            ticker = self.coinone_client.get_ticker("BTC")
+            if not isinstance(ticker, dict) or "data" not in ticker:
+                logger.error("가치 국면 분석 불가: BTC 티커 조회 실패")
+                return None
+            ticker_data = ticker["data"]
+            current_price = (
+                float(ticker_data.get("last", 0)) or
+                float(ticker_data.get("close_24h", 0)) or
+                float(ticker_data.get("close", 0))
+            )
+            if current_price <= 0:
+                logger.error(f"가치 국면 분석 불가: 잘못된 BTC 현재가 ({current_price})")
+                return None
+
+            # 200주 이동평균 (실데이터/캐시만, 실패 시 예외)
+            try:
+                ma_200w, _ = self.market_data_provider.get_btc_200w_ma()
+            except Exception as e:
+                logger.error(f"가치 국면 분석 불가: 200주 MA 조회 실패 ({e})")
+                return None
+
+            # 직전 국면 조회 (히스테리시스)
+            previous_phase = None
+            try:
+                latest = self.db_manager.get_latest_market_analysis()
+                if latest:
+                    previous_phase = phase_from_string(
+                        latest.get("valuation_phase") or latest.get("market_season")
+                    )
+            except Exception as e:
+                logger.warning(f"직전 국면 조회 실패 (최초 실행으로 간주): {e}")
+
+            result = self.valuation_filter.analyze(
+                current_price=current_price,
+                ma_200w=ma_200w,
+                previous_phase=previous_phase,
+                current_crypto_weight=current_crypto_weight,
+            )
+
+            # 성공 시 DB 저장 (다음 사이클의 previous_phase 소스)
+            if result.get("success"):
+                try:
+                    self.db_manager.save_market_analysis({
+                        "analysis_date": result["analysis_date"],
+                        "market_season": result["valuation_phase"],
+                        "valuation_phase": result["valuation_phase"],
+                        "allocation_weights": result["allocation_weights"],
+                        "season_changed": result.get("phase_changed", False),
+                        "analysis_info": {
+                            "current_price": current_price,
+                            "ma_200w": ma_200w,
+                            "price_ratio": result.get("price_ratio"),
+                        },
+                        "success": True,
+                    })
+                except Exception as e:
+                    logger.warning(f"가치 국면 분석 결과 저장 실패: {e}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"가치 국면 분석 실패: {e}")
+            return None
+
     def _get_current_crypto_weight(self, current_portfolio: Dict) -> Optional[float]:
         """현재 포트폴리오의 암호화폐 총 비중 계산 (NEUTRAL 시 '기존 비중 유지'용)"""
         try:

@@ -988,6 +988,85 @@ class DatabaseManager:
             logger.error(f"최근 기회적 매수 기록 조회 실패: {e}")
             return []
 
+    def save_opportunistic_sell_record(self, record: Dict):
+        """기회적 매도(익절) 기록 저장"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS opportunistic_sells (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        asset TEXT NOT NULL,
+                        quantity REAL,
+                        amount_krw REAL NOT NULL,
+                        price REAL NOT NULL,
+                        sell_level TEXT,
+                        rally_from_30d_low REAL,
+                        rsi REAL,
+                        fear_greed_index REAL,
+                        price_to_ma200w_ratio REAL,
+                        order_id TEXT,
+                        status TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                cursor.execute("""
+                    INSERT INTO opportunistic_sells (
+                        timestamp, asset, quantity, amount_krw, price, sell_level,
+                        rally_from_30d_low, rsi, fear_greed_index, price_to_ma200w_ratio,
+                        order_id, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record["timestamp"].isoformat(),
+                    record["asset"],
+                    record.get("quantity"),
+                    record["amount_krw"],
+                    record["price"],
+                    record.get("sell_level"),
+                    record.get("rally_from_30d_low"),
+                    record.get("rsi"),
+                    record.get("fear_greed_index"),
+                    record.get("price_to_ma200w_ratio"),
+                    record.get("order_id"),
+                    record.get("status", "executed")
+                ))
+
+                conn.commit()
+                logger.info(f"기회적 매도 기록 저장 완료: {record['asset']} - {record['amount_krw']:,.0f} KRW")
+
+        except Exception as e:
+            logger.error(f"기회적 매도 기록 저장 실패: {e}")
+
+    def get_recent_opportunistic_sells(self, days: int = 7) -> List[Dict]:
+        """최근 기회적 매도 기록 조회 (재시작 시 중복매도 방지 이력 복원용)"""
+        try:
+            cutoff = datetime.now() - timedelta(days=days)
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='opportunistic_sells'
+                """)
+                if not cursor.fetchone():
+                    return []
+
+                cursor.execute("""
+                    SELECT timestamp, asset, quantity, amount_krw, price, sell_level, status
+                    FROM opportunistic_sells
+                    WHERE timestamp > ? AND status = 'executed'
+                    ORDER BY timestamp DESC
+                """, (cutoff.isoformat(),))
+
+                return [dict(row) for row in cursor.fetchall()]
+
+        except Exception as e:
+            logger.error(f"최근 기회적 매도 기록 조회 실패: {e}")
+            return []
+
     def get_market_data(self, asset: str, days: int = 30) -> pd.DataFrame:
         """
         시장 데이터 조회 (가격 데이터) - Binance 데이터 사용

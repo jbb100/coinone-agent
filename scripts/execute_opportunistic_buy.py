@@ -104,19 +104,56 @@ async def main():
         fng = strategy.get('current_fear_greed')
         logger.info(f"공포탐욕 지수: {f'{fng:.1f}' if fng is not None else '데이터 없음'}")
         
-        # 매수 기회 식별
+        # 매수 기회 식별 (반환값: (기회 목록, 기회 없는 이유))
         target_assets = strategy.get("target_assets", ["BTC", "ETH", "SOL", "AVAX"])
-        opportunities = opportunistic_buyer.identify_opportunities(target_assets)
-        
+        opportunities, no_opportunity_reasons = opportunistic_buyer.identify_opportunities(target_assets)
+
         if not opportunities:
             logger.info("현재 매수 기회가 없습니다")
+            for asset, reason in no_opportunity_reasons.items():
+                logger.info(f"  {asset}: {reason}")
             return
-        
+
         logger.info(f"총 {len(opportunities)}개의 매수 기회 발견")
-        
-        # 매수 실행
+
+        # 매수 한도: 현금 전략 + 배분 조정자 밴드 (매수 후 crypto 비중이 밴드 상단을 넘지 않도록)
         max_buy_amount = available_cash * strategy.get("cash_deploy_ratio", 0.2)
-        
+
+        try:
+            from src.core.allocation_arbiter import AllocationArbiter
+
+            total_value = portfolio.get("total_krw", 0)
+            crypto_value = sum(
+                float(info.get("value_krw", 0) or 0)
+                for asset, info in portfolio.get("assets", {}).items()
+                if asset != "KRW" and isinstance(info, dict)
+            )
+
+            # 목표 crypto 비중: DB의 최근 국면 분석 결과 (없으면 중립 50%)
+            target_crypto_weight = 0.50
+            latest = db_manager.get_latest_market_analysis()
+            if latest:
+                allocation = latest.get("allocation_weights") or {}
+                if allocation.get("crypto"):
+                    target_crypto_weight = float(allocation["crypto"])
+
+            arbiter = AllocationArbiter(
+                db_manager=db_manager,
+                band_width=config.get("strategy.arbiter.band_width", 0.08),
+            )
+            band_limit = arbiter.max_opportunistic_buy(
+                total_value_krw=total_value,
+                crypto_value_krw=crypto_value,
+                target_crypto_weight=target_crypto_weight,
+            )
+            max_buy_amount = min(max_buy_amount, band_limit)
+
+            if max_buy_amount < 10000:
+                logger.info("허용 밴드 내 매수 여력이 없어 종료합니다.")
+                return
+        except Exception as e:
+            logger.warning(f"배분 조정자 한도 계산 실패 (현금 전략 한도만 적용): {e}")
+
         results = opportunistic_buyer.execute_opportunistic_buys(
             opportunities=opportunities,
             available_cash=available_cash,
