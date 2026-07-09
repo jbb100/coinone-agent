@@ -6,7 +6,7 @@ Binance API를 통한 히스토리컬 데이터 제공자
 
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional
 from binance.client import Client
 import nest_asyncio
 nest_asyncio.apply()  # 중첩된 이벤트 루프 허용
@@ -184,50 +184,6 @@ class BinanceDataProvider:
         except Exception as e:
             logger.error(f"BTC 데이터 수집 실패: {e}")
             return pd.DataFrame()
-    
-    def get_multi_timeframe_data(self, symbol: str = "BTCUSDT") -> Dict[str, pd.DataFrame]:
-        """
-        멀티 타임프레임 분석을 위한 데이터 수집
-        
-        Args:
-            symbol: 거래 심볼
-            
-        Returns:
-            타임프레임별 데이터 딕셔너리
-        """
-        try:
-            data = {}
-            
-            # 단기: 30일 일간 데이터
-            data['short'] = self.get_historical_klines(
-                symbol=symbol,
-                interval="1d",
-                start_date=datetime.now() - timedelta(days=30),
-                limit=30
-            )
-            
-            # 중기: 1년 일간 데이터
-            data['medium'] = self.get_historical_klines(
-                symbol=symbol,
-                interval="1d", 
-                start_date=datetime.now() - timedelta(days=365),
-                limit=365
-            )
-            
-            # 장기: 4년 주간 데이터
-            data['long'] = self.get_historical_klines(
-                symbol=symbol,
-                interval="1w",
-                start_date=datetime.now() - timedelta(weeks=208),
-                limit=208
-            )
-            
-            logger.info(f"멀티 타임프레임 데이터 수집 완료: {len(data)}개 타임프레임")
-            return data
-            
-        except Exception as e:
-            logger.error(f"멀티 타임프레임 데이터 수집 실패: {e}")
-            return None
     
     def convert_usdt_to_krw(
         self,
