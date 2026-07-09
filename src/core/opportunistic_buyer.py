@@ -36,7 +36,7 @@ class BuyOpportunity:
     price_drop_7d: float      # 7일 대비 하락률
     price_drop_30d: float     # 30일 대비 하락률
     rsi: float                # RSI 지표
-    fear_greed_index: float   # 공포탐욕 지수
+    fear_greed_index: Optional[float]  # 공포탐욕 지수 (실데이터 없으면 None)
     opportunity_level: OpportunityLevel
     recommended_buy_ratio: float  # 현금 대비 매수 추천 비율
     confidence_score: float   # 신뢰도 점수 (0-1)
@@ -60,7 +60,8 @@ class OpportunisticBuyer:
         order_manager = None,  # 추가: OrderManager 의존성
         cash_reserve_ratio: float = 0.15,  # 기본 현금 보유 비율
         min_opportunity_threshold: float = 0.05,  # 최소 기회 임계값 (5% 하락)
-        max_buy_per_opportunity: float = 0.3  # 기회당 최대 매수 비율
+        max_buy_per_opportunity: float = 0.3,  # 기회당 최대 매수 비율
+        fear_greed_provider = None  # 실제 공포탐욕지수 제공자
     ):
         """
         Args:
@@ -70,6 +71,7 @@ class OpportunisticBuyer:
             cash_reserve_ratio: 현금 보유 비율
             min_opportunity_threshold: 최소 매수 기회 임계값
             max_buy_per_opportunity: 기회당 최대 매수 비율
+            fear_greed_provider: 실제 공포탐욕지수 제공자 (없으면 공포탐욕 조건 미적용)
         """
         self.coinone_client = coinone_client
         self.db_manager = db_manager
@@ -77,20 +79,48 @@ class OpportunisticBuyer:
         self.cash_reserve_ratio = cash_reserve_ratio
         self.min_opportunity_threshold = min_opportunity_threshold
         self.max_buy_per_opportunity = max_buy_per_opportunity
-        
-        # 매수 기회 레벨별 설정
+        self.fear_greed_provider = fear_greed_provider
+
+        # 매수 기회 레벨별 설정 (drop: N일 고점 대비 하락률)
         self.opportunity_thresholds = {
             OpportunityLevel.MINOR: {"drop": 0.05, "buy_ratio": 0.1},
             OpportunityLevel.MODERATE: {"drop": 0.10, "buy_ratio": 0.2},
             OpportunityLevel.MAJOR: {"drop": 0.20, "buy_ratio": 0.3},
             OpportunityLevel.EXTREME: {"drop": 0.30, "buy_ratio": 0.4}
         }
-        
-        # 최근 매수 이력 (중복 매수 방지)
-        self.recent_buys: Dict[str, datetime] = {}
+
+        # 최근 매수 이력 (중복 매수 방지) - DB에서 복원 (재시작 시에도 유지)
         self.min_buy_interval_hours = 4  # 동일 자산 최소 매수 간격
-        
+        self.rebuy_drop_threshold = 0.03  # 재매수 조건: 직전 매수가 대비 추가 -3% 하락
+        self.recent_buys: Dict[str, datetime] = {}
+        self.last_buy_prices: Dict[str, float] = {}
+        self._load_recent_buys_from_db()
+
         logger.info(f"OpportunisticBuyer 초기화 완료 (현금 보유: {cash_reserve_ratio:.1%})")
+
+    def _load_recent_buys_from_db(self, days: int = 7):
+        """DB에서 최근 기회적 매수 이력 복원 (프로세스 재시작 시 중복매수 방지 유지)"""
+        try:
+            records = self.db_manager.get_recent_opportunistic_buys(days=days)
+            for record in records:
+                asset = record.get("asset")
+                if not asset:
+                    continue
+                buy_time = record.get("timestamp")
+                if isinstance(buy_time, str):
+                    buy_time = datetime.fromisoformat(buy_time)
+                price = record.get("price")
+
+                # 자산별 가장 최근 매수만 유지
+                if asset not in self.recent_buys or buy_time > self.recent_buys[asset]:
+                    self.recent_buys[asset] = buy_time
+                    if price:
+                        self.last_buy_prices[asset] = float(price)
+
+            if self.recent_buys:
+                logger.info(f"최근 기회적 매수 이력 {len(self.recent_buys)}건 복원")
+        except Exception as e:
+            logger.warning(f"기회적 매수 이력 복원 실패 (신규 이력으로 시작): {e}")
     
     def calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
         """
@@ -117,33 +147,24 @@ class OpportunisticBuyer:
             logger.error(f"RSI 계산 실패: {e}")
             return 50.0  # 중립값 반환
     
-    def get_fear_greed_index(self) -> float:
+    def get_fear_greed_index(self) -> Optional[float]:
         """
-        공포탐욕 지수 조회 (외부 API 또는 자체 계산)
-        
+        실제 공포탐욕 지수 조회 (alternative.me)
+
+        변동성 등으로 "추정한 가짜 지수"를 만들지 않는다.
+        조회 불가 시 None을 반환하며, 이 경우 공포탐욕 관련 조건/보너스는 적용되지 않는다.
+
         Returns:
-            공포탐욕 지수 (0-100, 0=극도의 공포, 100=극도의 탐욕)
+            공포탐욕 지수 (0-100, 0=극도의 공포, 100=극도의 탐욕) 또는 None
         """
         try:
-            # 실제 구현 시 alternative.me API 등 활용
-            # 여기서는 간단한 시뮬레이션
-            btc_data = self.db_manager.get_market_data("BTC", days=7)
-            if btc_data.empty:
-                return 50.0
-            
-            # 변동성 기반 간단한 공포지수 계산
-            volatility = btc_data['Close'].pct_change().std()
-            price_change_7d = (btc_data['Close'].iloc[-1] / btc_data['Close'].iloc[0]) - 1
-            
-            # 하락 + 높은 변동성 = 공포
-            fear_score = 50 - (price_change_7d * 100) - (volatility * 200)
-            fear_score = max(0, min(100, fear_score))
-            
-            return fear_score
-            
+            if self.fear_greed_provider:
+                value = self.fear_greed_provider.get_index()
+                return float(value) if value is not None else None
+            return None
         except Exception as e:
             logger.error(f"공포탐욕 지수 조회 실패: {e}")
-            return 50.0
+            return None
     
     def identify_opportunities(self, assets: List[str]) -> tuple[List[BuyOpportunity], Dict[str, str]]:
         """
@@ -174,10 +195,13 @@ class OpportunisticBuyer:
                 current_price = price_data_7d['Close'].iloc[-1]
                 avg_price_7d = price_data_7d['Close'].mean()
                 avg_price_30d = price_data_30d['Close'].mean()
-                
-                # 하락률 계산
-                price_drop_7d = (current_price / avg_price_7d) - 1
-                price_drop_30d = (current_price / avg_price_30d) - 1
+
+                # 하락률 계산: 기간 내 "고점 대비" 하락률 (평균 대비가 아님 —
+                # 평균 대비는 완만한 하락장에서 과도하게 자주 트리거됨)
+                high_7d = price_data_7d['Close'].max()
+                high_30d = price_data_30d['Close'].max()
+                price_drop_7d = (current_price / high_7d) - 1 if high_7d > 0 else 0.0
+                price_drop_30d = (current_price / high_30d) - 1 if high_30d > 0 else 0.0
                 
                 # RSI 계산
                 rsi = self.calculate_rsi(price_data_30d['Close'])
@@ -217,11 +241,13 @@ class OpportunisticBuyer:
                 else:
                     # 매수 기회가 없는 이유 분석
                     reasons = []
-                    if price_drop_7d > -0.05:  # 7일간 5% 이상 하락하지 않음
-                        reasons.append(f"7일 하락률 부족 ({price_drop_7d:.1%})")
+                    if price_drop_7d > -0.05:  # 7일 고점 대비 5% 이상 하락하지 않음
+                        reasons.append(f"7일 고점 대비 하락률 부족 ({price_drop_7d:.1%})")
                     if rsi > 30:  # RSI가 과매도 구간이 아님
                         reasons.append(f"RSI 과매도 아님 ({rsi:.1f})")
-                    if fear_greed > 25:  # 공포 지수가 충분히 낮지 않음
+                    if fear_greed is None:
+                        reasons.append("공포지수 데이터 없음")
+                    elif fear_greed > 25:  # 공포 지수가 충분히 낮지 않음
                         reasons.append(f"공포지수 높음 ({fear_greed:.0f})")
                     
                     if not reasons:
@@ -240,33 +266,33 @@ class OpportunisticBuyer:
         return opportunities, no_opportunity_reasons
     
     def _determine_opportunity_level(
-        self, 
-        drop_7d: float, 
-        drop_30d: float, 
-        rsi: float, 
-        fear_greed: float
+        self,
+        drop_7d: float,
+        drop_30d: float,
+        rsi: float,
+        fear_greed: Optional[float]
     ) -> OpportunityLevel:
         """
         매수 기회 수준 판단
-        
+
         Args:
-            drop_7d: 7일 하락률
-            drop_30d: 30일 하락률
+            drop_7d: 7일 고점 대비 하락률
+            drop_30d: 30일 고점 대비 하락률
             rsi: RSI 지표
-            fear_greed: 공포탐욕 지수
-            
+            fear_greed: 공포탐욕 지수 (None이면 실데이터 없음 — 공포 조건 미적용)
+
         Returns:
             기회 수준
         """
         # 주요 지표 종합 평가
         max_drop = min(drop_7d, drop_30d)  # 더 큰 하락률 사용
-        
+
         # RSI 과매도 구간 (30 이하)
         rsi_oversold = rsi < 30
-        
-        # 극도의 공포 구간 (25 이하)
-        extreme_fear = fear_greed < 25
-        
+
+        # 극도의 공포 구간 (25 이하) — 실데이터가 있을 때만 판정
+        extreme_fear = fear_greed is not None and fear_greed < 25
+
         # 기회 수준 판단
         if max_drop <= -0.30 and (rsi_oversold or extreme_fear):
             return OpportunityLevel.EXTREME
@@ -280,10 +306,10 @@ class OpportunisticBuyer:
             return OpportunityLevel.NONE
     
     def _calculate_buy_ratio(
-        self, 
+        self,
         level: OpportunityLevel,
         rsi: float,
-        fear_greed: float
+        fear_greed: Optional[float]
     ) -> float:
         """
         매수 비율 계산
@@ -297,12 +323,12 @@ class OpportunisticBuyer:
             현금 대비 매수 비율
         """
         base_ratio = self.opportunity_thresholds[level]["buy_ratio"]
-        
+
         # RSI 조정 (과매도일수록 비율 증가)
         rsi_adjustment = max(0, (30 - rsi) / 100)  # RSI 30 이하에서 보너스
-        
-        # 공포지수 조정 (공포가 클수록 비율 증가)
-        fear_adjustment = max(0, (25 - fear_greed) / 100)  # 극도의 공포에서 보너스
+
+        # 공포지수 조정 (공포가 클수록 비율 증가) — 실데이터 없으면 보너스 없음
+        fear_adjustment = max(0, (25 - fear_greed) / 100) if fear_greed is not None else 0.0
         
         # 최종 비율 계산 (보너스는 추가로 더함)
         final_ratio = base_ratio + (base_ratio * (rsi_adjustment + fear_adjustment))
@@ -318,7 +344,7 @@ class OpportunisticBuyer:
         drop_7d: float,
         drop_30d: float,
         rsi: float,
-        fear_greed: float
+        fear_greed: Optional[float]
     ) -> float:
         """
         신뢰도 점수 계산
@@ -333,18 +359,19 @@ class OpportunisticBuyer:
             신뢰도 점수 (0-1)
         """
         scores = []
-        
+
         # 하락폭 점수
         drop_score = min(abs(min(drop_7d, drop_30d)) / 0.3, 1.0)
         scores.append(drop_score)
-        
+
         # RSI 점수 (과매도일수록 높음)
         rsi_score = max(0, (50 - rsi) / 50)
         scores.append(rsi_score)
-        
-        # 공포지수 점수
-        fear_score = max(0, (50 - fear_greed) / 50)
-        scores.append(fear_score)
+
+        # 공포지수 점수 (실데이터 있을 때만 반영)
+        if fear_greed is not None:
+            fear_score = max(0, (50 - fear_greed) / 50)
+            scores.append(fear_score)
         
         # 7일과 30일 하락률 일관성
         consistency_score = 1 - abs(drop_7d - drop_30d) / 0.2
@@ -380,18 +407,18 @@ class OpportunisticBuyer:
         # 최대 매수 금액 설정
         if max_total_buy is None:
             max_total_buy = available_cash * 0.5  # 기본적으로 현금의 50%까지만 사용
-        
-        remaining_budget = min(available_cash, max_total_buy)
-        
+
+        total_budget = min(available_cash, max_total_buy)
+        remaining_budget = total_budget
+
         for opportunity in opportunities:
-            # 최근 매수 이력 확인
-            if self._is_recently_bought(opportunity.asset):
-                logger.info(f"⏭️ {opportunity.asset}: 최근 매수 이력 있음, 건너뜀")
+            # 최근 매수 이력 확인 (시간 간격 + 직전 매수가 대비 추가 하락 조건)
+            if not self._can_rebuy(opportunity.asset, opportunity.current_price):
                 continue
-            
-            # 매수 금액 계산
+
+            # 매수 금액 계산: 전체 예산 기준 레벨별 비율 (선순위 기회의 예산 독식 방지)
             buy_amount = min(
-                remaining_budget * opportunity.recommended_buy_ratio,
+                total_budget * opportunity.recommended_buy_ratio,
                 remaining_budget
             )
             
@@ -419,12 +446,19 @@ class OpportunisticBuyer:
                 
                 min_limit = min_order_quantities.get(opportunity.asset, 0.0001)
                 max_limit = max_order_limits.get(opportunity.asset, 1.0)
-                
-                # 수량 조정
-                final_quantity = max(min_limit, min(calculated_quantity, max_limit))
-                
+
+                # 최소 주문량 미달 시 스킵 (상향 조정하면 예산을 초과 매수하게 됨 — 금지)
+                if calculated_quantity < min_limit:
+                    logger.info(f"⚠️ {opportunity.asset}: 계산 수량 {calculated_quantity:.8f} < "
+                                f"최소 주문량 {min_limit} — 건너뜀")
+                    continue
+
+                # 최대 주문량 상한만 적용
+                final_quantity = min(calculated_quantity, max_limit)
+
                 if final_quantity != calculated_quantity:
-                    logger.info(f"📊 {opportunity.asset} 주문량 조정: {calculated_quantity:.8f} → {final_quantity:.8f}")
+                    logger.info(f"📊 {opportunity.asset} 주문량 상한 조정: {calculated_quantity:.8f} → {final_quantity:.8f}")
+                    buy_amount = final_quantity * opportunity.current_price
                 
                 # 매수 주문 실행 (분할 매수와 동일한 방식)
                 if self.order_manager:
@@ -470,9 +504,10 @@ class OpportunisticBuyer:
                     
                     results["total_invested"] += buy_amount
                     remaining_budget -= buy_amount
-                    
-                    # 매수 이력 기록
+
+                    # 매수 이력 기록 (가격 포함 — 재매수 조건 판단용)
                     self.recent_buys[opportunity.asset] = datetime.now()
+                    self.last_buy_prices[opportunity.asset] = opportunity.current_price
                     
                     logger.info(f"✅ {opportunity.asset} 기회적 매수 실행: {buy_amount:,.0f} KRW")
                     
@@ -507,20 +542,47 @@ class OpportunisticBuyer:
     def _is_recently_bought(self, asset: str) -> bool:
         """
         최근 매수 여부 확인
-        
+
         Args:
             asset: 자산 심볼
-            
+
         Returns:
             최근 매수 여부
         """
         if asset not in self.recent_buys:
             return False
-        
+
         last_buy_time = self.recent_buys[asset]
         time_since_buy = datetime.now() - last_buy_time
-        
+
         return time_since_buy < timedelta(hours=self.min_buy_interval_hours)
+
+    def _can_rebuy(self, asset: str, current_price: float) -> bool:
+        """
+        재매수 가능 여부 판단
+
+        조건: ① 최소 매수 간격(4시간) 경과 AND
+              ② 직전 매수가 대비 추가 하락(-3%) 발생 (지속 하락장에서 현금 소진 방지)
+
+        직전 매수 이력이 없으면 항상 True.
+        """
+        if self._is_recently_bought(asset):
+            logger.info(f"⏭️ {asset}: 최근 {self.min_buy_interval_hours}시간 내 매수 이력 있음, 건너뜀")
+            return False
+
+        # 추가 하락 조건은 직전 매수 후 72시간 이내에만 적용
+        # (그 이후는 새로운 하락 국면으로 간주하고 시간 간격 조건만 적용)
+        last_buy_time = self.recent_buys.get(asset)
+        if last_buy_time and (datetime.now() - last_buy_time) < timedelta(hours=72):
+            last_price = self.last_buy_prices.get(asset)
+            if last_price and last_price > 0:
+                required_price = last_price * (1 - self.rebuy_drop_threshold)
+                if current_price > required_price:
+                    logger.info(f"⏭️ {asset}: 직전 매수가({last_price:,.0f}) 대비 추가 하락 부족 "
+                                f"(현재 {current_price:,.0f} > 기준 {required_price:,.0f}), 건너뜀")
+                    return False
+
+        return True
     
     def _record_opportunistic_buy(
         self, 
@@ -578,8 +640,16 @@ class OpportunisticBuyer:
                 btc_trend = 0
                 btc_volatility = 0.02
             
-            # 전략 결정
-            if fear_greed < 25:  # 극도의 공포
+            # 전략 결정 (공포탐욕 실데이터 없으면 중립 처리)
+            if fear_greed is None:
+                strategy = {
+                    "mode": "balanced",
+                    "description": "공포탐욕지수 데이터 없음 - 중립 접근",
+                    "cash_deploy_ratio": 0.2,
+                    "target_assets": ["BTC", "ETH"],
+                    "buy_trigger": -0.10
+                }
+            elif fear_greed < 25:  # 극도의 공포
                 strategy = {
                     "mode": "aggressive_buying",
                     "description": "극도의 공포 구간 - 적극적 매수",

@@ -82,12 +82,18 @@ class DCAPlus:
     시장 상황을 고려한 지능형 적립식 투자 시스템
     """
     
-    def __init__(self, market_data_provider: Optional[MarketDataProvider] = None):
+    def __init__(
+        self,
+        market_data_provider: Optional[MarketDataProvider] = None,
+        fear_greed_provider=None
+    ):
         """
         Args:
             market_data_provider: 시장 데이터 제공자
+            fear_greed_provider: 실제 공포탐욕지수 제공자 (없으면 공포탐욕 조정 미적용)
         """
         self.market_data_provider = market_data_provider
+        self.fear_greed_provider = fear_greed_provider
         
         # 기본 설정
         self.default_schedule = DCASchedule(
@@ -111,9 +117,9 @@ class DCAPlus:
             tax_optimization=True
         )
         
-        # 기술적 분석 임계값들
+        # 기술적 분석 임계값들 (가격/거래량 등 실데이터 기반 지표만 사용)
+        # NOTE: BTC 도미넌스는 실제 데이터 소스가 없어(하드코딩 값이었음) 제거됨
         self.accumulation_thresholds = {
-            "btc_dominance_min": 0.65,      # BTC 도미넌스 65% 이상
             "rsi_weekly_max": 35,           # 주간 RSI 35 이하
             "ma_deviation_min": -0.25,      # 200주 MA 대비 -25% 이하
             "volume_surge_min": 1.5         # 거래량 1.5배 이상 증가
@@ -143,15 +149,20 @@ class DCAPlus:
             logger.info(f"DCA 신호 계산: {asset}, 기본금액 {base_amount:,.0f} KRW")
             
             # 시장 상황 분석 및 배수 계산
-            fear_greed_index = market_conditions.get("fear_greed_index", 50)
+            # fear_greed_index가 None이면 실데이터를 얻지 못한 것 → 중립 처리 (추정치 생성 금지)
+            fear_greed_index = market_conditions.get("fear_greed_index")
             price_volatility = market_conditions.get("price_volatility", 0.03)
             trend_direction = market_conditions.get("trend_direction", "neutral")
-            
-            # 공포/탐욕 지수 기반 배수
-            if fear_greed_index <= 25:  # 극도의 공포
+
+            # 공포/탐욕 지수 기반 배수 (FearGreedLevel enum 구간과 일치: 25/45/55/75)
+            if fear_greed_index is None:
+                fear_greed_multiplier = 1.0
+                fear_greed_level = FearGreedLevel.NEUTRAL
+                fear_greed_index = 50  # 로깅/기록용 중립값 (조정에는 미사용)
+            elif fear_greed_index <= 25:  # 극도의 공포
                 fear_greed_multiplier = 3.0
                 fear_greed_level = FearGreedLevel.EXTREME_FEAR
-            elif fear_greed_index <= 40:  # 공포
+            elif fear_greed_index <= 45:  # 공포
                 fear_greed_multiplier = 2.0
                 fear_greed_level = FearGreedLevel.FEAR
             elif fear_greed_index <= 55:  # 중립
@@ -191,11 +202,12 @@ class DCAPlus:
             recommended_amount = base_amount * market_adjustment_factor
             
             # 신호 강도 계산 (0.0 - 1.0)
-            # 공포일수록, 변동성이 클수록, 하락장일수록 강한 신호
+            # 공포일수록, 변동성이 클수록, 하락장일수록 강한 신호 (각 성분 0-1 정규화 후 가중합)
+            trend_score = 1.0 if trend_direction == "down" else 0.0 if trend_direction == "up" else 0.5
             signal_strength = min(1.0, (
                 (100 - fear_greed_index) / 100 * 0.4 +  # 공포 지수 (역방향)
                 min(price_volatility / 0.1, 1.0) * 0.3 +  # 변동성
-                (1.3 if trend_direction == "down" else 0.8 if trend_direction == "up" else 1.0) * 0.3
+                trend_score * 0.3
             ))
             
             # 다음 실행 일자 계산 (기본 주간 DCA)
@@ -259,43 +271,52 @@ class DCAPlus:
         self,
         schedule: DCASchedule,
         market_data: Dict[str, pd.DataFrame],
-        current_date: datetime = None
+        current_date: datetime = None,
+        month_spent_krw: float = 0.0
     ) -> Dict[str, DCAEvent]:
         """
         DCA+ 매수 금액 계산
-        
+
         Args:
             schedule: DCA 스케줄
             market_data: 시장 데이터
             current_date: 기준 날짜
-            
+            month_spent_krw: 당월 기집행 DCA 금액 (월 한도 계산용 — 호출부가 DB에서 조회해 전달)
+
         Returns:
             자산별 DCA 이벤트
         """
         try:
             if current_date is None:
                 current_date = datetime.now()
-                
+
             logger.info(f"DCA+ 매수 금액 계산: {current_date.strftime('%Y-%m-%d')}")
-            
+
             dca_events = {}
-            
+
             # 시장 상황 분석
             market_analysis = self._analyze_market_conditions(market_data, current_date)
-            
+
             # 기본 매수 금액 (주기별 분할)
             base_amount = schedule.base_amount_krw * (schedule.frequency_days / 30)  # 월 기준을 주기별로 변환
-            
+
             # 전체 시장 배수 계산
             overall_multiplier = self._calculate_overall_multiplier(
                 schedule, market_analysis, current_date
             )
-            
-            # 월간 한도 체크
-            monthly_total = base_amount * overall_multiplier
-            if monthly_total > schedule.max_monthly_amount:
-                overall_multiplier = schedule.max_monthly_amount / base_amount
-                logger.warning(f"월간 한도 적용: {overall_multiplier:.2f}x")
+
+            # 월간 한도 체크: 당월 누적 집행액 + 이번 집행액이 한도를 넘지 않도록 배수 조정
+            remaining_monthly_budget = schedule.max_monthly_amount - month_spent_krw
+            if remaining_monthly_budget <= 0:
+                logger.warning(f"월간 한도 소진: 기집행 {month_spent_krw:,.0f} KRW "
+                               f">= 한도 {schedule.max_monthly_amount:,.0f} KRW — 이번 DCA 스킵")
+                return {}
+
+            planned_total = base_amount * overall_multiplier
+            if planned_total > remaining_monthly_budget:
+                overall_multiplier = remaining_monthly_budget / base_amount
+                logger.warning(f"월간 잔여 한도 적용: {overall_multiplier:.2f}x "
+                               f"(잔여 {remaining_monthly_budget:,.0f} KRW)")
             
             # 자산별 DCA 이벤트 생성
             for asset, weight in schedule.assets.items():
@@ -341,41 +362,42 @@ class DCAPlus:
             return {}
     
     def _analyze_market_conditions(self, market_data: Dict[str, pd.DataFrame], date: datetime) -> Dict[str, Any]:
-        """시장 상황 종합 분석"""
+        """시장 상황 종합 분석 (가격/거래량 실데이터 + 실제 공포탐욕지수만 사용)"""
         analysis = {
             "volatility_score": 0.5,
             "fear_greed_level": FearGreedLevel.NEUTRAL,
+            "fear_greed_index": None,
             "accumulation_signal": AccumulationSignal.NONE,
-            "btc_dominance": 0.5,
             "market_trend": "sideways",
             "volume_profile": "normal"
         }
-        
+
         try:
+            # 실제 공포탐욕지수 조회 (불가 시 None → 중립 처리, RSI 등으로 추정하지 않음)
+            if self.fear_greed_provider:
+                fng = self.fear_greed_provider.get_index()
+                if fng is not None:
+                    analysis["fear_greed_index"] = fng
+                    if fng <= 25:
+                        analysis["fear_greed_level"] = FearGreedLevel.EXTREME_FEAR
+                    elif fng <= 45:
+                        analysis["fear_greed_level"] = FearGreedLevel.FEAR
+                    elif fng <= 55:
+                        analysis["fear_greed_level"] = FearGreedLevel.NEUTRAL
+                    elif fng <= 75:
+                        analysis["fear_greed_level"] = FearGreedLevel.GREED
+                    else:
+                        analysis["fear_greed_level"] = FearGreedLevel.EXTREME_GREED
+
             # BTC 데이터 분석 (대표 지표로 사용)
             if "BTC" in market_data and len(market_data["BTC"]) > 30:
                 btc_data = market_data["BTC"]
-                
+
                 # 변동성 점수 계산 (최근 30일)
                 recent_returns = btc_data['Close'].tail(30).pct_change().dropna()
                 volatility = recent_returns.std() * np.sqrt(365)  # 연화 변동성
                 analysis["volatility_score"] = min(volatility / 1.0, 2.0)  # 0-2 스케일
-                
-                # 공포/탐욕 지수 추정 (RSI 기반)
-                rsi = self._calculate_rsi(btc_data['Close'].tail(60))
-                if len(rsi) > 0:
-                    current_rsi = rsi.iloc[-1]
-                    if current_rsi <= 25:
-                        analysis["fear_greed_level"] = FearGreedLevel.EXTREME_FEAR
-                    elif current_rsi <= 40:
-                        analysis["fear_greed_level"] = FearGreedLevel.FEAR
-                    elif current_rsi <= 55:
-                        analysis["fear_greed_level"] = FearGreedLevel.NEUTRAL
-                    elif current_rsi <= 75:
-                        analysis["fear_greed_level"] = FearGreedLevel.GREED
-                    else:
-                        analysis["fear_greed_level"] = FearGreedLevel.EXTREME_GREED
-                
+
                 # 축적 신호 분석
                 accumulation_score = self._calculate_accumulation_score(btc_data)
                 if accumulation_score >= 0.8:
@@ -449,42 +471,35 @@ class DCAPlus:
             AccumulationSignal.EXTREME: 1.5
         }
         accumulation_multiplier = accumulation_multipliers[accumulation_signal]
-        
-        # 4. 시즌별 조정 (연말, 보너스 시즌 등)
-        seasonal_multiplier = self._calculate_seasonal_multiplier(current_date)
-        
+
         # 전체 배수 계산 (곱셈이 아닌 가중 평균으로 극단적 값 방지)
+        # NOTE: "계절 배수"(연말/연초 등 임의 가정)는 실데이터 기반이 아니어서 제거됨
         components = [
             (volatility_multiplier, 0.3),
             (fear_greed_multiplier, 0.4),
-            (accumulation_multiplier, 0.2),
-            (seasonal_multiplier, 0.1)
+            (accumulation_multiplier, 0.3)
         ]
-        
+
         weighted_multiplier = sum(mult * weight for mult, weight in components)
-        
+
         # 최종 배수 제한 (0.2x ~ 3.0x)
         final_multiplier = max(0.2, min(3.0, weighted_multiplier))
-        
+
         logger.debug(f"배수 계산: 변동성 {volatility_multiplier:.1f}, 공포탐욕 {fear_greed_multiplier:.1f}, "
-                    f"축적 {accumulation_multiplier:.1f}, 계절 {seasonal_multiplier:.1f} → 최종 {final_multiplier:.1f}")
-        
+                    f"축적 {accumulation_multiplier:.1f} → 최종 {final_multiplier:.1f}")
+
         return final_multiplier
     
     def _calculate_accumulation_score(self, price_data: pd.DataFrame) -> float:
-        """축적 구간 점수 계산 (0-1)"""
+        """축적 구간 점수 계산 (0-1)
+
+        가격/거래량 실데이터에서 계산 가능한 성분만 사용한다.
+        (BTC 도미넌스는 실제 데이터 소스가 없어 제거됨)
+        """
         try:
             score_components = []
-            
-            # 1. BTC 도미넌스 (가정: 높은 도미넌스 = 축적)
-            # 실제로는 외부 API에서 가져와야 함
-            btc_dominance = 0.6  # 기본값
-            if btc_dominance >= self.accumulation_thresholds["btc_dominance_min"]:
-                score_components.append(0.8)
-            else:
-                score_components.append(0.2)
-            
-            # 2. RSI 기반 과매도
+
+            # 1. RSI 기반 과매도
             rsi = self._calculate_rsi(price_data['Close'].tail(100))
             if len(rsi) > 0:
                 weekly_rsi = rsi.iloc[-7:].mean()  # 주간 평균 RSI
@@ -572,26 +587,6 @@ class DCAPlus:
         except Exception as e:
             logger.error(f"{asset} 자산 분석 실패: {e}")
             return analysis
-    
-    def _calculate_seasonal_multiplier(self, date: datetime) -> float:
-        """계절별/시기별 매수 배수"""
-        month = date.month
-        
-        # 연말 보너스 시즌 (12월)
-        if month == 12:
-            return 1.3
-        
-        # 연초 (1월) - 새해 결심
-        elif month == 1:
-            return 1.2
-        
-        # 중간 배당 시즌 (6월)
-        elif month == 6:
-            return 1.1
-        
-        # 일반 기간
-        else:
-            return 1.0
     
     def _determine_event_type(
         self, 

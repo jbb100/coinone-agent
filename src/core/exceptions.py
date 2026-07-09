@@ -36,6 +36,23 @@ class KairosException(Exception):
         }
 
 
+# Market Data Exceptions
+class MarketDataUnavailableError(KairosException):
+    """시장 데이터 조회/계산 불가 예외
+
+    이 예외가 발생하면 시장 판단을 내리지 않아야 한다.
+    (임의의 기본값으로 대체 금지 — 판단 불가 시 직전 상태 유지 + 거래 중단)
+    """
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message,
+            error_code="MARKET_DATA_UNAVAILABLE",
+            details=details or {},
+            recoverable=True
+        )
+
+
 # Trading Exceptions
 class TradingException(KairosException):
     """거래 관련 기본 예외"""

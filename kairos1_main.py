@@ -284,13 +284,18 @@ class KairosSystem:
                 alert_system=self.alert_system
             )
             
+            # 실제 공포탐욕지수 제공자 (alternative.me)
+            from src.utils.fear_greed_provider import FearGreedProvider
+            self.fear_greed_provider = FearGreedProvider(db_manager=self.db_manager)
+
             # OpportunisticBuyer 초기화
             self.opportunistic_buyer = OpportunisticBuyer(
                 coinone_client=self.coinone_client,
                 db_manager=self.db_manager,
                 order_manager=self.order_manager,  # 분할 매수와 동일한 OrderManager 사용
                 cash_reserve_ratio=self.config.get("trading.cash_reserve_ratio", 0.15),
-                min_opportunity_threshold=self.config.get("trading.min_opportunity_threshold", 0.05)
+                min_opportunity_threshold=self.config.get("trading.min_opportunity_threshold", 0.05),
+                fear_greed_provider=self.fear_greed_provider
             )
             
             # 고급 시스템 컴포넌트 초기화
@@ -325,7 +330,8 @@ class KairosSystem:
             # DCA+ 전략
             if self.config.get("risk_management.dca_plus.enabled", True):
                 self.dca_plus_strategy = DCAPlus(
-                    market_data_provider=self.market_data_provider
+                    market_data_provider=self.market_data_provider,
+                    fear_greed_provider=getattr(self, 'fear_greed_provider', None)
                 )
                 logger.info("✅ DCA+ 전략 초기화")
             
@@ -453,8 +459,20 @@ class KairosSystem:
             usd_krw_rate = self.config.get("market_data.usd_krw_rate", 1400.0)
             price_data = binance_provider.convert_usdt_to_krw(price_data, usd_krw_rate)
             
+            # 직전 시장 계절 조회 (완충 밴드 히스테리시스용)
+            from src.core.market_season_filter import season_from_string
+            previous_season = None
+            try:
+                latest_analysis = self.db_manager.get_latest_market_analysis()
+                if latest_analysis:
+                    previous_season = season_from_string(latest_analysis.get("market_season"))
+            except Exception as e:
+                logger.warning(f"직전 시장 계절 조회 실패 (최초 실행으로 간주): {e}")
+
             # 시장 분석 실행
-            analysis_result = self.market_filter.analyze_weekly(price_data)
+            analysis_result = self.market_filter.analyze_weekly(
+                price_data, previous_season=previous_season
+            )
             
             if analysis_result.get("success"):
                 # 데이터베이스에 저장

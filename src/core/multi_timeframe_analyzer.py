@@ -263,10 +263,12 @@ class MultiTimeframeAnalyzer:
         try:
             close_prices = price_data['Close']
             
-            # 200주 이동평균 (기존 시스템 활용)
+            # 200주 이동평균 (기존 시스템 활용, 데이터 부족 시 None)
             ma_200w = self.market_season_filter.calculate_200week_ma(price_data)
+            if ma_200w is None:
+                raise ValueError("200주 이동평균 계산 불가 (데이터 부족)")
             current_price = close_prices.iloc[-1]
-            
+
             # 트렌드 강도 계산
             price_ratio = current_price / ma_200w
             

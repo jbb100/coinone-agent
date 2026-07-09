@@ -50,7 +50,9 @@ DEFAULT_CRYPTO_ALLOCATION = {
 
 # Moving average periods
 MA_200W_BUFFER_BAND = 0.05  # 5% - 200주 이동평균 버퍼 밴드
-MA_CALCULATION_FALLBACK_RATIO = 0.9  # 90% - 200주 이동평균 계산 실패 시 fallback 비율
+# NOTE: MA_CALCULATION_FALLBACK_RATIO는 제거됨.
+# MA 계산 실패 시 임의 값으로 대체하지 않고 MarketDataUnavailableError를 발생시켜
+# 시장 판단을 중단한다 (fail-safe 원칙).
 
 # =============================================================================
 # API and Database Constants

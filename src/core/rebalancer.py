@@ -15,7 +15,7 @@ from .market_season_filter import MarketSeasonFilter, MarketSeason
 from .smart_execution_engine import SmartExecutionEngine, SmartOrderParams, ExecutionStrategy, MarketCondition
 from ..utils.constants import (
     REBALANCE_THRESHOLD, MAX_SLIPPAGE, ORDER_TIMEOUT_SECONDS,
-    SAFETY_MARGIN, MA_CALCULATION_FALLBACK_RATIO, MARKET_ANALYSIS_MAX_AGE_DAYS
+    SAFETY_MARGIN, MARKET_ANALYSIS_MAX_AGE_DAYS
 )
 from ..utils.market_data_provider import MarketDataProvider
 
@@ -512,11 +512,22 @@ class Rebalancer:
             # 2. 시장 계절 판단 (필요시)
             if target_market_season is None:
                 target_market_season = self._get_current_market_season()
-            
+
+            if target_market_season is None:
+                # fail-safe: 시장 판단 불가 시 리밸런싱 계획을 만들지 않는다
+                logger.error("🚨 시장 계절 판단 불가 — 리밸런싱 계획 수립을 중단합니다 (거래 없음)")
+                return {
+                    "success": False,
+                    "error": "시장 계절 판단 불가 (시장 데이터 사용 불가) — 안전을 위해 리밸런싱 중단"
+                }
+
             logger.info(f"목표 시장 계절: {target_market_season}")
-            
-            # 3. 목표 자산 배분 계산
-            allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
+
+            # 3. 목표 자산 배분 계산 (NEUTRAL이면 현재 crypto 비중 유지)
+            current_crypto_weight = self._get_current_crypto_weight(current_portfolio)
+            allocation_weights = self.market_season_filter.get_allocation_weights(
+                target_market_season, current_crypto_weight
+            )
             logger.info(f"시장 계절별 배분: 암호화폐 {allocation_weights['crypto']:.1%}, KRW {allocation_weights['krw']:.1%}")
             
             target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
@@ -619,12 +630,20 @@ class Rebalancer:
             
             # 2. 시장 계절 판단 (필요시)
             if target_market_season is None:
-                # BTC 가격 데이터를 가져와서 시장 계절 판단
-                # 실제 구현에서는 데이터 수집기에서 가져와야 함
                 target_market_season = self._get_current_market_season()
-            
-            # 3. 목표 자산 배분 계산
-            allocation_weights = self.market_season_filter.get_allocation_weights(target_market_season)
+
+            if target_market_season is None:
+                # fail-safe: 시장 판단 불가 시 어떤 주문도 내지 않는다
+                logger.error("🚨 시장 계절 판단 불가 — 분기별 리밸런싱을 중단합니다 (거래 없음)")
+                result.success = False
+                result.error_message = "시장 계절 판단 불가 (시장 데이터 사용 불가) — 안전을 위해 리밸런싱 중단"
+                return result
+
+            # 3. 목표 자산 배분 계산 (NEUTRAL이면 현재 crypto 비중 유지)
+            current_crypto_weight = self._get_current_crypto_weight(current_portfolio)
+            allocation_weights = self.market_season_filter.get_allocation_weights(
+                target_market_season, current_crypto_weight
+            )
             target_weights = self.portfolio_manager.calculate_dynamic_target_weights(
                 allocation_weights["crypto"],
                 allocation_weights["krw"],
@@ -705,7 +724,6 @@ class Rebalancer:
         
         # 1. 시장 상황 분석
         market_condition = self._analyze_current_market_condition()
-        market_signals = self._collect_market_signals()
         
         # 2. 우선순위 순으로 정렬
         rebalance_orders = rebalance_info.get("rebalance_orders", {})
@@ -752,7 +770,6 @@ class Rebalancer:
                     side=side,
                     amount_krw=amount_krw,
                     market_condition=market_condition,
-                    market_signals=market_signals,
                     order_priority=order_info.get("priority", 5)
                 )
                 
@@ -814,131 +831,105 @@ class Rebalancer:
             }
         }
     
-    def _get_current_market_season(self) -> MarketSeason:
+    def _get_current_market_season(self) -> Optional[MarketSeason]:
         """
-        현재 시장 계절 판단
-        
-        1순위: 데이터베이스의 최신 주간 분석 결과 사용
-        2순위: 실시간 계산 (200주 이동평균 기반)
-        
+        현재 시장 계절 판단 (fail-safe)
+
+        1순위: 데이터베이스의 최신 주간 분석 결과 (7일 이내)
+        2순위: 실시간 계산 (200주 이동평균 기반, 직전 계절을 히스테리시스에 반영)
+
+        실데이터로 판단할 수 없으면 임의 값으로 대체하지 않고 None을 반환한다.
+        호출부는 None이면 리밸런싱을 중단해야 한다.
+
         Returns:
-            현재 시장 계절
+            현재 시장 계절 또는 None (판단 불가)
         """
+        from .market_season_filter import season_from_string
+
+        previous_season = None
+
         try:
             # 1. 데이터베이스에서 최신 시장 분석 결과 조회 시도
             try:
                 latest_analysis = self.db_manager.get_latest_market_analysis()
-                
+
                 if latest_analysis and latest_analysis.get("success"):
-                    # 분석 결과가 너무 오래되지 않았는지 확인 (7일 이내)
+                    # 직전 계절은 나이에 관계없이 히스테리시스 입력으로 사용
+                    previous_season = season_from_string(latest_analysis.get("market_season"))
+
+                    # 분석 결과가 충분히 최신(7일 이내)이면 그대로 사용
                     analysis_date = latest_analysis.get("analysis_date")
                     if analysis_date:
                         if isinstance(analysis_date, str):
                             analysis_date = datetime.fromisoformat(analysis_date.replace('Z', '+00:00'))
-                        
+
                         days_old = (datetime.now() - analysis_date.replace(tzinfo=None)).days
-                        
-                        if days_old <= MARKET_ANALYSIS_MAX_AGE_DAYS:  # 설정된 일수 이내 데이터
-                            season_str = latest_analysis.get("market_season", "neutral")
-                            season_map = {
-                                "risk_on": MarketSeason.RISK_ON,
-                                "risk_off": MarketSeason.RISK_OFF, 
-                                "neutral": MarketSeason.NEUTRAL
-                            }
-                            
-                            season = season_map.get(season_str, MarketSeason.NEUTRAL)
-                            logger.info(f"✅ 데이터베이스 시장 분석 결과 사용: {season.value} (분석일: {analysis_date.strftime('%Y-%m-%d')})")
-                            return season
+
+                        if days_old <= MARKET_ANALYSIS_MAX_AGE_DAYS and previous_season:
+                            logger.info(f"✅ 데이터베이스 시장 분석 결과 사용: {previous_season.value} "
+                                       f"(분석일: {analysis_date.strftime('%Y-%m-%d')})")
+                            return previous_season
                         else:
                             logger.warning(f"데이터베이스 분석 결과가 오래됨: {days_old}일 전 → 실시간 계산 수행")
                     else:
                         logger.warning("분석 날짜 정보 없음 → 실시간 계산 수행")
                 else:
                     logger.warning("유효한 시장 분석 결과 없음 → 실시간 계산 수행")
-                    
+
             except Exception as db_error:
                 logger.warning(f"데이터베이스 조회 실패: {db_error} → 실시간 계산 수행")
-            
+
             # 2. 실시간 계산 (Fallback)
             logger.info("⚡ 실시간 시장 계절 판단 수행")
-            
-            # BTC 현재가 조회
+
+            # BTC 현재가 조회 (코인원, KRW)
             ticker = self.coinone_client.get_ticker("BTC")
             if not isinstance(ticker, dict) or "data" not in ticker:
-                logger.error("BTC 티커 데이터 조회 실패")
-                return MarketSeason.NEUTRAL
-            
+                logger.error("시장 계절 판단 불가: BTC 티커 데이터 조회 실패")
+                return None
+
             ticker_data = ticker["data"]
             current_price = (
                 float(ticker_data.get("last", 0)) or
                 float(ticker_data.get("close_24h", 0)) or
                 float(ticker_data.get("close", 0))
             )
-            
+
             if current_price <= 0:
-                logger.error(f"잘못된 BTC 현재가: {current_price}")
-                return MarketSeason.NEUTRAL
-            
+                logger.error(f"시장 계절 판단 불가: 잘못된 BTC 현재가 ({current_price})")
+                return None
+
             logger.info(f"BTC 현재가: {current_price:,.0f} KRW")
-            
-            # 실제 200주 이동평균 계산
+
+            # 실제 200주 이동평균 조회 (KRW 기준으로 반환됨, 실패 시 예외)
             try:
-                ma_200w_usd, data_source = self.market_data_provider.get_btc_200w_ma()
-                
-                # USD to KRW 환산 (대략적인 환율 적용, 실제로는 환율 API 사용 권장)
-                usd_to_krw = current_price / self._get_btc_price_usd()
-                ma_200w = ma_200w_usd * usd_to_krw
-                
-                if data_source == "yfinance":
-                    logger.info(f"✅ 실제 200주 이동평균 사용: {ma_200w:,.0f} KRW (소스: {data_source})")
-                elif data_source == "cache":
-                    logger.info(f"📋 캐시된 200주 이동평균 사용: {ma_200w:,.0f} KRW")
-                else:
-                    logger.warning(f"⚠️ Fallback 200주 이동평균 사용: {ma_200w:,.0f} KRW (소스: {data_source})")
-                    
+                ma_200w, data_source = self.market_data_provider.get_btc_200w_ma()
+                logger.info(f"✅ 200주 이동평균: {ma_200w:,.0f} KRW (소스: {data_source})")
             except Exception as e:
-                logger.error(f"200주 이동평균 계산 실패, 임시값 사용: {e}")
-                ma_200w = current_price * MA_CALCULATION_FALLBACK_RATIO
-                logger.warning(f"🚨 비상 임시값 사용: {ma_200w:,.0f} KRW")
-            
-            # market_season_filter의 올바른 로직 사용
+                logger.error(f"시장 계절 판단 불가: 200주 이동평균 조회 실패 ({e})")
+                return None
+
+            # market_season_filter의 로직 사용 (직전 계절로 완충 밴드 히스테리시스 적용)
             market_season, analysis_info = self.market_season_filter.determine_market_season(
                 current_price=current_price,
                 ma_200w=ma_200w,
-                previous_season=None
+                previous_season=previous_season
             )
-            
+
+            if analysis_info.get("error"):
+                logger.error(f"시장 계절 판단 불가: {analysis_info['error']}")
+                return None
+
             logger.info(f"🎯 실시간 시장 계절 판단: {market_season.value}")
             logger.info(f"📊 가격 비율: {analysis_info.get('price_ratio', 0):.3f}")
             logger.info(f"📏 판단 기준: Risk On >= {analysis_info.get('risk_on_threshold', 0):.2f}, "
                        f"Risk Off <= {analysis_info.get('risk_off_threshold', 0):.2f}")
-            
+
             return market_season
-                
+
         except Exception as e:
             logger.error(f"시장 계절 판단 실패: {e}")
-            return MarketSeason.NEUTRAL  # 기본값 반환
-    
-    def _get_btc_price_usd(self) -> float:
-        """
-        BTC USD 가격 조회 (환율 계산용)
-        
-        Returns:
-            BTC USD 가격
-        """
-        try:
-            import yfinance as yf
-            btc = yf.Ticker("BTC-USD")
-            hist = btc.history(period="1d")
-            if not hist.empty:
-                return float(hist['Close'].iloc[-1])
-            
-            # Fallback
-            return 50000.0  # 대략적인 평균 BTC 가격
-            
-        except Exception as e:
-            logger.warning(f"BTC USD 가격 조회 실패: {e}")
-            return 50000.0  # Fallback
+            return None
     
     def check_rebalance_needed(
         self, 
@@ -995,12 +986,24 @@ class Rebalancer:
         
         return schedule
     
+    def _get_current_crypto_weight(self, current_portfolio: Dict) -> Optional[float]:
+        """현재 포트폴리오의 암호화폐 총 비중 계산 (NEUTRAL 시 '기존 비중 유지'용)"""
+        try:
+            current_weights = self.portfolio_manager.get_current_weights(current_portfolio)
+            if not current_weights:
+                return None
+            krw_weight = current_weights.get("KRW", 0)
+            return max(0.0, min(1.0, 1.0 - krw_weight))
+        except Exception as e:
+            logger.warning(f"현재 암호화폐 비중 계산 실패: {e}")
+            return None
+
     def _analyze_current_market_condition(self) -> MarketCondition:
         """현재 시장 상황 분석"""
         try:
             # 시장 계절 기반으로 시장 상황 판단
             current_season = self._get_current_market_season()
-            
+
             # 추가적인 변동성 및 트렌드 분석 가능
             # 현재는 시장 계절을 기준으로 간단히 매핑
             if current_season == MarketSeason.RISK_ON:
@@ -1009,7 +1012,7 @@ class Rebalancer:
                 return MarketCondition.BEARISH
             else:
                 return MarketCondition.NEUTRAL
-                
+
         except Exception as e:
             logger.error(f"시장 상황 분석 실패: {e}")
             return MarketCondition.NEUTRAL
@@ -1091,92 +1094,30 @@ class Rebalancer:
             logger.error(f"동적 최적화 리밸런싱 판단 실패: {e}")
             return {"error": str(e)}
     
-    def _collect_market_signals(self) -> Dict:
-        """시장 신호 수집"""
-        try:
-            signals = {
-                "multi_timeframe": 0.0,
-                "onchain": 0.0,
-                "macro": 0.0,
-                "sentiment": 0.0
-            }
-            
-            # 멀티 타임프레임 신호 (있는 경우)
-            if hasattr(self.smart_execution_engine, 'multi_timeframe_analyzer') and \
-               self.smart_execution_engine.multi_timeframe_analyzer:
-                try:
-                    # 실제로는 분석기의 최신 신호를 가져와야 함
-                    # signals["multi_timeframe"] = self.smart_execution_engine.multi_timeframe_analyzer.get_latest_signal()
-                    pass
-                except:
-                    pass
-            
-            # 온체인 신호
-            if hasattr(self.smart_execution_engine, 'onchain_analyzer') and \
-               self.smart_execution_engine.onchain_analyzer:
-                try:
-                    # 온체인 분석기의 최신 신호를 가져옴
-                    onchain_result = self.smart_execution_engine.onchain_analyzer.get_latest_signal()
-                    if onchain_result and 'market_signal' in onchain_result:
-                        signals["onchain"] = onchain_result['market_signal']
-                        logger.debug(f"온체인 신호 수집: {signals['onchain']:.3f}")
-                except Exception as e:
-                    logger.warning(f"온체인 신호 수집 실패: {e}")
-                    pass
-            
-            # 매크로 경제 신호
-            if hasattr(self.smart_execution_engine, 'macro_analyzer') and \
-               self.smart_execution_engine.macro_analyzer:
-                try:
-                    # 매크로 분석기의 최신 신호를 가져옴
-                    macro_result = self.smart_execution_engine.macro_analyzer.get_latest_signal()
-                    if macro_result and 'market_signal' in macro_result:
-                        signals["macro"] = macro_result['market_signal']
-                        logger.debug(f"매크로 신호 수집: {signals['macro']:.3f}")
-                except Exception as e:
-                    logger.warning(f"매크로 신호 수집 실패: {e}")
-                    pass
-            
-            return signals
-            
-        except Exception as e:
-            logger.error(f"시장 신호 수집 실패: {e}")
-            return {
-                "multi_timeframe": 0.0,
-                "onchain": 0.0,
-                "macro": 0.0,
-                "sentiment": 0.0
-            }
-    
     def _create_smart_order_params(
         self,
         asset: str,
         side: str,
         amount_krw: float,
         market_condition: MarketCondition,
-        market_signals: Dict,
         order_priority: int = 5
     ) -> SmartOrderParams:
-        """스마트 주문 파라미터 생성"""
+        """스마트 주문 파라미터 생성
+
+        NOTE: 과거의 온체인/매크로/멀티타임프레임 "신호 수집"은 실제로 갱신되는
+        데이터가 아니어서 제거됨. 실행 전략은 주문 금액과 우선순위만으로 결정한다.
+        """
         try:
-            # 기본 전략 결정
+            # 기본 전략 결정 (주문 금액 기반)
             strategy = self.smart_execution_engine.get_optimal_strategy(
                 asset=asset,
                 side=side,
-                amount_krw=amount_krw,
-                market_signals=market_signals
+                amount_krw=amount_krw
             )
-            
+
             # 긴급도 계산 (우선순위 기반)
             urgency_score = max(0.1, min(1.0, (10 - order_priority) / 10))
-            
-            # 신뢰도 계산 (신호 강도 기반)
-            signal_strength = abs(market_signals.get("multi_timeframe", 0)) + \
-                            abs(market_signals.get("onchain", 0)) + \
-                            abs(market_signals.get("macro", 0)) + \
-                            abs(market_signals.get("sentiment", 0))
-            confidence_score = min(1.0, signal_strength / 2.0) if signal_strength > 0 else 0.5
-            
+
             # 스마트 주문 파라미터 생성
             params = SmartOrderParams(
                 asset=asset,
@@ -1185,27 +1126,21 @@ class Rebalancer:
                 strategy=strategy,
                 market_condition=market_condition,
                 urgency_score=urgency_score,
-                confidence_score=confidence_score,
+                confidence_score=0.5,
                 max_slippage=self.max_slippage,
                 timeout_minutes=self.order_timeout // 60,
-                
-                # 시장 신호들
-                multi_timeframe_signal=market_signals.get("multi_timeframe", 0),
-                onchain_signal=market_signals.get("onchain", 0),
-                macro_signal=market_signals.get("macro", 0),
-                sentiment_signal=market_signals.get("sentiment", 0),
-                
+
                 # 리스크 관리
                 max_position_size=0.15,  # 전체 포트폴리오의 15%로 증가
                 stop_loss=None,
                 take_profit=None
             )
-            
+
             logger.info(f"스마트 주문 파라미터: {asset} {side} - 전략: {strategy.value}, "
-                       f"긴급도: {urgency_score:.2f}, 신뢰도: {confidence_score:.2f}")
-            
+                       f"긴급도: {urgency_score:.2f}")
+
             return params
-            
+
         except Exception as e:
             logger.error(f"스마트 주문 파라미터 생성 실패: {e}")
             # 기본 파라미터 반환

@@ -19,10 +19,22 @@ class MarketSeason(Enum):
     NEUTRAL = "neutral"     # 횡보장 (기존 비중 유지)
 
 
+def season_from_string(value: Optional[str]) -> Optional[MarketSeason]:
+    """DB 등에 저장된 문자열을 MarketSeason으로 변환 (알 수 없으면 None)"""
+    if not value:
+        return None
+    season_map = {
+        "risk_on": MarketSeason.RISK_ON,
+        "risk_off": MarketSeason.RISK_OFF,
+        "neutral": MarketSeason.NEUTRAL
+    }
+    return season_map.get(str(value).lower())
+
+
 class MarketSeasonFilter:
     """
     시장 계절 필터
-    
+
     BTC 가격과 200주 이동평균선의 관계를 분석하여
     시장 상황(강세장/약세장/횡보장)을 판단합니다.
     """
@@ -38,75 +50,54 @@ class MarketSeasonFilter:
         
         logger.info(f"MarketSeasonFilter 초기화: buffer_band={buffer_band}")
     
-    def calculate_200week_ma(self, price_data: pd.DataFrame) -> float:
+    def calculate_200week_ma(self, price_data: pd.DataFrame) -> Optional[float]:
         """
         200주 이동평균 계산
-        
+
+        실제 200주 이상의 주간 데이터가 있을 때만 계산한다.
+        데이터가 부족하거나 유효하지 않으면 임의 값으로 대체하지 않고 None을 반환한다
+        (다른 기간의 MA는 완전히 다른 지표이므로 대체 금지 — fail-safe 원칙).
+
         Args:
-            price_data: BTC 가격 데이터 (DataFrame with 'Close' column)
-            
+            price_data: BTC 가격 데이터 (DataFrame with 'Close' column, DatetimeIndex)
+
         Returns:
-            200주 이동평균값
+            200주 이동평균값 또는 None (계산 불가)
         """
         try:
             # 데이터 유효성 검증
             if price_data.empty or 'Close' not in price_data.columns:
-                logger.warning("가격 데이터가 비어있거나 'Close' 컬럼이 없습니다")
-                return 50000000.0  # 5천만원 기본값
-            
-            # Close 컬럼에서 유효한 데이터만 필터링
+                logger.error("200주 MA 계산 불가: 가격 데이터가 비어있거나 'Close' 컬럼이 없습니다")
+                return None
+
             valid_prices = price_data['Close'].dropna()
             if len(valid_prices) == 0:
-                logger.warning("유효한 가격 데이터가 없습니다")
-                return 50000000.0
-            
-            # 데이터 길이 체크
-            if len(valid_prices) < 200:
-                logger.warning(f"데이터 부족: {len(valid_prices)}개 < 200개 필요")
-                fallback_ma = valid_prices.mean()
-                return fallback_ma if not pd.isna(fallback_ma) else 50000000.0
-            
-            # 인덱스가 datetime인지 확인
+                logger.error("200주 MA 계산 불가: 유효한 가격 데이터가 없습니다")
+                return None
+
+            # 인덱스가 datetime이어야 주간 리샘플링이 가능
             if not isinstance(price_data.index, pd.DatetimeIndex):
-                logger.warning("데이터 인덱스가 datetime이 아닙니다. 단순 이동평균 사용")
-                # 단순 200개 이동평균으로 대체
-                ma_200 = valid_prices.rolling(window=200).mean().iloc[-1]
-                return ma_200 if not pd.isna(ma_200) else valid_prices.mean()
-            
+                logger.error("200주 MA 계산 불가: 데이터 인덱스가 DatetimeIndex가 아닙니다")
+                return None
+
             # 주간 데이터로 리샘플링
-            try:
-                weekly_prices = price_data.resample('W')['Close'].last().dropna()
-                if len(weekly_prices) < 200:
-                    logger.warning(f"주간 데이터 부족: {len(weekly_prices)}주 < 200주")
-                    # 일간 데이터로 200개 이동평균 계산 (대략 200일)
-                    ma_200d = valid_prices.rolling(window=200).mean().iloc[-1]
-                    return ma_200d if not pd.isna(ma_200d) else valid_prices.mean()
-                
-                # 200주 이동평균 계산
-                ma_200w = weekly_prices.rolling(window=200).mean().iloc[-1]
-                
-                # 결과 검증
-                if pd.isna(ma_200w):
-                    logger.warning("200주 이동평균 계산 결과가 NaN입니다. 대체값 사용")
-                    # 더 짧은 기간의 이동평균으로 대체
-                    ma_50w = weekly_prices.rolling(window=50).mean().iloc[-1]
-                    if not pd.isna(ma_50w):
-                        return ma_50w
-                    else:
-                        return valid_prices.mean()
-                
-                logger.debug(f"200주 이동평균: {ma_200w:.2f}")
-                return ma_200w
-                
-            except Exception as resample_error:
-                logger.warning(f"리샘플링 실패: {resample_error}. 단순 이동평균 사용")
-                ma_200 = valid_prices.rolling(window=200).mean().iloc[-1]
-                return ma_200 if not pd.isna(ma_200) else valid_prices.mean()
-                
+            weekly_prices = price_data.resample('W')['Close'].last().dropna()
+            if len(weekly_prices) < 200:
+                logger.error(f"200주 MA 계산 불가: 주간 데이터 부족 ({len(weekly_prices)}주 < 200주)")
+                return None
+
+            ma_200w = weekly_prices.rolling(window=200).mean().iloc[-1]
+
+            if pd.isna(ma_200w) or ma_200w <= 0:
+                logger.error(f"200주 MA 계산 불가: 결과가 유효하지 않음 ({ma_200w})")
+                return None
+
+            logger.debug(f"200주 이동평균: {ma_200w:.2f}")
+            return float(ma_200w)
+
         except Exception as e:
             logger.error(f"200주 이동평균 계산 중 오류: {e}")
-            # 최종 fallback - BTC 대략적 평균가
-            return 50000000.0  # 5천만원
+            return None
     
     def determine_market_season(
         self, 
@@ -125,10 +116,10 @@ class MarketSeasonFilter:
         Returns:
             Tuple[MarketSeason, Dict]: (시장계절, 분석정보)
         """
-        # NaN 값 처리
-        if pd.isna(current_price) or pd.isna(ma_200w) or ma_200w == 0:
-            logger.warning(f"잘못된 데이터: price={current_price}, ma_200w={ma_200w}")
-            # 기본값으로 NEUTRAL 반환
+        # NaN 값 처리: 데이터가 유효하지 않으면 직전 상태를 유지한다 (임의 판단 금지)
+        if current_price is None or ma_200w is None or pd.isna(current_price) or pd.isna(ma_200w) or ma_200w == 0:
+            logger.error(f"시장 계절 판단 불가 (잘못된 데이터): price={current_price}, ma_200w={ma_200w}")
+            fallback_season = previous_season if previous_season else MarketSeason.NEUTRAL
             analysis_info = {
                 "current_price": current_price,
                 "ma_200w": ma_200w,
@@ -136,11 +127,11 @@ class MarketSeasonFilter:
                 "risk_on_threshold": self.risk_on_threshold,
                 "risk_off_threshold": self.risk_off_threshold,
                 "timestamp": datetime.now(),
-                "market_season": MarketSeason.NEUTRAL.value,
+                "market_season": fallback_season.value,
                 "season_changed": False,
                 "error": "Invalid price data"
             }
-            return MarketSeason.NEUTRAL, analysis_info
+            return fallback_season, analysis_info
         
         price_ratio = current_price / ma_200w
         
@@ -172,58 +163,80 @@ class MarketSeasonFilter:
         
         return season, analysis_info
     
-    def get_allocation_weights(self, market_season: MarketSeason) -> Dict[str, float]:
+    def get_allocation_weights(
+        self,
+        market_season: MarketSeason,
+        current_crypto_weight: Optional[float] = None
+    ) -> Dict[str, float]:
         """
         시장 계절에 따른 자산 배분 비중 반환
-        
+
+        NEUTRAL(완충 밴드 내)은 "기존 비중 유지"를 의미한다:
+        현재 비중이 주어지면 그대로 유지하고, 없을 때(최초 실행)만 50:50을 사용한다.
+
         Args:
             market_season: 시장 계절
-            
+            current_crypto_weight: 현재 암호화폐 비중 (NEUTRAL 시 유지용)
+
         Returns:
             자산 배분 비중 딕셔너리
         """
-        allocation_map = {
-            MarketSeason.RISK_ON: {
-                "crypto": 0.70,  # 암호화폐 70%
-                "krw": 0.30      # 원화 30%
-            },
-            MarketSeason.RISK_OFF: {
-                "crypto": 0.30,  # 암호화폐 30%
-                "krw": 0.70      # 원화 70%
-            },
-            MarketSeason.NEUTRAL: {
-                "crypto": 0.50,  # 중립 상태: 50:50
-                "krw": 0.50
-            }
-        }
-        
-        weights = allocation_map[market_season]
+        if market_season == MarketSeason.RISK_ON:
+            weights = {"crypto": 0.70, "krw": 0.30}
+        elif market_season == MarketSeason.RISK_OFF:
+            weights = {"crypto": 0.30, "krw": 0.70}
+        else:  # NEUTRAL: 기존 비중 유지
+            if current_crypto_weight is not None:
+                # 극단값 방지를 위해 RISK_OFF~RISK_ON 범위로 제한
+                crypto = max(0.30, min(0.70, current_crypto_weight))
+                weights = {"crypto": crypto, "krw": 1.0 - crypto}
+                logger.info(f"NEUTRAL: 기존 암호화폐 비중 {crypto:.1%} 유지")
+            else:
+                weights = {"crypto": 0.50, "krw": 0.50}
+
         logger.info(f"자산 배분 비중: {weights}")
-        
+
         return weights
     
-    def analyze_weekly(self, price_data: pd.DataFrame) -> Dict:
+    def analyze_weekly(
+        self,
+        price_data: pd.DataFrame,
+        previous_season: Optional[MarketSeason] = None,
+        current_crypto_weight: Optional[float] = None
+    ) -> Dict:
         """
         주간 시장 분석 실행
-        
+
         Args:
             price_data: BTC 가격 데이터
-            
+            previous_season: 직전 시장 계절 (완충 밴드 히스테리시스용 — DB의 최근 분석 결과)
+            current_crypto_weight: 현재 암호화폐 비중 (NEUTRAL 시 유지용)
+
         Returns:
-            분석 결과 딕셔너리
+            분석 결과 딕셔너리 (계산 불가 시 success=False, 거래 판단에 사용 금지)
         """
         try:
-            # 200주 이동평균 계산
+            # 200주 이동평균 계산 (실데이터 기준, 불가 시 None)
             ma_200w = self.calculate_200week_ma(price_data)
-            
+
+            if ma_200w is None:
+                logger.error("주간 분석 중단: 200주 이동평균 계산 불가 — 시장 판단을 내리지 않습니다")
+                return {
+                    "analysis_date": datetime.now(),
+                    "error": "200주 이동평균 계산 불가 (데이터 부족/유효하지 않음)",
+                    "success": False
+                }
+
             # 현재 가격
             current_price = price_data['Close'].iloc[-1]
-            
-            # 시장 계절 판단
-            season, analysis_info = self.determine_market_season(current_price, ma_200w)
-            
+
+            # 시장 계절 판단 (직전 계절 전달 → 완충 밴드 내에서는 직전 상태 유지)
+            season, analysis_info = self.determine_market_season(
+                current_price, ma_200w, previous_season=previous_season
+            )
+
             # 자산 배분 비중
-            allocation_weights = self.get_allocation_weights(season)
+            allocation_weights = self.get_allocation_weights(season, current_crypto_weight)
             
             result = {
                 "analysis_date": datetime.now(),

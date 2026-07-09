@@ -9,8 +9,8 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 from loguru import logger
-from .constants import MA_CALCULATION_FALLBACK_RATIO
 from .binance_data_provider import BinanceDataProvider
+from ..core.exceptions import MarketDataUnavailableError
 
 
 class MarketDataProvider:
@@ -28,58 +28,44 @@ class MarketDataProvider:
         self.db_manager = db_manager
         logger.info("MarketDataProvider 초기화 완료")
     
-    def get_btc_200w_ma(self, fallback_to_current_price: bool = True) -> Tuple[float, str]:
+    def get_btc_200w_ma(self) -> Tuple[float, str]:
         """
-        BTC 200주 이동평균 계산
-        
-        Args:
-            fallback_to_current_price: 실패 시 현재가 기반 fallback 사용 여부
-            
+        BTC 200주 이동평균 계산 (KRW 기준)
+
+        실데이터(Binance) 또는 24시간 이내 캐시만 사용한다.
+        둘 다 불가능하면 임의 값으로 대체하지 않고 MarketDataUnavailableError를 발생시킨다.
+
         Returns:
-            Tuple[200주 이동평균, 데이터 소스]
+            Tuple[200주 이동평균(KRW), 데이터 소스("cache" | "binance")]
+
+        Raises:
+            MarketDataUnavailableError: 실데이터와 캐시 모두 사용 불가
         """
+        # 1. 캐시된 데이터 확인 (24시간 이내)
+        if self.db_manager:
+            cached_ma = self._get_cached_200w_ma()
+            if cached_ma:
+                logger.info(f"캐시된 200주 이동평균 사용: {cached_ma:.2f}")
+                return cached_ma, "cache"
+
+        # 2. Binance에서 실시간 계산
+        binance_error = None
         try:
-            # 1. 캐시된 데이터 확인 (데이터베이스)
-            if self.db_manager:
-                cached_ma = self._get_cached_200w_ma()
-                if cached_ma:
-                    logger.info(f"캐시된 200주 이동평균 사용: {cached_ma:.2f}")
-                    return cached_ma, "cache"
-            
-            # 2. Binance에서 실시간 계산
-            try:
-                ma_200w = self._calculate_200w_ma_from_binance()
-                if ma_200w and ma_200w > 0:
-                    # 계산된 값 캐싱
-                    if self.db_manager:
-                        self._cache_200w_ma(ma_200w)
-                    logger.info(f"Binance에서 200주 이동평균 계산: {ma_200w:.2f}")
-                    return ma_200w, "binance"
-            except Exception as e:
-                logger.warning(f"Binance 200주 이동평균 계산 실패: {e}")
-            
-            # 3. 다른 외부 API 시도 (향후 확장)
-            # 예: CoinGecko, Binance 등
-            
-            # 4. Fallback: 현재가 기반 추정
-            if fallback_to_current_price:
-                current_price = self._get_current_btc_price()
-                if current_price and current_price > 0:
-                    fallback_ma = current_price * MA_CALCULATION_FALLBACK_RATIO
-                    logger.warning(f"Fallback 200주 이동평균 사용: {fallback_ma:.2f} (현재가 {current_price:.2f} × {MA_CALCULATION_FALLBACK_RATIO})")
-                    return fallback_ma, "fallback"
-            
-            raise Exception("모든 200주 이동평균 계산 방법 실패")
-            
+            ma_200w = self._calculate_200w_ma_from_binance()
+            if ma_200w and ma_200w > 0:
+                if self.db_manager:
+                    self._cache_200w_ma(ma_200w)
+                logger.info(f"Binance에서 200주 이동평균 계산: {ma_200w:.2f}")
+                return ma_200w, "binance"
         except Exception as e:
-            logger.error(f"BTC 200주 이동평균 조회 실패: {e}")
-            if fallback_to_current_price:
-                # 최종 fallback
-                estimated_ma = 50000.0 * MA_CALCULATION_FALLBACK_RATIO  # 예상 평균 가격
-                logger.error(f"최종 fallback 사용: {estimated_ma:.2f}")
-                return estimated_ma, "emergency_fallback"
-            else:
-                raise
+            binance_error = e
+            logger.warning(f"Binance 200주 이동평균 계산 실패: {e}")
+
+        raise MarketDataUnavailableError(
+            "BTC 200주 이동평균을 계산할 수 없습니다 (캐시 없음, Binance 실패). "
+            "시장 판단을 중단합니다.",
+            details={"binance_error": str(binance_error) if binance_error else None}
+        )
     
     def _calculate_200w_ma_from_binance(self) -> Optional[float]:
         """
@@ -122,11 +108,9 @@ class MarketDataProvider:
                 ma_200w = hist['Close'].rolling(window=200).mean().iloc[-1]
                 logger.info(f"200주 이동평균 계산: {ma_200w:.2f}")
             else:
-                logger.warning(f"데이터가 부족합니다. 필요: 200주, 보유: {len(hist)}개")
-                # 보유한 데이터로 최대한 계산
-                ma_period = min(len(hist), 200)
-                ma_200w = hist['Close'].rolling(window=ma_period).mean().iloc[-1]
-                logger.info(f"{ma_period}개 이동평균으로 계산: {ma_200w:.2f}")
+                # 데이터 부족 시 짧은 기간 MA로 대체하지 않는다 (완전히 다른 지표가 됨)
+                logger.error(f"200주 이동평균 계산 불가: 데이터 부족 (필요: 200주, 보유: {len(hist)}개)")
+                return None
             
             # 유효성 검증
             current_price = hist['Close'].iloc[-1]

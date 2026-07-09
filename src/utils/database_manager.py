@@ -951,7 +951,43 @@ class DatabaseManager:
                 
         except Exception as e:
             logger.error(f"기회적 매수 기록 저장 실패: {e}")
-    
+
+    def get_recent_opportunistic_buys(self, days: int = 7) -> List[Dict]:
+        """
+        최근 기회적 매수 기록 조회 (재시작 시 중복매수 방지 이력 복원용)
+
+        Args:
+            days: 조회 기간 (일)
+
+        Returns:
+            매수 기록 리스트 (timestamp, asset, price 등)
+        """
+        try:
+            cutoff = datetime.now() - timedelta(days=days)
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 테이블이 아직 없으면 빈 목록 반환
+                cursor.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='opportunistic_buys'
+                """)
+                if not cursor.fetchone():
+                    return []
+
+                cursor.execute("""
+                    SELECT timestamp, asset, amount_krw, price, opportunity_level, status
+                    FROM opportunistic_buys
+                    WHERE timestamp > ? AND status = 'executed'
+                    ORDER BY timestamp DESC
+                """, (cutoff.isoformat(),))
+
+                return [dict(row) for row in cursor.fetchall()]
+
+        except Exception as e:
+            logger.error(f"최근 기회적 매수 기록 조회 실패: {e}")
+            return []
+
     def get_market_data(self, asset: str, days: int = 30) -> pd.DataFrame:
         """
         시장 데이터 조회 (가격 데이터) - Binance 데이터 사용

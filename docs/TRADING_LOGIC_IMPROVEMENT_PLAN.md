@@ -4,6 +4,50 @@
 > 목표: ① 데이터 장애가 매수 신호로 변환되는 fail-unsafe 제거, ② 계층 간 전략 충돌 해소,
 > ③ "하락장 매집 / 상승장 분배" 철학으로 최상위 배분 로직 전환.
 
+## 대원칙: Real-Data-Only (2026-07 확정)
+
+**실제로 갱신되는 데이터가 없는 지표는 의사결정에서 전부 제외한다. 심플하고 명확하게.**
+
+유지하는 지표 (모두 실데이터):
+- BTC 200주 이동평균 및 가격 비율 R — Binance 실가격 (24h 캐시 허용)
+- RSI / 고점 대비 하락률 / 변동성 / 거래량 — 거래소 실가격·거래량에서 직접 계산
+- 공포탐욕지수 — alternative.me 실제 API (24h 캐시 허용, 조회 불가 시 None → 중립 처리)
+
+제외한 지표 (목업/추정/하드코딩이었음):
+- ❌ 변동성 기반 "추정 공포탐욕지수" (OpportunisticBuyer 자체 계산) → 실제 API로 교체
+- ❌ RSI 기반 "추정 공포탐욕지수" (DCAPlus) → 실제 API로 교체
+- ❌ BTC 도미넌스 (하드코딩 0.6) → 축적 점수에서 제거
+- ❌ 계절 배수 (12월 보너스/1월 새해 등 임의 가정) → DCA 배수에서 제거
+- ❌ 온체인/매크로/멀티타임프레임/센티먼트 "신호 수집" (항상 0.0 반환) → 리밸런서에서 제거
+- ❌ 모든 하드코딩 fallback 값 (MA 5천만 원, 현재가×0.9, BTC $50,000) → 판단 중단으로 교체
+
+공통 규칙: **실데이터를 얻지 못하면 추정치를 만들지 않는다.**
+지표는 None을 반환하고, 소비자는 해당 조정을 적용하지 않거나(중립) 판단 자체를 중단한다.
+
+## 진행 상태
+
+- ✅ **Phase 0 완료** — fail-safe 안전장치 (아래 0-1 ~ 0-4)
+- ✅ **Phase 1 완료** — P1 버그 수정 + real-data-only 목업 지표 제거
+- ⬜ Phase 2 — 시장 국면 모델 전환 (가치 앵커)
+- ⬜ Phase 3 — Arbiter + OpportunisticSeller
+- ⬜ Phase 4 — 잔여 코드 정리 (Rebalancer mock 메서드 등)
+- ⬜ Phase 5 — 백테스트 검증 + 롤아웃
+
+Phase 0-1 구현 내역 요약:
+- `market_season_filter`: MA 계산 불가 시 None 반환(대체 MA 금지), `determine_market_season`이
+  데이터 오류 시 직전 계절 유지, NEUTRAL = 기존 비중 유지, `season_from_string` 유틸 추가
+- `rebalancer`: `_get_current_market_season`이 판단 불가 시 None 반환 → 리밸런싱 중단(주문 0건),
+  DB 직전 계절을 히스테리시스에 반영, **KRW 이중 환산 버그 수정**(MA가 이미 KRW인데
+  USD로 간주해 재환산하던 문제), $50,000 하드코딩 제거, 목업 신호 수집 제거
+- `market_data_provider`: fallback 경로 전면 삭제, 실패 시 `MarketDataUnavailableError`
+- `fear_greed_provider` 신설: alternative.me 실제 API + 24h 캐시, 실패 시 None
+- `dca_plus_strategy`: 월 한도를 당월 누적 집행액 기준으로 수정(`month_spent_krw`),
+  공포탐욕 구간 통일(25/45/55/75), 도미넌스·계절 배수 제거, signal_strength 정규화
+- `opportunistic_buyer`: 하락률을 평균 대비 → **N일 고점 대비**로 교체, 최소수량 상향 클램프
+  제거(예산 초과 매수 금지), 매수 이력 DB 영속화 + 재매수 조건(72h 내 직전 매수가 대비 -3%),
+  전체 예산 기준 레벨별 배분
+- `tests/test_failsafe.py` 신설 (32개 테스트, 전부 통과)
+
 ## 전체 로드맵
 
 | Phase | 내용 | 성격 | 의존성 |

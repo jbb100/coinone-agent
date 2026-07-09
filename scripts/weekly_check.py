@@ -147,8 +147,20 @@ class WeeklyAnalyzer:
             # 1. BTC 가격 데이터 수집
             price_data = self.fetch_btc_price_data()
             
-            # 2. 시장 계절 분석
-            analysis_result = self.market_filter.analyze_weekly(price_data)
+            # 2. 직전 시장 계절 조회 (완충 밴드 히스테리시스용)
+            from src.core.market_season_filter import season_from_string
+            previous_season = None
+            try:
+                previous_analysis = self.db_manager.get_latest_market_analysis()
+                if previous_analysis:
+                    previous_season = season_from_string(previous_analysis.get("market_season"))
+            except Exception as e:
+                logger.warning(f"직전 시장 계절 조회 실패 (최초 실행으로 간주): {e}")
+
+            # 3. 시장 계절 분석
+            analysis_result = self.market_filter.analyze_weekly(
+                price_data, previous_season=previous_season
+            )
             
             if not analysis_result.get("success"):
                 raise RuntimeError(f"시장 분석 실패: {analysis_result.get('error')}")

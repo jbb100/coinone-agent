@@ -78,11 +78,13 @@ async def main():
         except Exception as e:
             logger.warning(f"AlertSystem 초기화 실패, 알림 없이 진행: {e}")
         
-        # 기회적 매수 시스템 초기화
+        # 기회적 매수 시스템 초기화 (실제 공포탐욕지수 사용)
+        from src.utils.fear_greed_provider import FearGreedProvider
         opportunistic_buyer = OpportunisticBuyer(
             coinone_client=coinone_client,
             db_manager=db_manager,
-            cash_reserve_ratio=0.15  # 15% 현금 보유
+            cash_reserve_ratio=0.15,  # 15% 현금 보유
+            fear_greed_provider=FearGreedProvider(db_manager=db_manager)
         )
         
         # 현재 포트폴리오 조회
@@ -99,7 +101,8 @@ async def main():
         # 현금 활용 전략 조회
         strategy = opportunistic_buyer.get_cash_utilization_strategy()
         logger.info(f"현재 전략: {strategy['mode']} - {strategy['description']}")
-        logger.info(f"공포탐욕 지수: {strategy.get('current_fear_greed', 50):.1f}")
+        fng = strategy.get('current_fear_greed')
+        logger.info(f"공포탐욕 지수: {f'{fng:.1f}' if fng is not None else '데이터 없음'}")
         
         # 매수 기회 식별
         target_assets = strategy.get("target_assets", ["BTC", "ETH", "SOL", "AVAX"])
