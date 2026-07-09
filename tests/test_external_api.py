@@ -154,7 +154,6 @@ class TestExchangeRateAPI:
     def test_rate_api_fallback(self):
         """환율 API 실패 시 기본값"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_USD_KRW_RATE
 
         client = ExternalAPIClient()
 
@@ -163,12 +162,11 @@ class TestExchangeRateAPI:
 
             rate = client.get_usd_krw_rate()
 
-            assert rate == DEFAULT_USD_KRW_RATE
+            assert rate is None  # 폴백 상수 금지 — 실패는 None
 
     def test_rate_api_timeout(self):
         """환율 API 타임아웃 처리"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_USD_KRW_RATE
 
         client = ExternalAPIClient()
 
@@ -177,7 +175,7 @@ class TestExchangeRateAPI:
 
             rate = client.get_usd_krw_rate()
 
-            assert rate == DEFAULT_USD_KRW_RATE
+            assert rate is None  # 폴백 상수 금지 — 실패는 None
 
     def test_rate_caching(self):
         """환율 캐싱 테스트"""
@@ -244,7 +242,6 @@ class TestBTCDominanceAPI:
     def test_dominance_api_fallback(self):
         """BTC 도미넌스 API 실패 시 기본값"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_BTC_DOMINANCE
 
         client = ExternalAPIClient()
 
@@ -253,7 +250,7 @@ class TestBTCDominanceAPI:
 
             dominance = client.get_btc_dominance()
 
-            assert dominance == DEFAULT_BTC_DOMINANCE
+            assert dominance is None  # 폴백 상수 금지 — 실패는 None
 
 
 # ============================================================================
@@ -416,7 +413,6 @@ class TestExternalAPIClientCoverage:
     def test_exchange_rate_non_200_status(self):
         """환율 API 비-200 상태 코드 (lines 118-120)"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_USD_KRW_RATE
 
         client = ExternalAPIClient()
 
@@ -427,7 +423,7 @@ class TestExternalAPIClientCoverage:
 
             rate = client.get_usd_krw_rate()
 
-            assert rate == DEFAULT_USD_KRW_RATE
+            assert rate is None  # 폴백 상수 금지 — 실패는 None
 
     def test_exchange_rate_rates_format(self):
         """환율 API rates 형식 (line 126)"""
@@ -450,7 +446,6 @@ class TestExternalAPIClientCoverage:
     def test_exchange_rate_invalid_format(self):
         """환율 API 잘못된 형식 (lines 131-132)"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_USD_KRW_RATE
 
         client = ExternalAPIClient()
 
@@ -462,12 +457,11 @@ class TestExternalAPIClientCoverage:
 
             rate = client.get_usd_krw_rate()
 
-            assert rate == DEFAULT_USD_KRW_RATE
+            assert rate is None  # 폴백 상수 금지 — 실패는 None
 
     def test_exchange_rate_unreasonable_value(self):
         """환율 API 비정상 값 (lines 135-137)"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_USD_KRW_RATE
 
         client = ExternalAPIClient()
 
@@ -479,7 +473,7 @@ class TestExternalAPIClientCoverage:
 
             rate = client.get_usd_krw_rate()
 
-            assert rate == DEFAULT_USD_KRW_RATE
+            assert rate is None  # 폴백 상수 금지 — 실패는 None
 
     def test_btc_dominance_caching(self):
         """BTC 도미넌스 캐싱 (lines 162-164)"""
@@ -506,7 +500,6 @@ class TestExternalAPIClientCoverage:
     def test_btc_dominance_non_200_status(self):
         """BTC 도미넌스 API 비-200 상태 코드 (lines 172-174)"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_BTC_DOMINANCE
 
         client = ExternalAPIClient()
 
@@ -517,12 +510,11 @@ class TestExternalAPIClientCoverage:
 
             dominance = client.get_btc_dominance()
 
-            assert dominance == DEFAULT_BTC_DOMINANCE
+            assert dominance is None  # 폴백 상수 금지 — 실패는 None
 
     def test_btc_dominance_invalid_format(self):
         """BTC 도미넌스 API 잘못된 형식 (lines 188-190)"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_BTC_DOMINANCE
 
         client = ExternalAPIClient()
 
@@ -534,12 +526,11 @@ class TestExternalAPIClientCoverage:
 
             dominance = client.get_btc_dominance()
 
-            assert dominance == DEFAULT_BTC_DOMINANCE
+            assert dominance is None  # 폴백 상수 금지 — 실패는 None
 
     def test_btc_dominance_timeout(self):
         """BTC 도미넌스 API 타임아웃 (lines 192-194)"""
         from src.utils.external_api_client import ExternalAPIClient
-        from src.utils.constants import DEFAULT_BTC_DOMINANCE
 
         client = ExternalAPIClient()
 
@@ -548,7 +539,7 @@ class TestExternalAPIClientCoverage:
 
             dominance = client.get_btc_dominance()
 
-            assert dominance == DEFAULT_BTC_DOMINANCE
+            assert dominance is None  # 폴백 상수 금지 — 실패는 None
 
     def test_mvrv_caching(self):
         """MVRV 캐싱 (lines 209-211)"""

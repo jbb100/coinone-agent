@@ -52,7 +52,6 @@ DEFAULT_CRYPTO_ALLOCATION = {
 
 # Moving average periods
 MA_200W_BUFFER_BAND = 0.05  # 5% - 200주 이동평균 버퍼 밴드
-MA_CALCULATION_FALLBACK_RATIO = 0.9  # 90% - 200주 이동평균 계산 실패 시 fallback 비율
 
 # =============================================================================
 # API and Database Constants
@@ -76,11 +75,8 @@ PRICE_DATA_MAX_AGE_MINUTES = 5  # 5분 - 가격 데이터 유효 기간
 # =============================================================================
 
 # Exchange rate defaults
-DEFAULT_USD_KRW_RATE = 1400.0  # 기본 USD/KRW 환율 (API 실패 시 폴백)
-
-# BTC dominance defaults
-DEFAULT_BTC_DOMINANCE = 0.6  # 기본 BTC 도미넌스 (API 실패 시 폴백)
-BTC_DOMINANCE_MIN = 0.65  # BTC 도미넌스 축적 임계값
+# 주의: API 폴백이 아니라 변환 유틸리티의 명시적 파라미터 기본값으로만 사용
+DEFAULT_USD_KRW_RATE = 1400.0
 
 # =============================================================================
 # TWAP Constants

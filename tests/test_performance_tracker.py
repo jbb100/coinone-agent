@@ -818,3 +818,37 @@ class TestEdgeCases:
 
         # max_drawdown이 0이면 calmar_ratio도 0 또는 무한대 처리
         assert isinstance(metrics.calmar_ratio, float)
+
+
+@pytest.mark.monitoring
+class TestBenchmarkReturnRealData:
+    """벤치마크 수익률 — 하드코딩 5% 금지, 실제 BTC 가격 기반 (스펙 fail-loud)"""
+
+    @pytest.fixture
+    def tracker_with_binance(self):
+        config = Mock()
+        config.get_risk_config.return_value = {"three_line_check": {}}
+        binance = Mock()
+        tracker = PerformanceTracker(config, Mock(), binance_provider=binance)
+        return tracker, binance
+
+    def test_benchmark_from_real_btc_prices(self, tracker_with_binance):
+        import pandas as pd
+        tracker, binance = tracker_with_binance
+        binance.get_historical_klines.return_value = pd.DataFrame(
+            {"Close": [100.0, 105.0, 120.0]}
+        )
+        result = tracker._calculate_benchmark_return(
+            datetime(2026, 6, 1), datetime(2026, 7, 1)
+        )
+        assert result == pytest.approx(0.20)
+
+    def test_benchmark_empty_data_raises(self, tracker_with_binance):
+        import pandas as pd
+        from src.core.exceptions import DataUnavailableError
+        tracker, binance = tracker_with_binance
+        binance.get_historical_klines.return_value = pd.DataFrame()
+        with pytest.raises(DataUnavailableError):
+            tracker._calculate_benchmark_return(
+                datetime(2026, 6, 1), datetime(2026, 7, 1)
+            )

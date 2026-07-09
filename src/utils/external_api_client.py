@@ -10,8 +10,6 @@ from typing import Optional, Dict, Any
 from loguru import logger
 
 from src.utils.constants import (
-    DEFAULT_USD_KRW_RATE,
-    DEFAULT_BTC_DOMINANCE,
     API_REQUEST_TIMEOUT
 )
 
@@ -95,12 +93,12 @@ class ExternalAPIClient:
             logger.error(f"Fear & Greed API 오류: {e}")
             return None
 
-    def get_usd_krw_rate(self) -> float:
+    def get_usd_krw_rate(self) -> Optional[float]:
         """
         USD/KRW 환율 조회
 
         Returns:
-            USD/KRW 환율 (실패 시 기본값 반환)
+            USD/KRW 환율 또는 None (실패 시 — 폴백 상수 금지)
         """
         cache_key = "usd_krw_rate"
 
@@ -117,7 +115,7 @@ class ExternalAPIClient:
 
             if response.status_code != 200:
                 logger.warning(f"환율 API 응답 오류: {response.status_code}")
-                return DEFAULT_USD_KRW_RATE
+                return None
 
             data = response.json()
 
@@ -129,12 +127,12 @@ class ExternalAPIClient:
                 rate = float(data["conversion_rate"])
             else:
                 logger.warning("환율 API 잘못된 응답 형식")
-                return DEFAULT_USD_KRW_RATE
+                return None
 
             # 합리적 범위 검증 (1000~2000 KRW)
             if not (1000 <= rate <= 2000):
                 logger.warning(f"환율 API 비정상 값: {rate}")
-                return DEFAULT_USD_KRW_RATE
+                return None
 
             # 캐시 저장
             self._set_cache(cache_key, rate)
@@ -144,17 +142,17 @@ class ExternalAPIClient:
 
         except requests.Timeout:
             logger.warning("환율 API 타임아웃")
-            return DEFAULT_USD_KRW_RATE
+            return None
         except Exception as e:
             logger.error(f"환율 API 오류: {e}")
-            return DEFAULT_USD_KRW_RATE
+            return None
 
-    def get_btc_dominance(self) -> float:
+    def get_btc_dominance(self) -> Optional[float]:
         """
         BTC 도미넌스 조회
 
         Returns:
-            BTC 도미넌스 (0-1 범위) (실패 시 기본값 반환)
+            BTC 도미넌스 (0-1 범위) 또는 None (실패 시 — 폴백 상수 금지)
         """
         cache_key = "btc_dominance"
 
@@ -171,7 +169,7 @@ class ExternalAPIClient:
 
             if response.status_code != 200:
                 logger.warning(f"BTC 도미넌스 API 응답 오류: {response.status_code}")
-                return DEFAULT_BTC_DOMINANCE
+                return None
 
             data = response.json()
 
@@ -187,14 +185,14 @@ class ExternalAPIClient:
                 return dominance
             else:
                 logger.warning("BTC 도미넌스 API 잘못된 응답 형식")
-                return DEFAULT_BTC_DOMINANCE
+                return None
 
         except requests.Timeout:
             logger.warning("BTC 도미넌스 API 타임아웃")
-            return DEFAULT_BTC_DOMINANCE
+            return None
         except Exception as e:
             logger.error(f"BTC 도미넌스 API 오류: {e}")
-            return DEFAULT_BTC_DOMINANCE
+            return None
 
     def get_mvrv_ratio(self) -> Optional[float]:
         """
