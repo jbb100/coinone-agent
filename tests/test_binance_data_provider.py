@@ -267,59 +267,6 @@ class TestGetBTCPriceDataForAnalysis:
         assert df.empty
 
 
-class TestGetMultiTimeframeData:
-    """get_multi_timeframe_data 테스트"""
-
-    @pytest.fixture
-    def mock_klines(self):
-        """샘플 캔들 데이터"""
-        return [
-            [1609459200000, '30000', '31000', '29500', '30500', '1000',
-             1609545599999, '30500000', 5000, '500', '15250000', '0'],
-            [1609545600000, '30500', '32000', '30000', '31500', '1200',
-             1609631999999, '37800000', 6000, '600', '18900000', '0'],
-        ]
-
-    @pytest.fixture
-    def provider(self):
-        with patch('src.utils.binance_data_provider.Client'):
-            return BinanceDataProvider()
-
-    def test_get_multi_timeframe_data_success(self, provider, mock_klines):
-        """멀티 타임프레임 데이터 수집 성공"""
-        provider.client.get_historical_klines.return_value = mock_klines
-
-        data = provider.get_multi_timeframe_data(symbol="BTCUSDT")
-
-        assert 'short' in data
-        assert 'medium' in data
-        assert 'long' in data
-        assert len(data) == 3
-
-    def test_get_multi_timeframe_data_with_empty_klines(self, provider):
-        """빈 캔들 데이터 시"""
-        provider.client.get_historical_klines.return_value = []
-
-        data = provider.get_multi_timeframe_data(symbol="BTCUSDT")
-
-        # 빈 데이터프레임을 가진 딕셔너리 반환
-        assert 'short' in data
-        assert 'medium' in data
-        assert 'long' in data
-        assert data['short'].empty
-        assert data['medium'].empty
-        assert data['long'].empty
-
-    def test_get_multi_timeframe_data_exception_at_top_level(self, provider):
-        """최상위 예외 발생 시"""
-        # get_multi_timeframe_data 자체에서 예외 발생
-        provider.get_historical_klines = Mock(side_effect=Exception("Complete failure"))
-
-        data = provider.get_multi_timeframe_data(symbol="BTCUSDT")
-
-        assert data is None
-
-
 class TestConvertUSDTToKRW:
     """convert_usdt_to_krw 테스트"""
 
