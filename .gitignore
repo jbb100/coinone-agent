@@ -15,8 +15,8 @@ secrets.json
 logs/
 *.log
 
-# 데이터베이스 파일
-data/
+# 데이터베이스 파일 (루트 런타임 디렉토리만 — src/data 패키지는 추적)
+/data/
 *.db
 *.sqlite
 *.sqlite3
