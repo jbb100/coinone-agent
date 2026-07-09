@@ -35,10 +35,20 @@
 - ✅ **Phase 4 완료** — Rebalancer의 목업 메서드 4개를 `tests/rebalancer_test_double.py`
   (`SimulatedRebalancer`)로 이동, 리밸런싱 임계값 5%로 전역 단일화,
   `_expand_crypto_orders` 하드코딩 70:30 제거(설정 가중치 사용), README 갱신
-- ⬜ Phase 5 — 백테스트 검증 + 롤아웃 (**valuation 모드 라이브 전환의 게이트**)
-  1. 2017-2026 전체 사이클로 legacy vs valuation vs 단순 DCA 비교
-     (2017-2022 격자 탐색 → 2023-2026 out-of-sample 검증)
-  2. dry-run 2주 → 소액(일일 한도 5%) 2주 → `strategy.regime_model: valuation` 전환
+- 🟡 **Phase 5 — 하네스 완성, 실데이터 실행 대기** (**valuation 모드 라이브 전환의 게이트**)
+  - ✅ 백테스트 하네스 완성: `scripts/backtest_regime_models.py`
+    - legacy vs valuation vs Buy&Hold vs 고정 50:50 비교 (주간, 수수료 0.2%, 5% 임계값)
+    - in-sample(~2022) 격자 탐색(경계 4세트 × 히스테리시스 2종) → out-of-sample(2023~) 검증
+    - Real-data-only: Binance/CoinGecko 실데이터 수집 실패 시 합성하지 않고 중단
+    - 시뮬레이션 엔진은 `tests/test_backtest_harness.py`(8개)로 검증 완료
+  - ⚠️ **이 원격 개발 환경의 네트워크 정책이 시장 데이터 API(Binance/CoinGecko/Yahoo)를
+    차단해 실데이터 실행은 불가.** 다음 중 한 곳에서 실행할 것:
+    1. 운영 머신(이미 Binance API를 사용 중이므로 접근 가능):
+       `python scripts/backtest_regime_models.py`
+       → 결과가 `docs/BACKTEST_REGIME_MODELS.md`로 저장됨
+    2. 또는 Claude Code 웹 환경 설정에서 네트워크 정책을 완화 후 재실행 요청
+  - ⬜ 백테스트 결과 검토 → 전환 결정
+  - ⬜ 롤아웃: dry-run 2주 → 소액(일일 한도 5%) 2주 → `strategy.regime_model: valuation` 전환
 
 Phase 0-1 구현 내역 요약:
 - `market_season_filter`: MA 계산 불가 시 None 반환(대체 MA 금지), `determine_market_season`이
