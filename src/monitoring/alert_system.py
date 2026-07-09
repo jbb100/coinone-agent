@@ -594,10 +594,7 @@ class AlertSystem:
             volatility = analysis_result.get("volatility", 0)
             momentum = analysis_result.get("momentum", 0)
             volume_trend = analysis_result.get("volume_trend", "알 수 없음")
-            
-            # 고급 분석 결과 추출
-            advanced_analysis = analysis_result.get("advanced_analysis", {})
-            
+
             # 시장 계절 이모지
             season_emoji = {
                 "BULLISH": "🐂",
@@ -628,55 +625,6 @@ class AlertSystem:
 • {analysis_result.get('recommendation', '현재 전략 유지')}
             """.strip()
             
-            # 고급 분석 결과 추가
-            if advanced_analysis:
-                message += "\n\n🎯 **고급 분석 통합 결과**\n"
-                
-                # 멀티 타임프레임 분석
-                if advanced_analysis.get("multi_timeframe"):
-                    mtf = advanced_analysis["multi_timeframe"]
-                    confidence = mtf.get("confidence_score", 0)
-                    message += f"• 멀티 타임프레임: 신뢰도 {confidence:.1%}\n"
-                
-                # 매크로 경제 분석
-                if advanced_analysis.get("macro_economic"):
-                    macro = advanced_analysis["macro_economic"]
-                    indicators = macro.get("result_data", {}).get("indicators", {})
-                    if indicators:
-                        vix = indicators.get("VIX", {}).get("value", "N/A")
-                        dxy = indicators.get("DXY", {}).get("value", "N/A")
-                        message += f"• 매크로 지표: VIX {vix}, DXY {dxy}\n"
-                
-                # 온체인 데이터 분석
-                if advanced_analysis.get("onchain_data"):
-                    onchain = advanced_analysis["onchain_data"]
-                    metrics = onchain.get("result_data", {}).get("metrics", {})
-                    if metrics:
-                        nupl = metrics.get("nupl", "N/A")
-                        message += f"• 온체인: NUPL {nupl}\n"
-                
-                # 행동 편향 분석
-                if advanced_analysis.get("behavioral_bias"):
-                    bias = advanced_analysis["behavioral_bias"]
-                    biases = bias.get("result_data", {}).get("detected_biases", [])
-                    if biases:
-                        message += f"• 행동 편향: {len(biases)}개 감지\n"
-                
-                # 성과 분석
-                if advanced_analysis.get("performance_analytics"):
-                    perf = advanced_analysis["performance_analytics"]
-                    metrics = perf.get("result_data", {}).get("performance_metrics", {})
-                    if metrics:
-                        sharpe = metrics.get("sharpe_ratio", "N/A")
-                        message += f"• 성과 지표: Sharpe Ratio {sharpe}\n"
-                
-                # 시나리오 대응
-                if advanced_analysis.get("scenario_response"):
-                    scenario = advanced_analysis["scenario_response"]
-                    active_scenarios = scenario.get("result_data", {}).get("active_scenarios", [])
-                    if active_scenarios:
-                        message += f"• 활성 시나리오: {len(active_scenarios)}개\n"
-            
             # 리밸런싱 정보 추가
             if analysis_result.get("rebalance_triggered"):
                 message += f"""
@@ -684,13 +632,6 @@ class AlertSystem:
 🔄 **리밸런싱 실행**
 • 상태: ✅ TWAP 알고리즘으로 진행 중
 • 예상 기간: {analysis_result.get('rebalance_result', {}).get('estimated_hours', 24)}시간"""
-            
-            # 배분 조정 정보 추가
-            adjusted_allocation = analysis_result.get("adjusted_allocation")
-            if adjusted_allocation:
-                message += f"""\n\n🎯 **고급 분석 반영 배분**
-• 암호화폐: {adjusted_allocation.get('crypto', 0):.1%}
-• KRW: {adjusted_allocation.get('krw', 0):.1%}"""
             
             # 분석 결과가 더 있으면 추가
             analysis_info = analysis_result.get("analysis_info", {})
@@ -714,124 +655,6 @@ class AlertSystem:
             logger.error(f"주간 분석 보고서 발송 실패: {e}")
             return None
     
-    def send_multi_timeframe_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
-        """
-        멀티 타임프레임 분석 보고서 전송
-        
-        Args:
-            analysis_result: 멀티 타임프레임 분석 결과
-            
-        Returns:
-            발송 결과
-        """
-        try:
-            # Extract trading timeframes
-            trading_timeframes = analysis_result.get("trading_timeframes", {})
-            very_short = trading_timeframes.get("very_short_term", {})
-            swing = trading_timeframes.get("swing_term", {})
-            position = trading_timeframes.get("position_term", {})
-
-            # Extract strategic layer
-            strategic_layer = analysis_result.get("strategic_layer", {})
-            market_season = strategic_layer.get("market_season", "알 수 없음")
-            cycle_phase = strategic_layer.get("cycle_phase", "알 수 없음")
-
-            # Extract overall metrics
-            confidence = analysis_result.get("confidence", 0)
-            recommended_allocation = analysis_result.get("recommended_allocation", {})
-
-            # 트렌드 이모지
-            trend_emoji = {
-                "bullish": "📈",
-                "bearish": "📉",
-                "sideways": "➡️"
-            }
-
-            message = f"""
-📊 **멀티 타임프레임 분석 보고서**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📅 분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-📈 **트레이딩 타임프레임**
-• 초단기 (1-7일): {trend_emoji.get(very_short.get('trend', ''), '❓')} {very_short.get('trend', 'N/A')}
-• 스윙 (7-30일): {trend_emoji.get(swing.get('trend', ''), '❓')} {swing.get('trend', 'N/A')}
-• 포지션 (30-200일): {trend_emoji.get(position.get('trend', ''), '❓')} {position.get('trend', 'N/A')}
-
-🎯 **전략 계층**
-• 시장 계절: {market_season}
-• 비트코인 사이클: {cycle_phase}
-• 신뢰도: {confidence:.1%}
-
-💼 **권장 자산 배분**
-• 암호화폐: {recommended_allocation.get('crypto', 'N/A')}
-• 현금(KRW): {recommended_allocation.get('krw', 'N/A')}
-            """.strip()
-            
-            return self.send_info_alert(
-                "멀티 타임프레임 분석 보고서",
-                message,
-                "multi_timeframe_analysis"
-            )
-            
-        except Exception as e:
-            logger.error(f"멀티 타임프레임 분석 보고서 발송 실패: {e}")
-            return None
-    
-    def send_macro_analysis_report(self, analysis_result: Dict) -> Dict[str, bool]:
-        """
-        매크로 경제 분석 보고서 전송
-        
-        Args:
-            analysis_result: 매크로 경제 분석 결과
-            
-        Returns:
-            발송 결과
-        """
-        try:
-            indicators = analysis_result.get("indicators", {})
-            risk_score = analysis_result.get("risk_score", 0)
-            crypto_correlation = analysis_result.get("crypto_correlation", 0)
-            market_outlook = analysis_result.get("market_outlook", "중립")
-            
-            # 리스크 레벨
-            if risk_score >= 0.7:
-                risk_level = "🔴 높음"
-            elif risk_score >= 0.4:
-                risk_level = "🟡 중간"
-            else:
-                risk_level = "🟢 낮음"
-            
-            message = f"""
-🌍 **매크로 경제 분석 보고서**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📅 분석 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-📊 **주요 경제 지표**
-• 연준 기준금리: {indicators.get('fed_funds_rate', 0):.2f}%
-• 달러 인덱스: {indicators.get('dxy_index', 0):.2f}
-• 인플레이션율: {indicators.get('inflation_rate', 0):+.2f}%
-• VIX 지수: {indicators.get('vix_index', 0):.2f}
-• 10년 국채 수익률: {indicators.get('bond_yield_10y', 0):.2f}%
-
-💹 **암호화폐 영향**
-• BTC 상관관계: {crypto_correlation:.2f}
-• 리스크 점수: {risk_score:.2f}/1.0
-• 리스크 수준: {risk_level}
-
-🎯 **시장 전망**: {market_outlook}
-            """.strip()
-            
-            return self.send_info_alert(
-                "매크로 경제 분석 보고서",
-                message,
-                "macro_analysis"
-            )
-            
-        except Exception as e:
-            logger.error(f"매크로 경제 분석 보고서 발송 실패: {e}")
-            return None
 
 
 # 설정 상수

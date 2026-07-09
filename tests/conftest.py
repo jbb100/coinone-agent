@@ -753,9 +753,6 @@ def mock_db_manager():
         -0.002, 0.008, -0.003, 0.006, -0.001
     ]
 
-    # 온체인/매크로 분석 결과
-    db_manager.get_latest_analysis_result.return_value = None
-
     return db_manager
 
 
