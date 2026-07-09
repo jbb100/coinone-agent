@@ -65,6 +65,14 @@ class OrderExecutor:
                 limit = price * (
                     1 + SLIPPAGE_CAP if order.side == "buy" else 1 - SLIPPAGE_CAP
                 )
+                # 코인원 호가 단위 정렬 (오류 310 방지):
+                # 매수는 내림(캡 준수), 매도는 올림(하한 준수)
+                # 1e-9 보정: 부동소수점 오차로 한 틱이 잘리는 것 방지
+                unit = self.coinone.get_price_unit(order.asset, limit)
+                if order.side == "buy":
+                    limit = math.floor(limit / unit + 1e-9) * unit
+                else:
+                    limit = math.ceil(limit / unit - 1e-9) * unit
                 qty = slice_krw / limit
                 result = self.coinone.place_order(
                     currency=order.asset,

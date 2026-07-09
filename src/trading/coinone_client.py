@@ -53,6 +53,9 @@ class CoinoneClient:
         # KRW 마켓 기준으로 주요 코인들
         self.supported_coins = SUPPORTED_CRYPTOCURRENCIES + ["ADA", "DOT", "MATIC", "LINK"]
         self.quote_currency = "KRW"  # 기준 통화
+
+        # 호가 단위(Range Unit) 캐시: {currency: [(range_min, next_range_min, price_unit)]}
+        self._range_units_cache: Dict[str, list] = {}
     
     def _create_signature(self, request_body: Dict) -> Dict[str, str]:
         """
@@ -314,6 +317,54 @@ class CoinoneClient:
         except Exception as e:
             logger.error(f"{currency} 최신 가격 조회 실패: {e}")
             return 0.0
+
+    # 코인원 표준 호가 단위 테이블 (Range Unit API 실패 시 폴백)
+    # (range_min, next_range_min, price_unit)
+    _DEFAULT_RANGE_UNITS = [
+        (0, 1, 0.0001), (1, 5, 0.001), (5, 10, 0.005), (10, 50, 0.01),
+        (50, 100, 0.05), (100, 500, 0.1), (500, 1_000, 0.5),
+        (1_000, 5_000, 1), (5_000, 10_000, 5), (10_000, 50_000, 10),
+        (50_000, 100_000, 50), (100_000, 500_000, 100),
+        (500_000, 1_000_000, 500), (1_000_000, 5_000_000, 1_000),
+        (5_000_000, 10_000_000, 5_000), (10_000_000, float("inf"), 10_000),
+    ]
+
+    def get_price_unit(self, currency: str, price: float) -> float:
+        """
+        지정가 주문의 호가 단위 조회 (오류 310 방지)
+
+        Range Unit API 응답을 통화별로 캐시하고, 실패 시 코인원 표준
+        호가 테이블로 폴백한다.
+
+        Args:
+            currency: 코인 심볼
+            price: 주문 가격 (KRW)
+
+        Returns:
+            해당 가격 구간의 호가 단위 (KRW)
+        """
+        currency = currency.upper()
+        units = self._range_units_cache.get(currency)
+        if units is None:
+            try:
+                response = self._make_request(
+                    "GET", f"/public/v2/range_units/{self.quote_currency}/{currency}",
+                    is_public=True,
+                )
+                units = [
+                    (float(u["range_min"]), float(u["next_range_min"]),
+                     float(u["price_unit"]))
+                    for u in response["range_price_units"]
+                ]
+                self._range_units_cache[currency] = units
+            except Exception as e:
+                logger.warning(f"{currency} 호가 단위 API 실패, 표준 테이블 사용: {e}")
+                units = self._DEFAULT_RANGE_UNITS
+
+        for range_min, next_range_min, price_unit in units:
+            if range_min <= price < next_range_min:
+                return price_unit
+        return units[-1][2]
 
     def _generate_nonce(self) -> str:
         """UUID nonce 생성"""
