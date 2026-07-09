@@ -10,6 +10,7 @@ from src.risk.guard import OrderRequest
 def make_executor(price=100_000_000.0, **kw):
     coinone = MagicMock()
     coinone.get_latest_price.return_value = price
+    coinone.get_price_unit.return_value = 1000.0  # 기본 호가 단위 (테스트 가격과 정렬됨)
     coinone.place_order.return_value = {"success": True, "order_id": "oid-1"}
     defaults = dict(twap_slice_krw=5_000_000, max_retries=3, retry_wait=0)
     defaults.update(kw)
@@ -86,3 +87,74 @@ def test_partial_fill_reported_on_mid_slice_failure():
     report = ex.execute(OrderRequest("BTC", "buy", 10_000_000, "rebalance"))
     assert not report.success
     assert report.filled_krw == pytest.approx(5_000_000)
+
+
+class TestPriceUnitRounding:
+    """운영 회귀 방지: 코인원 오류 310 — 지정가는 호가 단위에 맞춰야 함"""
+
+    def test_buy_limit_floored_to_price_unit(self):
+        # BTC 94,560,000 → 캡 95,032,800 → 단위 10,000원 → 95,030,000으로 내림
+        ex, coinone = make_executor(price=94_560_000.0)
+        coinone.get_price_unit.return_value = 10_000.0
+        ex.execute(OrderRequest("BTC", "buy", 1_000_000, "rebalance"))
+        kwargs = coinone.place_order.call_args.kwargs
+        assert kwargs["price"] == pytest.approx(95_030_000.0)
+        assert kwargs["price"] % 10_000 == 0
+        # 수량은 반올림된 지정가 기준으로 계산
+        assert kwargs["amount"] == pytest.approx(1_000_000 / 95_030_000.0)
+
+    def test_sell_limit_ceiled_to_price_unit(self):
+        # SOL 116,800 → 하한 116,216 → 단위 100원 → 116,300으로 올림
+        ex, coinone = make_executor(price=116_800.0)
+        coinone.get_price_unit.return_value = 100.0
+        ex.execute(OrderRequest("SOL", "sell", 1_000_000, "rebalance"))
+        kwargs = coinone.place_order.call_args.kwargs
+        assert kwargs["price"] == pytest.approx(116_300.0)
+        assert kwargs["price"] % 100 == 0
+
+
+class TestCoinoneGetPriceUnit:
+    """CoinoneClient.get_price_unit — Range Unit API 조회·캐시·폴백"""
+
+    def make_client(self):
+        from src.trading.coinone_client import CoinoneClient
+        client = CoinoneClient(api_key="k", secret_key="s")
+        return client
+
+    def test_price_unit_from_api(self):
+        from unittest.mock import patch
+        client = self.make_client()
+        api_response = {
+            "result": "success",
+            "range_price_units": [
+                {"range_min": 100000, "next_range_min": 500000, "price_unit": 100},
+                {"range_min": 1000000, "next_range_min": 5000000, "price_unit": 1000},
+            ],
+        }
+        with patch.object(client, "_make_request", return_value=api_response):
+            assert client.get_price_unit("SOL", 116_216.0) == 100
+            assert client.get_price_unit("SOL", 2_625_059.0) == 1000
+
+    def test_price_unit_cached_per_currency(self):
+        from unittest.mock import patch
+        client = self.make_client()
+        api_response = {
+            "result": "success",
+            "range_price_units": [
+                {"range_min": 0, "next_range_min": 10000000000, "price_unit": 100},
+            ],
+        }
+        with patch.object(client, "_make_request", return_value=api_response) as mock_req:
+            client.get_price_unit("SOL", 100_000.0)
+            client.get_price_unit("SOL", 200_000.0)
+            assert mock_req.call_count == 1  # 두 번째는 캐시
+
+    def test_price_unit_static_fallback_on_api_failure(self):
+        from unittest.mock import patch
+        client = self.make_client()
+        with patch.object(client, "_make_request", side_effect=Exception("down")):
+            # 코인원 표준 호가 테이블 폴백
+            assert client.get_price_unit("BTC", 94_560_000.0) == 10_000
+            assert client.get_price_unit("ETH", 2_612_000.0) == 1_000
+            assert client.get_price_unit("SOL", 116_800.0) == 100
+            assert client.get_price_unit("XRP", 1_638.0) == 1
