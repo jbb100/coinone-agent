@@ -19,14 +19,16 @@ class ConfigLoader:
     YAML 설정 파일을 로드하고 환경 변수 치환, 암호화된 값 복호화 등을 제공합니다.
     """
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, skip_api_validation: bool = False):
         """
         Args:
             config_path: 설정 파일 경로
+            skip_api_validation: API 키 검증 건너뛰기 (멀티계정 모드용)
         """
         self.config_path = Path(config_path)
         self._config_data = {}
         self._encryption_key = None
+        self.skip_api_validation = skip_api_validation
         
         # 설정 파일 로드
         self._load_config()
@@ -231,16 +233,23 @@ class ConfigLoader:
         except Exception as e:
             logger.error(f"암호화 키 생성 실패: {e}")
     
-    def validate_required_config(self, required_keys: list) -> bool:
+    def validate_required_config(self, required_keys: list = None) -> bool:
         """
         필수 설정 값 검증
         
         Args:
-            required_keys: 필수 키 목록
+            required_keys: 필수 키 목록 (None이면 기본 목록 사용)
             
         Returns:
             검증 통과 여부
         """
+        if self.skip_api_validation:
+            logger.info("API 키 검증 건너뜀 (멀티계정 모드)")
+            return True
+            
+        if required_keys is None:
+            required_keys = REQUIRED_CONFIG_KEYS
+            
         missing_keys = []
         
         for key in required_keys:
@@ -331,11 +340,7 @@ class ConfigLoader:
 
 
 # 설정 검증을 위한 필수 키 목록
+# API 키는 멀티 계정 관리자에서 관리하므로 제외
 REQUIRED_CONFIG_KEYS = [
-    "api.coinone.api_key",
-    "api.coinone.secret_key",
-    "strategy.market_season.buffer_band",
-    "strategy.portfolio.core.BTC",
-    "strategy.portfolio.core.ETH",
     "logging.level"
 ] 

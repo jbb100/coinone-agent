@@ -37,14 +37,17 @@ class PerformanceTracker:
     포트폴리오의 성과를 추적하고 다양한 리스크 지표를 계산합니다.
     """
     
-    def __init__(self, config, db_manager):
+    def __init__(self, config, db_manager, binance_provider=None):
         """
         Args:
             config: ConfigLoader 인스턴스
             db_manager: DatabaseManager 인스턴스
+            binance_provider: BinanceDataProvider 인스턴스 (벤치마크 실데이터용,
+                None이면 최초 사용 시 생성)
         """
         self.config = config
         self.db_manager = db_manager
+        self._binance_provider = binance_provider
         
         # 설정 값들
         risk_config = config.get_risk_config().get("three_line_check", {})
@@ -146,16 +149,30 @@ class PerformanceTracker:
             end_date: 종료 날짜
             
         Returns:
-            벤치마크 총 수익률
+            벤치마크 총 수익률 (실제 BTC 가격 기반)
+
+        Raises:
+            DataUnavailableError: 가격 데이터를 얻지 못한 경우 (하드코딩 폴백 금지)
         """
-        try:
-            # TODO: 실제 구현에서는 외부 API에서 BTC 가격 데이터를 가져와야 함
-            # 여기서는 임시로 5% 수익률 가정
-            return 0.05
-            
-        except Exception as e:
-            logger.error(f"벤치마크 수익률 계산 실패: {e}")
-            return 0.0
+        from src.core.exceptions import DataUnavailableError
+
+        if self._binance_provider is None:
+            from src.utils.binance_data_provider import BinanceDataProvider
+            self._binance_provider = BinanceDataProvider()
+
+        klines = self._binance_provider.get_historical_klines(
+            symbol="BTCUSDT", interval="1d",
+            start_date=start_date, end_date=end_date,
+        )
+        if klines is None or len(klines) < 2 or "Close" not in getattr(klines, "columns", []):
+            raise DataUnavailableError(
+                f"벤치마크용 BTC 일봉 조회 실패 ({start_date:%Y-%m-%d}~{end_date:%Y-%m-%d})"
+            )
+        first = float(klines["Close"].iloc[0])
+        last = float(klines["Close"].iloc[-1])
+        if first <= 0:
+            raise DataUnavailableError("벤치마크 시작가 이상")
+        return last / first - 1.0
     
     def _calculate_metrics(
         self,
@@ -440,7 +457,7 @@ class PerformanceTracker:
         """
         total_value = portfolio_snapshot.get("total_value_krw", 0)
         if total_value <= 0:
-            return {}
+            return None
         
         allocation = {}
         

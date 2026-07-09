@@ -1,11 +1,6 @@
 """
-KAIROS-1 Core Module
+KAIROS-Simple Core Module
 
-시장 계절 필터, 포트폴리오 관리, 리밸런싱 등 핵심 로직을 담당합니다.
+공용 타입, 예외, 복원력(재시도) 유틸리티를 제공합니다.
+전략 로직은 src/strategy, 리스크는 src/risk, 실행은 src/execution 참조.
 """
-
-from .market_season_filter import MarketSeasonFilter
-from .portfolio_manager import PortfolioManager
-from .rebalancer import Rebalancer
-
-__all__ = ["MarketSeasonFilter", "PortfolioManager", "Rebalancer"] 

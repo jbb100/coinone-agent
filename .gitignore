@@ -15,8 +15,8 @@ secrets.json
 logs/
 *.log
 
-# 데이터베이스 파일
-data/
+# 데이터베이스 파일 (루트 런타임 디렉토리만 — src/data 패키지는 추적)
+/data/
 *.db
 *.sqlite
 *.sqlite3
@@ -98,8 +98,10 @@ celerybeat.pid
 .env.test.local
 .env.production.local
 
-# VS Code
-.vscode/
+# VS Code (settings.json은 팀 공유를 위해 제외)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 *.code-workspace
 
 # PyCharm

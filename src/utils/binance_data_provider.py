@@ -14,6 +14,8 @@ from binance.exceptions import BinanceAPIException
 from loguru import logger
 import time
 
+from src.utils.constants import DEFAULT_USD_KRW_RATE
+
 
 class BinanceDataProvider:
     """
@@ -43,7 +45,7 @@ class BinanceDataProvider:
         interval: str = "1d",
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-        limit: int = 1000
+        limit: int = 1500
     ) -> pd.DataFrame:
         """
         Binance에서 히스토리컬 캔들 데이터 가져오기
@@ -76,13 +78,12 @@ class BinanceDataProvider:
             
             logger.info(f"Binance에서 {symbol} 데이터 수집 중... (간격: {interval})")
             
-            # 데이터 가져오기
+            # 데이터 가져오기 - limit 파라미터 제거하여 전체 기간 데이터 가져오기
             klines = self.client.get_historical_klines(
                 symbol,
                 kline_interval,
                 start_str,
-                end_str,
-                limit=limit
+                end_str
             )
             
             if not klines:
@@ -226,12 +227,12 @@ class BinanceDataProvider:
             
         except Exception as e:
             logger.error(f"멀티 타임프레임 데이터 수집 실패: {e}")
-            return {}
+            return None
     
     def convert_usdt_to_krw(
-        self, 
-        df: pd.DataFrame, 
-        usd_krw_rate: float = 1400.0
+        self,
+        df: pd.DataFrame,
+        usd_krw_rate: float = DEFAULT_USD_KRW_RATE
     ) -> pd.DataFrame:
         """
         USDT 가격을 KRW로 변환

@@ -1,9 +1,9 @@
 """
-KAIROS-1 Risk Management Module
+KAIROS-Simple Risk Module
 
-3-라인 체크 시스템, 보안 관리, 규제 대응 기능을 제공합니다.
+모든 주문이 통과하는 단일 리스크 관문(RiskGuard)을 제공합니다.
 """
 
-from .risk_manager import RiskManager
+from .guard import OrderRequest, PortfolioContext, RiskGuard, RiskLimits
 
-__all__ = ["RiskManager"] 
+__all__ = ["OrderRequest", "PortfolioContext", "RiskGuard", "RiskLimits"]

@@ -17,8 +17,13 @@ from loguru import logger
 
 def serialize_for_json(obj):
     """JSON 직렬화를 위한 헬퍼 함수"""
+    import numpy as np
     if isinstance(obj, datetime):
         return obj.isoformat()
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
     elif isinstance(obj, dict):
         return {k: serialize_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -192,6 +197,134 @@ class DatabaseManager:
                         orders_failed INTEGER DEFAULT 0,
                         rebalance_data TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # 고급 분석 결과 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS advanced_analysis_results (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        analysis_type TEXT NOT NULL,
+                        analysis_date TEXT NOT NULL,
+                        result_data TEXT NOT NULL,
+                        confidence_score REAL,
+                        used_in_decision BOOLEAN DEFAULT 0,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(analysis_type, analysis_date)
+                    )
+                """)
+                
+                # 멀티타임프레임 분석 결과
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS multi_timeframe_analysis (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        analysis_date TEXT NOT NULL,
+                        asset TEXT NOT NULL,
+                        timeframe TEXT NOT NULL,
+                        trend TEXT,
+                        strength REAL,
+                        signal TEXT,
+                        indicators TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(analysis_date, asset, timeframe)
+                    )
+                """)
+                
+                # 매크로 경제 분석 결과
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS macro_economic_analysis (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        analysis_date TEXT NOT NULL,
+                        economic_indicators TEXT,
+                        market_sentiment TEXT,
+                        risk_level TEXT,
+                        recommendations TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(analysis_date)
+                    )
+                """)
+                
+                # 온체인 데이터 분석 결과
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS onchain_analysis (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        analysis_date TEXT NOT NULL,
+                        asset TEXT NOT NULL,
+                        network_activity TEXT,
+                        whale_activity TEXT,
+                        exchange_flows TEXT,
+                        defi_metrics TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(analysis_date, asset)
+                    )
+                """)
+                
+                # 시나리오 대응 시스템 결과
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS scenario_response_analysis (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        analysis_date TEXT NOT NULL,
+                        current_scenario TEXT,
+                        response_strategy TEXT,
+                        risk_assessment TEXT,
+                        action_plan TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(analysis_date)
+                    )
+                """)
+                
+                # 행동 편향 방지 분석 결과
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS behavioral_bias_analysis (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        analysis_date TEXT NOT NULL,
+                        detected_biases TEXT,
+                        mitigation_strategies TEXT,
+                        decision_adjustments TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(analysis_date)
+                    )
+                """)
+                
+                # 고급 성과 분석 결과
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS performance_analytics (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        analysis_date TEXT NOT NULL,
+                        performance_metrics TEXT,
+                        attribution_analysis TEXT,
+                        risk_metrics TEXT,
+                        improvement_suggestions TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(analysis_date)
+                    )
+                """)
+                
+                # 거래 락 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS trading_locks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        lock_type TEXT NOT NULL,
+                        asset TEXT,
+                        account_id TEXT,
+                        created_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        reason TEXT,
+                        active INTEGER DEFAULT 1
+                    )
+                """)
+                
+                # 기회적 매수 일일 한도 테이블
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS opportunistic_buy_limits (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        asset TEXT NOT NULL,
+                        date TEXT NOT NULL,
+                        daily_buy_count INTEGER DEFAULT 0,
+                        daily_buy_amount REAL DEFAULT 0,
+                        last_buy_time TEXT,
+                        last_buy_price REAL,
+                        UNIQUE(asset, date)
                     )
                 """)
                 
@@ -952,6 +1085,137 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"기회적 매수 기록 저장 실패: {e}")
     
+    def save_analysis_result(self, analysis_type: str, result_data: Dict) -> int:
+        """
+        고급 분석 결과 저장 (범용)
+        
+        Args:
+            analysis_type: 분석 타입 (multi_timeframe, macro_economic 등)
+            result_data: 분석 결과 데이터
+            
+        Returns:
+            저장된 레코드 ID
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                analysis_date = result_data.get("analysis_date", datetime.now().isoformat())
+                confidence_score = result_data.get("confidence_score", 0.0)
+                
+                cursor.execute("""
+                    INSERT OR REPLACE INTO advanced_analysis_results (
+                        analysis_type, analysis_date, result_data, confidence_score
+                    ) VALUES (?, ?, ?, ?)
+                """, (
+                    analysis_type,
+                    analysis_date,
+                    json.dumps(serialize_for_json(result_data)),
+                    confidence_score
+                ))
+                
+                record_id = cursor.lastrowid
+                conn.commit()
+                
+                logger.info(f"{analysis_type} 분석 결과 저장 완료: ID {record_id}")
+                return record_id
+                
+        except Exception as e:
+            logger.error(f"{analysis_type} 분석 결과 저장 실패: {e}")
+            raise
+    
+    def get_latest_analysis_result(self, analysis_type: str) -> Optional[Dict]:
+        """
+        최근 고급 분석 결과 조회
+        
+        Args:
+            analysis_type: 분석 타입
+            
+        Returns:
+            최근 분석 결과 또는 None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT * FROM advanced_analysis_results
+                    WHERE analysis_type = ?
+                    ORDER BY analysis_date DESC
+                    LIMIT 1
+                """, (analysis_type,))
+                
+                row = cursor.fetchone()
+                if row:
+                    result = dict(row)
+                    result["result_data"] = json.loads(result["result_data"])
+                    return result
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"{analysis_type} 분석 결과 조회 실패: {e}")
+            return None
+    
+    def get_all_latest_analysis_results(self) -> Dict[str, Dict]:
+        """
+        모든 고급 분석 모듈의 최신 결과 조회
+        
+        Returns:
+            {analysis_type: latest_result} 형태의 딕셔너리
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 각 분석 타입별 최신 결과 조회
+                cursor.execute("""
+                    SELECT a.*
+                    FROM advanced_analysis_results a
+                    INNER JOIN (
+                        SELECT analysis_type, MAX(analysis_date) as max_date
+                        FROM advanced_analysis_results
+                        GROUP BY analysis_type
+                    ) b ON a.analysis_type = b.analysis_type 
+                    AND a.analysis_date = b.max_date
+                """)
+                
+                results = {}
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    result["result_data"] = json.loads(result["result_data"])
+                    results[result["analysis_type"]] = result
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"전체 분석 결과 조회 실패: {e}")
+            return None
+    
+    def mark_analysis_as_used(self, analysis_type: str, analysis_date: str):
+        """
+        분석 결과를 의사결정에 사용했음을 표시
+        
+        Args:
+            analysis_type: 분석 타입
+            analysis_date: 분석 날짜
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    UPDATE advanced_analysis_results
+                    SET used_in_decision = 1
+                    WHERE analysis_type = ? AND analysis_date = ?
+                """, (analysis_type, analysis_date))
+                
+                conn.commit()
+                logger.info(f"{analysis_type} 분석 결과를 의사결정에 사용으로 표시")
+                
+        except Exception as e:
+            logger.error(f"분석 사용 표시 실패: {e}")
+    
     def get_market_data(self, asset: str, days: int = 30) -> pd.DataFrame:
         """
         시장 데이터 조회 (가격 데이터) - Binance 데이터 사용
@@ -993,8 +1257,7 @@ class DatabaseManager:
                 price_data = provider.get_historical_klines(
                     symbol=binance_symbol,
                     interval="1d",
-                    start_date=start_date,
-                    limit=days
+                    start_date=start_date
                 )
                 
                 if not price_data.empty:
@@ -1021,4 +1284,271 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"시장 데이터 조회 실패: {asset}, {days}일 - {e}")
-            return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume']) 
+            return pd.DataFrame(columns=['Close', 'High', 'Low', 'Open', 'Volume'])
+    
+    def acquire_trading_lock(self, lock_type: str, asset: str = 'ALL', 
+                            account_id: str = None, duration_hours: float = 2.0, 
+                            reason: str = None) -> Optional[int]:
+        """
+        거래 락 획득
+        
+        Args:
+            lock_type: 락 타입 ('rebalancing', 'opportunistic_buy', 'maintenance')
+            asset: 자산 심볼 또는 'ALL'
+            account_id: 계정 ID
+            duration_hours: 락 유지 시간
+            reason: 락 사유
+            
+        Returns:
+            락 ID 또는 None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                created_at = datetime.now()
+                expires_at = created_at + timedelta(hours=duration_hours)
+                
+                cursor.execute("""
+                    INSERT INTO trading_locks (
+                        lock_type, asset, account_id, created_at, expires_at, reason, active
+                    ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                """, (
+                    lock_type,
+                    asset,
+                    account_id,
+                    created_at.isoformat(),
+                    expires_at.isoformat(),
+                    reason
+                ))
+                
+                lock_id = cursor.lastrowid
+                conn.commit()
+                
+                logger.info(f"거래 락 획득: ID={lock_id}, type={lock_type}, asset={asset}, duration={duration_hours}h")
+                return lock_id
+                
+        except Exception as e:
+            logger.error(f"거래 락 획득 실패: {e}")
+            return None
+    
+    def release_trading_lock(self, lock_id: int) -> bool:
+        """
+        거래 락 해제
+        
+        Args:
+            lock_id: 락 ID
+            
+        Returns:
+            성공 여부
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    UPDATE trading_locks 
+                    SET active = 0 
+                    WHERE id = ? AND active = 1
+                """, (lock_id,))
+                
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"거래 락 해제: ID={lock_id}")
+                    return True
+                else:
+                    logger.warning(f"거래 락 해제 실패: ID={lock_id} - 락이 이미 해제됨 또는 존재하지 않음")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"거래 락 해제 실패: {e}")
+            return False
+    
+    def is_trading_locked(self, lock_type: str = None, asset: str = None) -> bool:
+        """
+        거래 가능 여부 확인
+        
+        Args:
+            lock_type: 확인할 락 타입
+            asset: 확인할 자산
+            
+        Returns:
+            락 존재 여부 (True면 거래 불가)
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                current_time = datetime.now().isoformat()
+                
+                # 활성 락 확인 쿼리
+                query = """
+                    SELECT COUNT(*) FROM trading_locks 
+                    WHERE active = 1 AND expires_at > ?
+                """
+                params = [current_time]
+                
+                # 특정 락 타입 필터
+                if lock_type:
+                    query += " AND lock_type != ?"
+                    params.append(lock_type)
+                
+                # 특정 자산 필터
+                if asset:
+                    query += " AND (asset = ? OR asset = 'ALL')"
+                    params.append(asset)
+                
+                cursor.execute(query, params)
+                count = cursor.fetchone()[0]
+                
+                return count > 0
+                
+        except Exception as e:
+            logger.error(f"거래 락 확인 실패: {e}")
+            return True  # 오류 시 안전하게 거래 차단
+    
+    def get_recent_opportunistic_buys(self, asset: str, hours: int = 4) -> List[Dict]:
+        """
+        최근 기회적 매수 이력 조회
+        
+        Args:
+            asset: 자산 심볼
+            hours: 조회 시간 범위
+            
+        Returns:
+            최근 매수 이력 리스트
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cutoff_time = (datetime.now() - timedelta(hours=hours)).isoformat()
+                
+                cursor.execute("""
+                    SELECT * FROM opportunistic_buys
+                    WHERE asset = ? AND timestamp > ?
+                    ORDER BY timestamp DESC
+                """, (asset, cutoff_time))
+                
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                
+                return [dict(zip(columns, row)) for row in rows]
+                
+        except Exception as e:
+            logger.error(f"최근 기회적 매수 이력 조회 실패: {e}")
+            return []
+    
+    def get_daily_buy_stats(self, asset: str, date: str = None) -> Dict:
+        """
+        일일 매수 통계 조회
+        
+        Args:
+            asset: 자산 심볼
+            date: 날짜 (YYYY-MM-DD 형식, None이면 오늘)
+            
+        Returns:
+            일일 매수 통계
+        """
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 먼저 통계 조회
+                cursor.execute("""
+                    SELECT daily_buy_count, daily_buy_amount, last_buy_time, last_buy_price
+                    FROM opportunistic_buy_limits
+                    WHERE asset = ? AND date = ?
+                """, (asset, date))
+                
+                row = cursor.fetchone()
+                
+                if row:
+                    return {
+                        'count': row[0],
+                        'amount': row[1],
+                        'last_buy_time': row[2],
+                        'last_buy_price': row[3]
+                    }
+                else:
+                    # 레코드가 없으면 기본값 반환
+                    return {
+                        'count': 0,
+                        'amount': 0.0,
+                        'last_buy_time': None,
+                        'last_buy_price': None
+                    }
+                    
+        except Exception as e:
+            logger.error(f"일일 매수 통계 조회 실패: {e}")
+            return {'count': 0, 'amount': 0.0, 'last_buy_time': None, 'last_buy_price': None}
+    
+    def update_daily_buy_limits(self, asset: str, amount: float, price: float, date: str = None):
+        """
+        일일 매수 한도 업데이트
+        
+        Args:
+            asset: 자산 심볼
+            amount: 매수 금액
+            price: 매수 가격
+            date: 날짜 (None이면 오늘)
+        """
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # UPSERT 처리
+                cursor.execute("""
+                    INSERT INTO opportunistic_buy_limits (
+                        asset, date, daily_buy_count, daily_buy_amount, 
+                        last_buy_time, last_buy_price
+                    ) VALUES (?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(asset, date) DO UPDATE SET
+                        daily_buy_count = daily_buy_count + 1,
+                        daily_buy_amount = daily_buy_amount + ?,
+                        last_buy_time = ?,
+                        last_buy_price = ?
+                """, (
+                    asset, date, amount, datetime.now().isoformat(), price,
+                    amount, datetime.now().isoformat(), price
+                ))
+                
+                conn.commit()
+                logger.info(f"일일 매수 한도 업데이트: {asset} - {amount:,.0f} KRW")
+                
+        except Exception as e:
+            logger.error(f"일일 매수 한도 업데이트 실패: {e}")
+    
+    def get_last_rebalance_time(self) -> Optional[datetime]:
+        """
+        최근 리밸런싱 시간 조회
+        
+        Returns:
+            최근 리밸런싱 시간 또는 None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT rebalance_date FROM rebalance_history
+                    ORDER BY rebalance_date DESC
+                    LIMIT 1
+                """)
+                
+                row = cursor.fetchone()
+                
+                if row:
+                    return datetime.fromisoformat(row[0])
+                return None
+                
+        except Exception as e:
+            logger.error(f"최근 리밸런싱 시간 조회 실패: {e}")
+            return None 

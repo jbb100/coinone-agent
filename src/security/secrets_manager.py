@@ -343,7 +343,7 @@ class APIKeyManager:
         service: str,
         api_key: str,
         secret_key: Optional[str] = None,
-        expires_days: int = 90
+        expires_days: Optional[int] = None
     ) -> bool:
         """
         API 키 저장
@@ -352,17 +352,19 @@ class APIKeyManager:
             service: 서비스 이름 (예: coinone, binance)
             api_key: API 키
             secret_key: API 시크릿 키
-            expires_days: 만료 일수
+            expires_days: 만료 일수 (None이면 만료 기한 없음)
         """
         key_data = {
             'api_key': api_key,
             'secret_key': secret_key
         }
-        
+
         metadata = {
             'service': service,
-            'expires_at': (datetime.now() + timedelta(days=expires_days)).isoformat()
         }
+
+        if expires_days is not None:
+            metadata['expires_at'] = (datetime.now() + timedelta(days=expires_days)).isoformat()
         
         return self.secrets.store_secret(
             f"{self.key_prefix}{service}",

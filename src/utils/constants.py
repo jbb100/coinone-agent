@@ -12,7 +12,9 @@ from typing import Dict
 
 # Rebalancing thresholds
 REBALANCE_THRESHOLD = 0.01  # 1% - 리밸런싱 임계값
-MIN_TRADE_AMOUNT_KRW = 10_000  # 10,000 KRW - 최소 거래 금액
+MIN_ORDER_KRW = 1_000  # 1,000 KRW - 거래소 기술적 최소값 (Coinone API 기준)
+MIN_TRADE_AMOUNT_KRW = 10_000  # 10,000 KRW - 운영상 최소 거래 금액 (수수료/슬리피지 고려)
+MIN_ORDER_KRW_BUFFER = 1.05  # 5% 안전 마진
 SAFETY_MARGIN = 0.99  # 99% - 안전 마진 (수수료 고려)
 
 # Order limits and safety
@@ -50,7 +52,6 @@ DEFAULT_CRYPTO_ALLOCATION = {
 
 # Moving average periods
 MA_200W_BUFFER_BAND = 0.05  # 5% - 200주 이동평균 버퍼 밴드
-MA_CALCULATION_FALLBACK_RATIO = 0.9  # 90% - 200주 이동평균 계산 실패 시 fallback 비율
 
 # =============================================================================
 # API and Database Constants
@@ -68,6 +69,14 @@ DB_RETRY_ATTEMPTS = 3  # DB 재시도 횟수
 # Data freshness
 MARKET_ANALYSIS_MAX_AGE_DAYS = 7  # 7일 - 시장 분석 데이터 유효 기간
 PRICE_DATA_MAX_AGE_MINUTES = 5  # 5분 - 가격 데이터 유효 기간
+
+# =============================================================================
+# Market Data Defaults
+# =============================================================================
+
+# Exchange rate defaults
+# 주의: API 폴백이 아니라 변환 유틸리티의 명시적 파라미터 기본값으로만 사용
+DEFAULT_USD_KRW_RATE = 1400.0
 
 # =============================================================================
 # TWAP Constants
@@ -172,17 +181,112 @@ ERROR_BACKOFF_SECONDS = 60  # 오류 발생 시 대기 시간
 # =============================================================================
 
 # Required configuration keys for validation
+# API 키는 멀티 계정 관리자에서 관리하므로 제외
 REQUIRED_CONFIG_KEYS = [
-    "api.coinone.api_key",
-    "api.coinone.secret_key",
-    "database.url",
-    "logging.level",
-    "strategy.portfolio",
-    "strategy.market_season"
+    "logging.level"
 ]
 
 # Sensitive configuration keys (for masking in logs)
 SENSITIVE_CONFIG_KEYS = [
-    "api_key", "secret_key", "password", "token", 
+    "api_key", "secret_key", "password", "token",
     "access_token", "private_key", "webhook_url"
 ]
+
+# =============================================================================
+# Technical Indicators Constants (CLAUDE.md 기준)
+# =============================================================================
+
+# RSI (Relative Strength Index)
+RSI_PERIOD = 14  # 14일 기간
+RSI_OVERSOLD = 30  # 과매도 임계값
+RSI_OVERBOUGHT = 70  # 과매수 임계값
+RSI_MIDLINE = 50  # 중심선
+
+# MACD (Moving Average Convergence Divergence)
+MACD_FAST = 12  # 빠른 EMA 기간
+MACD_SLOW = 26  # 느린 EMA 기간
+MACD_SIGNAL = 9  # 시그널 라인 기간
+
+# Bollinger Bands
+BOLLINGER_PERIOD = 20  # SMA 기간
+BOLLINGER_STD = 2  # 표준편차 배수
+
+# Moving Averages
+MA_SHORT = 50  # 단기 이동평균
+MA_LONG = 200  # 장기 이동평균
+
+# =============================================================================
+# On-chain Metrics Constants (CLAUDE.md 기준)
+# =============================================================================
+
+# MVRV (Market Value to Realized Value)
+MVRV_UNDERVALUED = 1.0  # 과소평가 임계값
+MVRV_OVERVALUED = 3.0  # 과대평가 임계값
+
+# Fear & Greed Index
+FEAR_GREED_EXTREME_FEAR = 25  # 극단적 공포
+FEAR_GREED_FEAR = 40  # 공포
+FEAR_GREED_NEUTRAL = 50  # 중립
+FEAR_GREED_GREED = 60  # 탐욕
+FEAR_GREED_EXTREME_GREED = 75  # 극단적 탐욕
+
+# NUPL (Net Unrealized Profit/Loss)
+NUPL_CAPITULATION = 0.0  # 항복
+NUPL_HOPE = 0.25  # 희망
+NUPL_OPTIMISM = 0.50  # 낙관
+NUPL_BELIEF = 0.75  # 확신
+NUPL_EUPHORIA = 0.90  # 행복감
+
+# =============================================================================
+# Kelly Criterion Constants (CLAUDE.md 기준)
+# =============================================================================
+
+# Kelly fraction multipliers
+KELLY_FULL = 1.0  # Full Kelly
+KELLY_HALF = 0.5  # Half Kelly (권장)
+KELLY_QUARTER = 0.25  # Quarter Kelly (보수적)
+
+# Position sizing rules
+MAX_RISK_PER_TRADE = 0.01  # 1% 규칙 (거래당 최대 리스크)
+MAX_RISK_AGGRESSIVE = 0.02  # 2% (공격적)
+MAX_RISK_CONSERVATIVE = 0.005  # 0.5% (보수적)
+
+# =============================================================================
+# Signal Strength Constants
+# =============================================================================
+
+# Composite signal confidence levels
+SIGNAL_CONFIDENCE_HIGH = 0.85  # 3개 지표 정렬
+SIGNAL_CONFIDENCE_MEDIUM = 0.65  # 2개 지표 정렬
+SIGNAL_CONFIDENCE_LOW = 0.40  # 지표 혼재
+
+# Signal alignment thresholds
+SIGNAL_STRONG_THRESHOLD = 3  # STRONG 신호에 필요한 정렬 지표 수
+SIGNAL_NORMAL_THRESHOLD = 2  # 일반 신호에 필요한 정렬 지표 수
+
+# =============================================================================
+# Bitcoin Cycle Constants (CLAUDE.md 기준)
+# =============================================================================
+
+# Halving cycle allocations
+CYCLE_ACCUMULATION_CRYPTO = 0.80  # 축적기 암호화폐 비중
+CYCLE_EARLY_BULL_CRYPTO = 0.70  # 초기 상승장 비중
+CYCLE_DISTRIBUTION_CRYPTO = 0.30  # 분배기 비중
+CYCLE_BEAR_MARKET_CRYPTO = 0.20  # 하락장 비중
+
+# Cycle timing (days after halving)
+CYCLE_PEAK_MIN_DAYS = 365  # 반감기 후 최소 피크 기간
+CYCLE_PEAK_MAX_DAYS = 550  # 반감기 후 최대 피크 기간
+
+# =============================================================================
+# Backtesting Constants (CLAUDE.md 기준)
+# =============================================================================
+
+# Overfitting warnings
+SHARPE_OVERFITTING_THRESHOLD = 3.0  # Sharpe > 3.0 시 과적합 의심
+MAX_STRATEGY_PARAMS = 5  # 최대 전략 파라미터 수
+OOS_PERFORMANCE_DROP_THRESHOLD = 0.30  # OOS 성능 하락 30% 시 과적합
+
+# Data requirements
+MIN_BACKTEST_DAYS = 365  # 최소 백테스트 기간 (1년)
+TRAIN_TEST_SPLIT = 0.7  # 학습/테스트 분할 비율
