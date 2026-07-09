@@ -308,6 +308,16 @@ class DataIntegrityException(DataException):
         )
 
 
+class InsufficientDataError(DataException):
+    """지표 계산에 필요한 데이터가 부족하거나 오염됨 — 폴백 금지, 거래 중단."""
+    pass
+
+
+class DataUnavailableError(DataException):
+    """외부 API에서 신선한 데이터를 얻지 못함 — 해당 사이클 거래 중단."""
+    pass
+
+
 class StaleDataException(DataException):
     """오래된 데이터 예외"""
     
