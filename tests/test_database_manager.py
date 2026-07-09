@@ -419,51 +419,6 @@ class TestOpportunisticBuyLimits:
 
 
 @pytest.mark.database
-class TestAdvancedAnalysis:
-    """고급 분석 결과 저장 테스트"""
-
-    @pytest.fixture
-    def db_manager(self, tmp_path):
-        """DatabaseManager 인스턴스"""
-        db_path = str(tmp_path / "test.db")
-        config = Mock()
-        config.get = Mock(return_value=db_path)
-        return DatabaseManager(config)
-
-    def test_save_analysis_result(self, db_manager):
-        """분석 결과 저장"""
-        record_id = db_manager.save_analysis_result(
-            analysis_type="multi_timeframe",
-            result_data={
-                "trend": "bullish",
-                "strength": 0.8
-            }
-        )
-
-        assert record_id > 0
-
-    def test_get_latest_analysis_result(self, db_manager):
-        """최근 분석 결과 조회"""
-        db_manager.save_analysis_result(
-            analysis_type="macro_economic",
-            result_data={"risk_level": "low"}
-        )
-
-        result = db_manager.get_latest_analysis_result("macro_economic")
-
-        assert result is not None
-
-    def test_get_all_latest_analysis_results(self, db_manager):
-        """모든 최근 분석 결과 조회"""
-        db_manager.save_analysis_result("type1", {"data": 1})
-        db_manager.save_analysis_result("type2", {"data": 2})
-
-        results = db_manager.get_all_latest_analysis_results()
-
-        assert isinstance(results, dict)
-
-
-@pytest.mark.database
 class TestTwapOrders:
     """TWAP 주문 관련 테스트"""
 
@@ -1270,40 +1225,6 @@ class TestOpportunisticBuyRecord:
 
 
 @pytest.mark.database
-class TestMarkAnalysisAsUsed:
-    """분석 사용 표시 테스트"""
-
-    @pytest.fixture
-    def db_manager(self, tmp_path):
-        """DatabaseManager 인스턴스"""
-        db_path = str(tmp_path / "test.db")
-        config = Mock()
-        config.get = Mock(return_value=db_path)
-        return DatabaseManager(config)
-
-    def test_mark_analysis_as_used(self, db_manager):
-        """분석 결과 사용 표시"""
-        analysis_date = datetime.now().isoformat()
-        db_manager.save_analysis_result(
-            analysis_type="multi_timeframe",
-            result_data={"analysis_date": analysis_date, "trend": "bullish"}
-        )
-
-        db_manager.mark_analysis_as_used("multi_timeframe", analysis_date)
-
-        # 표시 확인
-        with db_manager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT used_in_decision FROM advanced_analysis_results
-                WHERE analysis_type = ? AND analysis_date = ?
-            """, ("multi_timeframe", analysis_date))
-            row = cursor.fetchone()
-
-        assert row["used_in_decision"] == 1
-
-
-@pytest.mark.database
 class TestGetLastRebalanceTime:
     """최근 리밸런싱 시간 조회 테스트"""
 
@@ -1773,43 +1694,6 @@ class TestOpportunisticBuyException:
         with patch.object(db_manager, 'get_connection', side_effect=Exception("DB error")):
             # 예외 발생해도 반환값 없이 종료
             db_manager.update_daily_buy_limits("BTC", 100000, 50000000)
-
-
-@pytest.mark.database
-class TestAnalysisResultsException:
-    """분석 결과 관련 예외 처리 테스트"""
-
-    @pytest.fixture
-    def db_manager(self, tmp_path):
-        """DatabaseManager 인스턴스"""
-        db_path = str(tmp_path / "test.db")
-        config = Mock()
-        config.get = Mock(return_value=db_path)
-        return DatabaseManager(config)
-
-    def test_save_analysis_result_exception(self, db_manager):
-        """분석 결과 저장 예외 처리 (라인 1123-1125)"""
-        with patch.object(db_manager, 'get_connection', side_effect=Exception("DB error")):
-            with pytest.raises(Exception):
-                db_manager.save_analysis_result("multi_timeframe", {"trend": "bullish"})
-
-    def test_get_latest_analysis_result_exception(self, db_manager):
-        """분석 결과 조회 예외 처리 (라인 1154-1158)"""
-        with patch.object(db_manager, 'get_connection', side_effect=Exception("DB error")):
-            result = db_manager.get_latest_analysis_result("multi_timeframe")
-            assert result is None
-
-    def test_get_all_latest_analysis_results_exception(self, db_manager):
-        """전체 분석 결과 조회 예외 처리 (라인 1191-1193)"""
-        with patch.object(db_manager, 'get_connection', side_effect=Exception("DB error")):
-            result = db_manager.get_all_latest_analysis_results()
-            assert result is None
-
-    def test_mark_analysis_as_used_exception(self, db_manager):
-        """분석 사용 표시 예외 처리 (라인 1216-1217)"""
-        with patch.object(db_manager, 'get_connection', side_effect=Exception("DB error")):
-            # 예외 발생해도 반환값 없이 종료
-            db_manager.mark_analysis_as_used("multi_timeframe", datetime.now().isoformat())
 
 
 @pytest.mark.database

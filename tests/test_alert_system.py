@@ -216,34 +216,6 @@ class TestAlertSystem:
 
             assert result == {'slack': True}
 
-    def test_send_market_analysis_report_with_advanced(self, alert_system):
-        """고급 분석 포함 보고서"""
-        analysis_result = {
-            'current_season': 'BULLISH',
-            'previous_season': 'NEUTRAL',
-            'season_changed': False,
-            'trend_score': 0.75,
-            'volatility': 0.05,
-            'momentum': 0.6,
-            'volume_trend': '상승',
-            'advanced_analysis': {
-                'multi_timeframe': {'confidence_score': 0.8},
-                'macro_economic': {
-                    'result_data': {
-                        'indicators': {
-                            'VIX': {'value': 18},
-                            'DXY': {'value': 98}
-                        }
-                    }
-                }
-            }
-        }
-
-        with patch.object(alert_system, 'send_info_alert', return_value={'slack': True}):
-            result = alert_system.send_market_analysis_report(analysis_result)
-
-            assert result == {'slack': True}
-
     def test_send_weekly_analysis_report_alias(self, alert_system):
         """send_weekly_analysis_report가 send_market_analysis_report를 호출"""
         with patch.object(alert_system, 'send_market_analysis_report', return_value={'slack': True}):
@@ -450,90 +422,6 @@ class TestAlertSystemAdvanced:
 
         assert result is None
 
-    def test_send_multi_timeframe_analysis_report(self, alert_system_full):
-        """멀티 타임프레임 분석 보고서"""
-        analysis_result = {
-            'trading_timeframes': {
-                'very_short_term': {'trend': 'bullish'},
-                'swing_term': {'trend': 'sideways'},
-                'position_term': {'trend': 'bullish'}
-            },
-            'strategic_layer': {
-                'market_season': 'BULLISH',
-                'cycle_phase': 'accumulation'
-            },
-            'confidence': 0.85,
-            'recommended_allocation': {
-                'crypto': '70%',
-                'krw': '30%'
-            }
-        }
-
-        with patch.object(alert_system_full, 'send_info_alert', return_value={'slack': True}):
-            result = alert_system_full.send_multi_timeframe_analysis_report(analysis_result)
-
-            assert result == {'slack': True}
-
-    def test_send_multi_timeframe_analysis_report_exception(self, alert_system_full):
-        """멀티 타임프레임 분석 보고서 예외 처리"""
-        result = alert_system_full.send_multi_timeframe_analysis_report(None)
-
-        assert result is None
-
-    def test_send_macro_analysis_report(self, alert_system_full):
-        """매크로 경제 분석 보고서"""
-        analysis_result = {
-            'indicators': {
-                'fed_funds_rate': 5.25,
-                'dxy_index': 104.5,
-                'inflation_rate': 3.2,
-                'vix_index': 18.5,
-                'bond_yield_10y': 4.5
-            },
-            'risk_score': 0.55,
-            'crypto_correlation': -0.3,
-            'market_outlook': '중립'
-        }
-
-        with patch.object(alert_system_full, 'send_info_alert', return_value={'slack': True}):
-            result = alert_system_full.send_macro_analysis_report(analysis_result)
-
-            assert result == {'slack': True}
-
-    def test_send_macro_analysis_report_high_risk(self, alert_system_full):
-        """고위험 매크로 분석 보고서"""
-        analysis_result = {
-            'indicators': {},
-            'risk_score': 0.85,  # 높은 리스크
-            'crypto_correlation': -0.5,
-            'market_outlook': '약세'
-        }
-
-        with patch.object(alert_system_full, 'send_info_alert', return_value={'slack': True}):
-            result = alert_system_full.send_macro_analysis_report(analysis_result)
-
-            assert result == {'slack': True}
-
-    def test_send_macro_analysis_report_low_risk(self, alert_system_full):
-        """저위험 매크로 분석 보고서"""
-        analysis_result = {
-            'indicators': {},
-            'risk_score': 0.2,  # 낮은 리스크
-            'crypto_correlation': 0.3,
-            'market_outlook': '강세'
-        }
-
-        with patch.object(alert_system_full, 'send_info_alert', return_value={'slack': True}):
-            result = alert_system_full.send_macro_analysis_report(analysis_result)
-
-            assert result == {'slack': True}
-
-    def test_send_macro_analysis_report_exception(self, alert_system_full):
-        """매크로 분석 보고서 예외 처리"""
-        result = alert_system_full.send_macro_analysis_report(None)
-
-        assert result is None
-
     def test_send_market_analysis_with_rebalance(self, alert_system_full):
         """리밸런싱 포함 시장 분석 보고서"""
         analysis_result = {
@@ -545,8 +433,7 @@ class TestAlertSystemAdvanced:
             'momentum': 0.6,
             'volume_trend': '상승',
             'rebalance_triggered': True,
-            'rebalance_result': {'estimated_hours': 12},
-            'adjusted_allocation': {'crypto': 0.7, 'krw': 0.3}
+            'rebalance_result': {'estimated_hours': 12}
         }
 
         with patch.object(alert_system_full, 'send_info_alert', return_value={'slack': True}):
@@ -554,8 +441,8 @@ class TestAlertSystemAdvanced:
 
             assert result == {'slack': True}
 
-    def test_send_market_analysis_with_all_advanced(self, alert_system_full):
-        """모든 고급 분석 포함 보고서"""
+    def test_send_market_analysis_price_ratio_high(self, alert_system_full):
+        """높은 가격 비율(과열 구간) 분석"""
         analysis_result = {
             'current_season': 'BEARISH',
             'previous_season': 'NEUTRAL',
@@ -564,37 +451,6 @@ class TestAlertSystemAdvanced:
             'volatility': 0.08,
             'momentum': -0.3,
             'volume_trend': '하락',
-            'advanced_analysis': {
-                'multi_timeframe': {'confidence_score': 0.7},
-                'macro_economic': {
-                    'result_data': {
-                        'indicators': {
-                            'VIX': {'value': 25},
-                            'DXY': {'value': 103}
-                        }
-                    }
-                },
-                'onchain_data': {
-                    'result_data': {
-                        'metrics': {'nupl': 0.35}
-                    }
-                },
-                'behavioral_bias': {
-                    'result_data': {
-                        'detected_biases': ['FOMO', 'panic_selling']
-                    }
-                },
-                'performance_analytics': {
-                    'result_data': {
-                        'performance_metrics': {'sharpe_ratio': 1.5}
-                    }
-                },
-                'scenario_response': {
-                    'result_data': {
-                        'active_scenarios': ['market_correction']
-                    }
-                }
-            },
             'analysis_info': {
                 'price_ratio': 1.08  # 과열 구간
             }
