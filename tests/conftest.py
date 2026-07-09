@@ -21,8 +21,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.core.exceptions import *
 from src.security.secrets_manager import SecretsManager, APIKeyManager
-from src.core.async_client import AsyncHTTPClient, AsyncCache
-from src.backtesting.backtesting_engine import BacktestingEngine, BacktestConfig, BacktestMode
 
 
 # ============================================================================
@@ -66,16 +64,6 @@ def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture
-async def async_client_session():
-    """비동기 클라이언트 세션"""
-    client = AsyncHTTPClient()
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 # ============================================================================
@@ -342,57 +330,6 @@ def test_db_connection(temp_db_path):
     yield conn
     
     conn.close()
-
-
-# ============================================================================
-# Backtesting Fixtures
-# ============================================================================
-
-@pytest.fixture
-def backtest_config() -> BacktestConfig:
-    """백테스팅 설정"""
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-    
-    return BacktestConfig(
-        start_date=start_date,
-        end_date=end_date,
-        initial_capital=1000000.0,  # 100만원
-        rebalance_frequency='weekly',
-        mode=BacktestMode.SIMPLE,
-        risk_level='moderate',
-        transaction_cost=0.001
-    )
-
-
-@pytest.fixture
-def mock_backtesting_engine(backtest_config):
-    """Mock 백테스팅 엔진"""
-    engine = BacktestingEngine(backtest_config)
-    
-    # Mock 데이터 설정
-    with patch.object(engine, 'load_historical_data', return_value=True):
-        with patch.object(engine, 'historical_data', {
-            'BTC': Mock(),
-            'ETH': Mock(),
-            'XRP': Mock(),
-            'SOL': Mock()
-        }):
-            yield engine
-
-
-# ============================================================================
-# Async Test Fixtures
-# ============================================================================
-
-@pytest.fixture
-async def async_cache():
-    """비동기 캐시"""
-    cache = AsyncCache(max_memory_items=100)
-    yield cache
-    
-    # 정리
-    cache.clear_cache()
 
 
 # ============================================================================
