@@ -32,8 +32,13 @@
   config `strategy.regime_model: legacy|valuation` 스위치, 기본값 legacy)
 - ✅ **Phase 3 완료** — `allocation_arbiter.py`(클로백 면제 + 허용 밴드),
   `opportunistic_seller.py`(4단계 익절), 매수/매도 실행 스크립트에 밴드 한도 적용
-- ⬜ Phase 4 — 잔여 코드 정리 (Rebalancer mock 메서드 제거 — 기존 테스트 마이그레이션 필요)
+- ✅ **Phase 4 완료** — Rebalancer의 목업 메서드 4개를 `tests/rebalancer_test_double.py`
+  (`SimulatedRebalancer`)로 이동, 리밸런싱 임계값 5%로 전역 단일화,
+  `_expand_crypto_orders` 하드코딩 70:30 제거(설정 가중치 사용), README 갱신
 - ⬜ Phase 5 — 백테스트 검증 + 롤아웃 (**valuation 모드 라이브 전환의 게이트**)
+  1. 2017-2026 전체 사이클로 legacy vs valuation vs 단순 DCA 비교
+     (2017-2022 격자 탐색 → 2023-2026 out-of-sample 검증)
+  2. dry-run 2주 → 소액(일일 한도 5%) 2주 → `strategy.regime_model: valuation` 전환
 
 Phase 0-1 구현 내역 요약:
 - `market_season_filter`: MA 계산 불가 시 None 반환(대체 MA 금지), `determine_market_season`이

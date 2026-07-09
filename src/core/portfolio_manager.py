@@ -269,20 +269,21 @@ class PortfolioManager:
             crypto_action = crypto_order["action"]
             
             logger.info(f"crypto 주문 분해: {crypto_action} {crypto_amount:,.0f} KRW")
-            
-            # 개별 암호화폐로 분배
-            # Core assets (70%): BTC, ETH
-            # Satellite assets (30%): XRP, SOL
-            core_amount = crypto_amount * 0.7  # 70%
-            satellite_amount = crypto_amount * 0.3  # 30%
-            
-            # Core assets 분배
-            btc_amount = core_amount * (self.asset_allocation.btc_weight / (self.asset_allocation.btc_weight + self.asset_allocation.eth_weight))
-            eth_amount = core_amount * (self.asset_allocation.eth_weight / (self.asset_allocation.btc_weight + self.asset_allocation.eth_weight))
-            
-            # Satellite assets 분배
-            xrp_amount = satellite_amount * (self.asset_allocation.xrp_weight / (self.asset_allocation.xrp_weight + self.asset_allocation.sol_weight))
-            sol_amount = satellite_amount * (self.asset_allocation.sol_weight / (self.asset_allocation.xrp_weight + self.asset_allocation.sol_weight))
+
+            # 개별 암호화폐로 분배 — AssetAllocation의 실제 설정 가중치를 그대로 사용
+            # (과거 core/satellite 70:30 하드코딩은 설정과 불일치할 수 있어 제거)
+            total_weight = (
+                self.asset_allocation.btc_weight + self.asset_allocation.eth_weight
+                + self.asset_allocation.xrp_weight + self.asset_allocation.sol_weight
+            )
+            if total_weight <= 0:
+                logger.error("crypto 주문 분해 불가: 자산 가중치 합이 0")
+                return rebalance_info
+
+            btc_amount = crypto_amount * (self.asset_allocation.btc_weight / total_weight)
+            eth_amount = crypto_amount * (self.asset_allocation.eth_weight / total_weight)
+            xrp_amount = crypto_amount * (self.asset_allocation.xrp_weight / total_weight)
+            sol_amount = crypto_amount * (self.asset_allocation.sol_weight / total_weight)
             
             # 개별 암호화폐 주문 생성
             for asset, amount in [("BTC", btc_amount), ("ETH", eth_amount), ("XRP", xrp_amount), ("SOL", sol_amount)]:

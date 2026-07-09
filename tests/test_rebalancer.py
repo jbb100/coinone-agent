@@ -12,6 +12,7 @@ import pandas as pd
 from decimal import Decimal
 
 from src.core.rebalancer import Rebalancer
+from tests.rebalancer_test_double import SimulatedRebalancer
 from src.core.exceptions import *
 
 
@@ -90,7 +91,7 @@ class TestRebalancer:
     def rebalancer(self, mock_config, mock_portfolio_manager):
         """Rebalancer 인스턴스"""
         with patch('src.core.rebalancer.load_config', return_value=mock_config):
-            rebalancer = Rebalancer(portfolio_manager=mock_portfolio_manager)
+            rebalancer = SimulatedRebalancer(portfolio_manager=mock_portfolio_manager)
             return rebalancer
     
     def test_initialization(self, rebalancer):
@@ -284,7 +285,7 @@ class TestRebalancer:
         mock_config['rebalancing']['dry_run'] = True
         
         with patch('src.core.rebalancer.load_config', return_value=mock_config):
-            rebalancer = Rebalancer(portfolio_manager=mock_portfolio_manager)
+            rebalancer = SimulatedRebalancer(portfolio_manager=mock_portfolio_manager)
             
             results = rebalancer.run_rebalancing_cycle(dry_run=True)
             
@@ -374,7 +375,7 @@ class TestRebalancerIntegration:
         }
         
         with patch('src.core.rebalancer.load_config', return_value=config):
-            rebalancer = Rebalancer(portfolio_manager=mock_portfolio_manager)
+            rebalancer = SimulatedRebalancer(portfolio_manager=mock_portfolio_manager)
             
             # 전체 워크플로우 실행
             results = rebalancer.run_rebalancing_cycle()
@@ -428,7 +429,7 @@ class TestRebalancerIntegration:
         }
         
         with patch('src.core.rebalancer.load_config', return_value=config):
-            rebalancer = Rebalancer(portfolio_manager=mock_portfolio_manager)
+            rebalancer = SimulatedRebalancer(portfolio_manager=mock_portfolio_manager)
             
             results = rebalancer.run_rebalancing_cycle()
             

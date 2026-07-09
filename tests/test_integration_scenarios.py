@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from src.core.portfolio_manager import PortfolioManager
 from src.core.rebalancer import Rebalancer
+from tests.rebalancer_test_double import SimulatedRebalancer
 from src.core.multi_account_manager import MultiAccountManager
 from src.trading.coinone_client import CoinoneClient
 from src.security.secrets_manager import SecretsManager
@@ -117,7 +118,7 @@ class TestCompleteInvestmentWorkflow:
              patch('src.core.rebalancer.load_config', return_value=config):
             
             portfolio_manager = PortfolioManager(coinone_client=mock_client)
-            rebalancer = Rebalancer(portfolio_manager=portfolio_manager)
+            rebalancer = SimulatedRebalancer(portfolio_manager=portfolio_manager)
             
             # 1. 초기 포트폴리오 상태 확인
             initial_status = await portfolio_manager.get_portfolio_status()
@@ -191,7 +192,7 @@ class TestCompleteInvestmentWorkflow:
              patch('src.core.rebalancer.load_config', return_value=config):
             
             portfolio_manager = PortfolioManager(coinone_client=mock_client)
-            rebalancer = Rebalancer(portfolio_manager=portfolio_manager)
+            rebalancer = SimulatedRebalancer(portfolio_manager=portfolio_manager)
             
             # 1. 하락장에서의 포트폴리오 상태
             status = await portfolio_manager.get_portfolio_status()
@@ -270,7 +271,7 @@ class TestCompleteInvestmentWorkflow:
                  patch('src.core.rebalancer.load_config', return_value=config):
                 
                 portfolio_manager = PortfolioManager(coinone_client=mock_client)
-                rebalancer = Rebalancer(portfolio_manager=portfolio_manager)
+                rebalancer = SimulatedRebalancer(portfolio_manager=portfolio_manager)
                 
                 # 리밸런싱 실행
                 analysis = await rebalancer.analyze_portfolio()
@@ -337,7 +338,7 @@ class TestCompleteInvestmentWorkflow:
                  patch('src.core.rebalancer.load_config', return_value=config):
                 
                 portfolio_manager = PortfolioManager(coinone_client=mock_client)
-                rebalancer = Rebalancer(portfolio_manager=portfolio_manager)
+                rebalancer = SimulatedRebalancer(portfolio_manager=portfolio_manager)
                 
                 # 장애 상황에서의 처리 확인
                 status = await portfolio_manager.get_portfolio_status()
@@ -520,7 +521,7 @@ class TestRealWorldTradeScenarios:
              patch('src.core.rebalancer.load_config', return_value=config):
             
             portfolio_manager = PortfolioManager(coinone_client=mock_client)
-            rebalancer = Rebalancer(portfolio_manager=portfolio_manager)
+            rebalancer = SimulatedRebalancer(portfolio_manager=portfolio_manager)
             
             # 제약 조건 검증
             current_status = await portfolio_manager.get_portfolio_status()

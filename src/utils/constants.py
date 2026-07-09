@@ -11,7 +11,9 @@ from typing import Dict
 # =============================================================================
 
 # Rebalancing thresholds
-REBALANCE_THRESHOLD = 0.01  # 1% - 리밸런싱 임계값
+# 리밸런싱 임계값 (비중 편차가 이 값을 넘으면 리밸런싱) — 시스템 전역 단일 기준
+# 과거 constants(1%)와 각처 하드코딩(5%)이 혼재했음. 잦은 매매(수수료·세금)를 피하기 위해 5%로 통일.
+REBALANCE_THRESHOLD = 0.05  # 5%
 MIN_TRADE_AMOUNT_KRW = 10_000  # 10,000 KRW - 최소 거래 금액
 SAFETY_MARGIN = 0.99  # 99% - 안전 마진 (수수료 고려)
 

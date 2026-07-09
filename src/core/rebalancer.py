@@ -295,113 +295,12 @@ class Rebalancer:
             logger.error(f"포트폴리오 분석 실패: {e}")
             return {'error': str(e)}
     
-    async def generate_rebalancing_plan(self, target_weights: Dict[str, float] = None) -> Dict:
-        """리밸런싱 계획 생성"""
-        try:
-            if not self.portfolio_manager:
-                return {'error': 'Portfolio manager not available'}
-            
-            # Get target weights if not provided
-            if target_weights is None:
-                try:
-                    target_weights = {'BTC': 0.4, 'ETH': 0.3, 'KRW': 0.3}  # Default weights for tests
-                except Exception:
-                    target_weights = {'BTC': 0.4, 'ETH': 0.3, 'KRW': 0.3}
-            
-            # Mock implementation for tests - return basic structure
-            trades = []
-            summary = {'buy_orders': 0, 'sell_orders': 0, 'total_value': 0}
-            
-            plan = {
-                'success': True,
-                'trades': trades,
-                'summary': summary,
-                'estimated_cost': summary['total_value'] * 0.001,  # 0.1% fee
-                'expected_completion_time': datetime.now() + timedelta(minutes=30),
-                'risk_assessment': 'low'
-            }
-            
-            return plan
-        except Exception as e:
-            logger.error(f"리밸런싱 계획 생성 실패: {e}")
-            return {'error': str(e)}
-    
-    async def execute_rebalancing_plan(self, plan: Dict, dry_run: bool = True) -> List:
-        """리밸런싱 계획 실행"""
-        try:
-            trades = plan.get('trades', [])
-            results = []
-            
-            for trade in trades:
-                try:
-                    if dry_run:
-                        result = {
-                            'asset': trade.get('asset'),
-                            'action': trade.get('action'),
-                            'quantity': trade.get('quantity'),
-                            'amount': trade.get('amount'),
-                            'status': 'would_execute',
-                            'dry_run': True
-                        }
-                    else:
-                        # Execute actual trade via portfolio manager
-                        if self.portfolio_manager and hasattr(self.portfolio_manager, 'execute_trade'):
-                            result = await self.portfolio_manager.execute_trade(
-                                asset=trade.get('asset'),
-                                side=trade.get('action'),
-                                amount=trade.get('amount')
-                            )
-                        else:
-                            result = {
-                                'asset': trade.get('asset'),
-                                'status': 'executed',
-                                'message': 'Mock execution successful'
-                            }
-                    
-                    results.append(result)
-                    
-                except Exception as trade_error:
-                    results.append({
-                        'asset': trade.get('asset', 'unknown'),
-                        'status': 'failed',
-                        'error': str(trade_error)
-                    })
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"리밸런싱 계획 실행 실패: {e}")
-            return [{'status': 'failed', 'error': str(e)}]
-    
-    async def full_rebalancing_cycle(self, dry_run: bool = True) -> Dict:
-        """전체 리밸런싱 사이클 실행"""
-        try:
-            # Mock implementation for tests
-            return {
-                'success': True,
-                'cycle_completed': True,
-                'dry_run': dry_run,
-                'duration_seconds': 120,
-                'timestamp': datetime.now().isoformat()
-            }
-        except Exception as e:
-            logger.error(f"전체 리밸런싱 사이클 실패: {e}")
-            return {'success': False, 'error': str(e)}
-    
-    def run_rebalancing_cycle(self, dry_run: bool = True) -> Dict:
-        """리밸런싱 사이클 실행 (동기 버전)"""
-        try:
-            return {
-                'success': True,
-                'cycle_completed': True,
-                'dry_run': dry_run,
-                'duration_seconds': 120,
-                'timestamp': datetime.now().isoformat()
-            }
-        except Exception as e:
-            logger.error(f"리밸런싱 사이클 실패: {e}")
-            return {'success': False, 'error': str(e)}
-    
+    # NOTE: 과거 이 위치에 있던 generate_rebalancing_plan / execute_rebalancing_plan /
+    # full_rebalancing_cycle / run_rebalancing_cycle은 실주문 없이 success만 반환하는
+    # 테스트용 목업이었음. 프로덕션 클래스에서 제거하고
+    # tests/rebalancer_test_double.py의 SimulatedRebalancer로 이동함.
+    # 실제 리밸런싱 실행은 execute_quarterly_rebalance()를 사용할 것.
+
     def perform_risk_check(self, plan: Dict) -> Dict:
         """리스크 체크 수행"""
         return self.risk_check(plan)
@@ -1195,9 +1094,9 @@ class Rebalancer:
             # 현재 포트폴리오 조회
             current_portfolio = self.coinone_client.get_portfolio_value()
             
-            # 리밸런싱 필요 여부 확인
+            # 리밸런싱 필요 여부 확인 (전역 단일 임계값 사용)
             needs_rebalancing, rebalance_info = self.portfolio_manager.should_rebalance_portfolio(
-                current_portfolio, rebalance_threshold=0.05  # 5% 임계값
+                current_portfolio, rebalance_threshold=self.min_rebalance_threshold
             )
             
             # 결과 구성
