@@ -232,9 +232,18 @@ class KairosSimple:
             if report.success:
                 executed += 1
                 self._daily_traded_krw += req.amount_krw
-                self.portfolio.record_trade(
-                    req.asset, req.side, req.amount_krw, origin=req.origin
-                )
+                # 주문은 이미 체결됨 — 기록 실패가 나머지 주문 실행을 막으면 안 됨
+                try:
+                    self.portfolio.record_trade(
+                        req.asset, req.side, req.amount_krw, origin=req.origin
+                    )
+                except Exception as e:
+                    logger.error(f"거래 기록 실패 (주문은 체결됨): {req.asset} — {e}")
+                    self.alerts.send_error_alert(
+                        "거래 기록 실패",
+                        f"{req.side} {req.asset} {req.amount_krw:,.0f} KRW 주문은 "
+                        f"체결됐으나 DB 기록 실패: {e}",
+                    )
             else:
                 rejected.append((req.asset, f"실행 실패: {report.error}"))
         result = {"executed": executed, "rejected": rejected, "halted": False}

@@ -63,6 +63,7 @@ MANIFEST
 venv/
 env/
 ENV/
+kairos_env
 kairos_env/
 .venv/
 

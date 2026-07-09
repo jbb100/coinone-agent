@@ -1432,69 +1432,76 @@ class TestConnectionError:
 
 @pytest.mark.database
 class TestSaveTrade:
-    """거래 내역 저장 테스트"""
+    """거래 내역 저장 테스트 — 실제 DDL 스키마 그대로 사용.
+
+    회귀 방지: 과거 이 픽스처가 자체 테이블을 만들어 DDL 불일치를 가렸고,
+    운영에서 'no column named currency'로 주문 체결 후 크래시가 발생했다.
+    """
 
     @pytest.fixture
     def db_manager(self, tmp_path):
-        """DatabaseManager 인스턴스"""
+        """DatabaseManager 인스턴스 (실제 초기화 DDL 그대로)"""
         db_path = str(tmp_path / "test.db")
         config = Mock()
         config.get = Mock(return_value=db_path)
-        db = DatabaseManager(config)
-        # trade_history 테이블 수정
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DROP TABLE IF EXISTS trade_history")
-            cursor.execute("""
-                CREATE TABLE trade_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    order_id TEXT,
-                    currency TEXT,
-                    side TEXT,
-                    order_type TEXT,
-                    amount REAL,
-                    price REAL,
-                    filled_amount REAL,
-                    average_price REAL,
-                    fee REAL,
-                    status TEXT,
-                    trade_date TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.commit()
-        return db
+        return DatabaseManager(config)
 
     def test_save_trade(self, db_manager):
-        """거래 내역 저장"""
+        """거래 내역 저장 — 정식 스키마(asset/amount_krw) 컬럼"""
         trade_info = {
-            "order_id": "test_order_001",
-            "currency": "BTC",
+            "asset": "BTC",
             "side": "buy",
-            "order_type": "market",
-            "amount": 0.01,
-            "price": 50000000,
-            "filled_amount": 0.01,
-            "average_price": 50100000,
-            "fee": 500,
-            "status": "filled",
-            "created_at": datetime.now()
+            "amount_krw": 500_000.0,
+            "price": 50_000_000.0,
+            "quantity": 0.01,
+            "fee_krw": 500.0,
+            "order_id": "test_order_001",
+            "origin": "dca",
+            "trade_date": datetime.now(),
         }
 
         record_id = db_manager.save_trade(trade_info)
 
         assert record_id > 0
+        saved = db_manager.get_trade_history(days=1)
+        assert saved and saved[0]["asset"] == "BTC"
+        assert saved[0]["amount_krw"] == 500_000.0
 
     def test_save_trade_minimal(self, db_manager):
-        """최소 정보로 거래 내역 저장"""
-        trade_info = {
-            "order_id": "test_order_002",
-            "currency": "ETH",
-            "side": "sell"
-        }
+        """최소 정보(자산·방향·금액)만으로도 저장 — NOT NULL 컬럼은 기본값"""
+        record_id = db_manager.save_trade({
+            "asset": "ETH",
+            "side": "sell",
+            "amount_krw": 100_000.0,
+        })
+        assert record_id > 0
 
-        record_id = db_manager.save_trade(trade_info)
+    def test_save_trade_migrates_legacy_table(self, tmp_path):
+        """구버전(currency 스키마) 테이블도 초기화 시 자동 마이그레이션"""
+        db_path = str(tmp_path / "legacy.db")
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE trade_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id TEXT,
+                currency TEXT,
+                side TEXT,
+                amount REAL
+            )
+        """)
+        conn.commit()
+        conn.close()
 
+        config = Mock()
+        config.get = Mock(return_value=db_path)
+        db = DatabaseManager(config)  # 초기화 시 누락 컬럼 추가되어야 함
+
+        record_id = db.save_trade({
+            "asset": "XRP",
+            "side": "sell",
+            "amount_krw": 1_173_000.0,
+        })
         assert record_id > 0
 
 
