@@ -105,3 +105,38 @@ def test_risk_guard_rejection_recorded():
     result = sys_.run_daily_check(dry_run=False)
     assert result["executed"] == 0
     assert result["rejected"]
+
+
+def test_config_from_loader_parses_yaml_values():
+    """config_from_loader가 YAML 값을 SystemConfig로 올바르게 매핑"""
+    values = {
+        "strategy.targets.weights": {"BTC": 0.6, "ETH": 0.4},
+        "strategy.targets.crypto": 0.7,
+        "strategy.rebalance.band_pp": 0.03,
+        "strategy.rebalance.relative_band": 0.15,
+        "strategy.rebalance.min_trade_krw": 20_000,
+        "strategy.dca.base_amount_krw": 2_000_000,
+        "strategy.dca.max_single_dca_krw": 8_000_000,
+        "strategy.dca.krw_usage_cap": 0.30,
+        "risk.max_single_trade_krw": 15_000_000,
+        "risk.max_daily_volume_krw": 60_000_000,
+        "risk.min_krw_ratio": 0.05,
+        "risk.fomo_surge_threshold": 0.20,
+    }
+    loader = MagicMock()
+    loader.get.side_effect = lambda key, default=None: values.get(key, default)
+    config = KairosSimple.config_from_loader(loader)
+    assert config.rebalance.crypto_target == 0.7
+    assert config.rebalance.band_pp == 0.03
+    assert config.dca.base_amount_krw == 2_000_000
+    assert config.dca.crypto_weights == {"BTC": 0.6, "ETH": 0.4}
+    assert config.limits.max_single_trade_krw == 15_000_000
+
+
+def test_config_from_loader_defaults():
+    """설정 키가 없으면 안전한 기본값 사용"""
+    loader = MagicMock()
+    loader.get.side_effect = lambda key, default=None: default
+    config = KairosSimple.config_from_loader(loader)
+    assert config.rebalance.crypto_target == 0.60
+    assert config.limits.min_krw_ratio == 0.10
