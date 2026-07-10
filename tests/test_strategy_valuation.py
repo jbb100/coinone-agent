@@ -4,6 +4,7 @@ import pytest
 
 from src.strategy.valuation import (
     MarketValuation,
+    contrarian_crypto_target,
     dca_multiplier,
     fg_multiplier,
     ma_200w,
@@ -62,6 +63,36 @@ class TestDcaMultiplier:
     def test_neutral_is_1(self):
         v = MarketValuation(fear_greed=50, mayer_ratio=1.5)
         assert dca_multiplier(v) == 1.0
+
+
+class TestContrarianCryptoTarget:
+    """역발상 목표 비중 틸트 — 바닥권에 비중을 올리고 과열에 내린다.
+
+    465주 32개 시작점 스윕에서 고정 0.60 대비 전 구간 동등 이상 검증
+    (평균 1.69x→1.77x, 최악 MDD -50.5%→-46.9%, Sharpe 1.78→1.83).
+    밴드 경계는 기존 Mayer 밴드(1.0/2.0/3.0) 재사용 — 신규 피팅 금지.
+    """
+
+    @pytest.mark.parametrize("mayer,expected", [
+        (0.5, 0.70), (0.99, 0.70),   # 바닥권: +10%p
+        (1.0, 0.60), (1.99, 0.60),   # 적정: 기본 유지
+        (2.0, 0.50), (2.99, 0.50),   # 확장: -10%p
+        (3.0, 0.40), (5.0, 0.40),    # 과열: -20%p
+    ])
+    def test_boundaries_with_default_base(self, mayer, expected):
+        assert contrarian_crypto_target(mayer, base_target=0.60) == pytest.approx(expected)
+
+    def test_offsets_follow_base_target(self):
+        assert contrarian_crypto_target(0.8, base_target=0.50) == pytest.approx(0.60)
+        assert contrarian_crypto_target(3.5, base_target=0.50) == pytest.approx(0.30)
+
+    def test_clamped_to_valid_ratio(self):
+        assert contrarian_crypto_target(0.8, base_target=0.95) == pytest.approx(1.0)
+        assert contrarian_crypto_target(4.0, base_target=0.15) == pytest.approx(0.0)
+
+    def test_non_positive_mayer_raises(self):
+        with pytest.raises(ValueError):
+            contrarian_crypto_target(0.0, base_target=0.60)
 
 
 class TestMa200w:

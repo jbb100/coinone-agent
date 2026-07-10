@@ -47,6 +47,28 @@ def test_empty_klines_raises():
         svc.get_valuation()
 
 
+def test_get_mayer_ratio_without_fg_dependency():
+    """일일 체크용 — F&G API가 죽어도 Mayer ratio는 조회 가능해야 함"""
+    svc, _, external, _ = make_service()
+    external.get_fear_greed_index.return_value = None
+    ratio = svc.get_mayer_ratio()
+    assert ratio > 0
+    external.get_fear_greed_index.assert_not_called()
+
+
+def test_get_mayer_ratio_fails_loud_on_empty_klines():
+    svc, binance, *_ = make_service()
+    binance.get_historical_klines.return_value = pd.DataFrame()
+    with pytest.raises(DataUnavailableError):
+        svc.get_mayer_ratio()
+
+
+def test_get_mayer_ratio_fails_loud_on_short_history():
+    svc, *_ = make_service(weekly_rows=100)
+    with pytest.raises(InsufficientDataError):
+        svc.get_mayer_ratio()
+
+
 def test_get_prices_krw_returns_per_asset():
     svc, _, _, coinone = make_service(price=50_000_000.0)
     prices = svc.get_prices_krw(["BTC", "ETH"])
