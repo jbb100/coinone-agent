@@ -137,6 +137,47 @@ def sweep_starts(
     ]
 
 
+def fetch_bitstamp_weekly() -> pd.DataFrame:
+    """Bitstamp 공개 API에서 2011-08부터 BTC/USD 주봉 생성 (무료, 키 불필요).
+
+    Binance는 2017-08부터라 2015-2017 사이클을 틸트 활성 상태로
+    검증할 수 없다 — 아웃오브샘플 검증용 장기 데이터 소스.
+    docs/backtest-validation.md 참고.
+    """
+    import time as _time
+
+    import requests
+
+    rows = []
+    start = 1315000000  # 2011-09
+    while True:
+        resp = requests.get(
+            "https://www.bitstamp.net/api/v2/ohlc/btcusd/",
+            params={"step": 86400, "limit": 1000, "start": start},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()["data"]["ohlc"]
+        if not data:
+            break
+        rows.extend(data)
+        last = int(data[-1]["timestamp"])
+        if len(data) < 1000 or last > _time.time() - 86400:
+            break
+        start = last + 86400
+        _time.sleep(0.5)
+
+    daily = pd.DataFrame(rows)
+    daily["timestamp"] = pd.to_datetime(daily["timestamp"].astype(int), unit="s")
+    daily = daily.set_index("timestamp").astype(float).sort_index()
+    daily = daily[~daily.index.duplicated()]
+    weekly = (
+        daily["close"].resample("W-MON", label="left", closed="left")
+        .last().dropna().to_frame("Close")
+    )
+    return weekly
+
+
 if __name__ == "__main__":
     import argparse
     from datetime import datetime
@@ -144,7 +185,10 @@ if __name__ == "__main__":
     from src.utils.binance_data_provider import BinanceDataProvider
 
     parser = argparse.ArgumentParser(description="KAIROS-Simple 장기·다중 시작점 백테스트")
-    parser.add_argument("--since", default="2017-01-01", help="데이터 시작일 (YYYY-MM-DD)")
+    parser.add_argument("--since", default=None,
+                        help="데이터 시작일 YYYY-MM-DD (기본: binance 2017-01-01, bitstamp 전체)")
+    parser.add_argument("--source", choices=["binance", "bitstamp"], default="binance",
+                        help="bitstamp: 2011-08부터 (2015-2017 사이클 OOS 검증용)")
     parser.add_argument("--start-every", type=int, default=0,
                         help="N주 간격 다중 시작점 스윕 (0이면 단일 실행)")
     parser.add_argument("--target", type=float, default=0.60, help="크립토 목표 비중")
@@ -153,9 +197,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     tilt = not args.no_tilt
 
-    df = BinanceDataProvider().get_historical_klines(
-        "BTCUSDT", "1w", start_date=datetime.fromisoformat(args.since)
-    )
+    if args.source == "bitstamp":
+        df = fetch_bitstamp_weekly()
+        if args.since:
+            df = df[df.index >= args.since]
+    else:
+        df = BinanceDataProvider().get_historical_klines(
+            "BTCUSDT", "1w",
+            start_date=datetime.fromisoformat(args.since or "2017-01-01"),
+        )
     print(f"데이터: {len(df)}주 ({df.index[0].date()} ~ {df.index[-1].date()})")
 
     if args.start_every > 0:
