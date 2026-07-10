@@ -18,6 +18,13 @@ class MarketDataService:
         if fg is None:
             raise DataUnavailableError("Fear&Greed 조회 실패 — 이번 사이클 거래 중단")
 
+        mayer = self.get_mayer_ratio()
+        valuation = MarketValuation(fear_greed=int(fg), mayer_ratio=mayer)
+        logger.info(f"밸류에이션: F&G={fg}, Mayer={valuation.mayer_ratio:.2f}")
+        return valuation
+
+    def get_mayer_ratio(self) -> float:
+        """현재가/200주MA — F&G 없이 조회 가능 (일일 틸트용)."""
         klines = self.binance.get_historical_klines(
             symbol="BTCUSDT", interval="1w", limit=300
         )
@@ -25,10 +32,7 @@ class MarketDataService:
             raise DataUnavailableError("Binance 주봉 조회 실패 — 이번 사이클 거래 중단")
 
         ma = ma_200w(klines["Close"])          # 부족/NaN 시 InsufficientDataError
-        current = float(klines["Close"].iloc[-1])
-        valuation = MarketValuation(fear_greed=int(fg), mayer_ratio=current / ma)
-        logger.info(f"밸류에이션: F&G={fg}, Mayer={valuation.mayer_ratio:.2f}")
-        return valuation
+        return float(klines["Close"].iloc[-1]) / ma
 
     def get_prices_krw(self, assets: List[str]) -> Dict[str, float]:
         prices = {}

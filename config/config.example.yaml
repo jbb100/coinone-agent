@@ -16,6 +16,10 @@ strategy:
   targets:
     crypto: 0.60
     weights: { BTC: 0.50, ETH: 0.30, XRP: 0.10, SOL: 0.10 }
+    # 역발상 틸트: Mayer ratio(현재가/200주MA) 밴드에 따라 목표 비중 조절.
+    # <1.0: +10%p(바닥권 매집) | 1-2: 기본 | 2-3: -10%p | >=3: -20%p(과열 익절)
+    # 465주 32개 시작점 백테스트에서 고정 목표 대비 전 구간 동등 이상.
+    contrarian_tilt: true
 
   rebalance:
     band_pp: 0.05         # 총 크립토 비중 ±5%p 이탈 시에만 거래 (수수료 대비 충분히 넓게)

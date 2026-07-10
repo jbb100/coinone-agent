@@ -16,6 +16,7 @@ def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000):
     }
     market = MagicMock()
     market.get_valuation.return_value = MarketValuation(fg, mayer)
+    market.get_mayer_ratio.return_value = mayer
     market.get_price_change_24h.return_value = {a: 0.0 for a in holdings}
     portfolio = MagicMock()
     portfolio.get_snapshot.return_value = PortfolioSnapshot(
@@ -78,6 +79,54 @@ def test_sells_execute_before_buys():
     sys_.run_daily_check(dry_run=False)
     sides = [c.args[0].side for c in executor.execute.call_args_list]
     assert sides == sorted(sides, key=lambda s: s != "sell")
+
+
+def test_daily_check_tilts_target_up_in_bottom_zone():
+    """역발상 틸트: Mayer<1(바닥권) → 목표 70%. 크립토 60%는 10%p 미달
+    (밴드 5%p 초과 이탈)이므로 매수 주문이 나가야 함"""
+    sys_, executor, _ = make_system(mayer=0.8)  # 크립토 정확히 60%
+    result = sys_.run_daily_check(dry_run=False)
+    sides = [c.args[0].side for c in executor.execute.call_args_list]
+    assert result["executed"] > 0
+    assert set(sides) == {"buy"}
+
+
+def test_daily_check_tilts_target_down_when_overheated():
+    """역발상 틸트: Mayer≥3(과열) → 목표 40%. 크립토 60%는 20%p 초과
+    이므로 매도(익절) 주문이 나가야 함"""
+    sys_, executor, _ = make_system(mayer=3.2)
+    result = sys_.run_daily_check(dry_run=False)
+    sides = [c.args[0].side for c in executor.execute.call_args_list]
+    assert result["executed"] > 0
+    assert set(sides) == {"sell"}
+
+
+def test_daily_check_neutral_mayer_keeps_base_target():
+    """Mayer 1.0-2.0(적정) → 기본 목표 60% 유지, 밴드 내 거래 없음"""
+    sys_, executor, _ = make_system(mayer=1.5)
+    result = sys_.run_daily_check(dry_run=False)
+    assert result["executed"] == 0
+    executor.execute.assert_not_called()
+
+
+def test_daily_check_tilt_disabled_uses_fixed_target():
+    """contrarian_tilt=False면 바닥권에서도 고정 60% 유지"""
+    import dataclasses
+    sys_, executor, _ = make_system(mayer=0.8)
+    sys_.config = dataclasses.replace(sys_.config, contrarian_tilt=False)
+    result = sys_.run_daily_check(dry_run=False)
+    assert result["executed"] == 0
+    executor.execute.assert_not_called()
+
+
+def test_daily_check_halts_when_mayer_unavailable():
+    """스펙 fail-loud: 틸트용 Mayer 조회 실패 시 리밸런싱 중단 + 알림"""
+    sys_, executor, alerts = make_system()
+    sys_.market.get_mayer_ratio.side_effect = DataUnavailableError("Binance down")
+    result = sys_.run_daily_check(dry_run=False)
+    assert result["executed"] == 0 and result["halted"]
+    executor.execute.assert_not_called()
+    assert alerts.send_warning_alert.called
 
 
 def test_data_failure_halts_and_alerts():

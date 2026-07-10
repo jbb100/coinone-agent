@@ -3,8 +3,10 @@
 
 철학: 싸질수록 사고, 비싸질수록 판다.
   - 주간 DCA: Fear&Greed × 200주MA 승수 (공포·바닥권에 많이, 탐욕·과열에 적게)
-  - 일일 밴드 체크: 고정 목표 비중(크립토 60/KRW 40) ±5%p 이탈 시에만
+  - 일일 밴드 체크: 목표 비중(기본 크립토 60/KRW 40) ±5%p 이탈 시에만
     리밸런싱 — 상승 초과분 자동 익절, 하락 미달분 자동 매집
+  - 역발상 틸트: Mayer ratio 밴드로 목표 비중 자체를 조절
+    (<1.0: +10%p | 2-3: -10%p | >=3: -20%p) — 역발상 레버를 자산배분에 직접
   - fail-loud: 데이터 이상 시 하드코딩 폴백 없이 거래 중단 + 알림
 
 파이프라인: market_data → strategy(순수 함수) → risk_guard → executor → record/alert
@@ -21,7 +23,7 @@ from src.core.exceptions import DataUnavailableError, InsufficientDataError
 from src.risk.guard import OrderRequest, PortfolioContext, RiskGuard, RiskLimits
 from src.strategy.dca import DCAConfig, plan_weekly_dca
 from src.strategy.rebalance import RebalanceConfig, plan_rebalance
-from src.strategy.valuation import dca_multiplier
+from src.strategy.valuation import contrarian_crypto_target, dca_multiplier
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,9 @@ class SystemConfig:
     dca: DCAConfig
     rebalance: RebalanceConfig
     limits: RiskLimits
+    # 역발상 틸트: Mayer 밴드에 따라 목표 비중을 ±10~20%p 조절
+    # (바닥권 +10%p, 과열 -20%p). False면 고정 목표.
+    contrarian_tilt: bool = True
 
 
 class KairosSimple:
@@ -97,6 +102,9 @@ class KairosSimple:
                 min_krw_ratio=float(loader.get("risk.min_krw_ratio", 0.10)),
                 fomo_surge_threshold=float(loader.get("risk.fomo_surge_threshold", 0.15)),
             ),
+            contrarian_tilt=str(
+                loader.get("strategy.targets.contrarian_tilt", True)
+            ).lower() in ("true", "1", "yes"),
         )
 
     @classmethod
@@ -158,12 +166,25 @@ class KairosSimple:
         return self._execute_all("주간 DCA", requests, snap, dry_run)
 
     def run_daily_check(self, dry_run: bool = False) -> Dict:
-        """일일 밴드 체크: 이탈 시에만 목표 비중으로 복귀."""
+        """일일 밴드 체크: 이탈 시에만 목표 비중으로 복귀.
+
+        역발상 틸트가 켜져 있으면 Mayer ratio 밴드로 목표 비중을 조절한다
+        (바닥권일수록 높게, 과열일수록 낮게)."""
+        import dataclasses
+
         try:
+            reb_cfg = self.config.rebalance
+            if self.config.contrarian_tilt:
+                mayer = self.market.get_mayer_ratio()
+                target = contrarian_crypto_target(mayer, reb_cfg.crypto_target)
+                if target != reb_cfg.crypto_target:
+                    logger.info(
+                        f"역발상 틸트: Mayer={mayer:.2f} → 목표 "
+                        f"{reb_cfg.crypto_target:.0%} → {target:.0%}"
+                    )
+                reb_cfg = dataclasses.replace(reb_cfg, crypto_target=target)
             snap = self.portfolio.get_snapshot()
-            orders = plan_rebalance(
-                self.config.rebalance, snap.holdings_krw, snap.krw_balance
-            )
+            orders = plan_rebalance(reb_cfg, snap.holdings_krw, snap.krw_balance)
             if not orders:
                 logger.info(f"밴드 내 (크립토 {snap.crypto_ratio:.1%}) — 거래 없음")
                 return {"executed": 0, "rejected": [], "halted": False,
