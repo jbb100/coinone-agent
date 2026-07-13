@@ -12,7 +12,9 @@ def make_executor(price=100_000_000.0, **kw):
     coinone.get_latest_price.return_value = price
     coinone.get_price_unit.return_value = 1000.0  # 기본 호가 단위 (테스트 가격과 정렬됨)
     coinone.place_order.return_value = {"success": True, "order_id": "oid-1"}
-    defaults = dict(twap_slice_krw=5_000_000, max_retries=3, retry_wait=0)
+    coinone.get_order_status.return_value = {"order": {"status": "filled"}}
+    defaults = dict(twap_slice_krw=5_000_000, max_retries=3, retry_wait=0,
+                    fill_timeout=0, poll_interval=0)
     defaults.update(kw)
     return OrderExecutor(coinone, **defaults), coinone
 
@@ -158,3 +160,50 @@ class TestCoinoneGetPriceUnit:
             assert client.get_price_unit("ETH", 2_612_000.0) == 1_000
             assert client.get_price_unit("SOL", 116_800.0) == 100
             assert client.get_price_unit("XRP", 1_638.0) == 1
+
+
+class TestFillConfirmation:
+    """체결 확인 — 주문 접수(success) ≠ 체결. 미체결 잔량은 취소한다.
+
+    ±0.5% 지정가는 급변동 장에서 미체결로 남을 수 있고, 방치하면 몇 시간
+    뒤 낡은 판단으로 낸 주문이 뒤늦게 체결된다. 타임아웃 내 미체결분은
+    취소하고 실제 체결분만 보고한다."""
+
+    def make(self, statuses):
+        ex, coinone = make_executor(fill_timeout=0, poll_interval=0)
+        coinone.get_order_status.side_effect = statuses
+        return ex, coinone
+
+    def test_filled_immediately_no_cancel(self):
+        ex, coinone = self.make([{"order": {"status": "filled"}}])
+        report = ex.execute(OrderRequest("BTC", "buy", 1_000_000, "dca"))
+        assert report.success
+        assert report.filled_krw == pytest.approx(1_000_000)
+        coinone.cancel_order.assert_not_called()
+
+    def test_unfilled_after_timeout_canceled_zero_filled(self):
+        live = {"order": {"status": "live", "remain_qty": "0.00995"}}
+        # qty = 1M / (100M*1.005) ≈ 0.00995 → 전량 미체결
+        ex, coinone = self.make([live, live])
+        report = ex.execute(OrderRequest("BTC", "buy", 1_000_000, "dca"))
+        coinone.cancel_order.assert_called_once()
+        assert not report.success
+        assert report.filled_krw == pytest.approx(0.0, abs=1_000)
+
+    def test_partial_fill_on_timeout_reports_filled_portion(self):
+        qty = 1_000_000 / (100_000_000.0 * 1.005)
+        half_live = {"order": {"status": "live", "remain_qty": str(qty / 2)}}
+        canceled = {"order": {"status": "canceled", "remain_qty": str(qty / 2)}}
+        ex, coinone = self.make([half_live, canceled])
+        report = ex.execute(OrderRequest("BTC", "buy", 1_000_000, "dca"))
+        coinone.cancel_order.assert_called_once()
+        assert not report.success
+        assert report.filled_krw == pytest.approx(500_000, rel=0.01)
+
+    def test_not_found_before_cancel_treated_as_filled(self):
+        # 체결 완료된 주문은 조회에서 사라질 수 있음 (클라이언트가 not_found 반환)
+        ex, coinone = self.make([{"result": "success", "status": "not_found"}])
+        report = ex.execute(OrderRequest("BTC", "buy", 1_000_000, "dca"))
+        assert report.success
+        assert report.filled_krw == pytest.approx(1_000_000)
+        coinone.cancel_order.assert_not_called()

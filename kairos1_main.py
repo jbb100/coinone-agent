@@ -169,6 +169,8 @@ class KairosSimple:
             coinone,
             twap_slice_krw=float(loader.get("execution.twap_slice_krw", 5_000_000)),
             max_retries=int(loader.get("execution.max_retries", 3)),
+            fill_timeout=float(loader.get("execution.fill_timeout_sec", 45)),
+            poll_interval=float(loader.get("execution.poll_interval_sec", 3)),
         )
         system = cls.from_components(market, portfolio, executor, alerts, config)
         system.binance = binance  # report 커맨드용
@@ -230,7 +232,17 @@ class KairosSimple:
         if not orders and snap.crypto_ratio >= target:
             logger.info("목표 비중 도달 — 이번 주 DCA 현금 보존")
         requests = [OrderRequest(o.asset, "buy", o.amount_krw, "dca") for o in orders]
-        return self._execute_all("주간 DCA", requests, snap, dry_run)
+        result = self._execute_all("주간 DCA", requests, snap, dry_run)
+        if not dry_run and result["executed"] == 0 and not result["rejected"]:
+            # 주간 하트비트 — 무거래 주에도 최소 주 1회 알림이 가야
+            # '조용한 시장'과 '죽은 크론'을 구분할 수 있다
+            self.alerts.send_info_alert(
+                "주간 상태 (하트비트)",
+                f"크립토 {snap.crypto_ratio:.1%}/목표 {target:.1%} | "
+                f"총자산 {snap.total_value_krw:,.0f} KRW | "
+                f"매수 없음 — 목표 도달, 현금 보존",
+            )
+        return result
 
     def run_daily_check(self, dry_run: bool = False) -> Dict:
         """일일 밴드 체크: 이탈 시에만 목표 비중으로 복귀.
@@ -341,24 +353,31 @@ class KairosSimple:
                 )
                 continue
             report = self.executor.execute(req)
-            if report.success:
+            filled = float(report.filled_krw)
+            if filled > 0:
+                # 실제 체결분만 집계·기록 — 접수 성공 ≠ 체결
                 executed += 1
-                executed_reqs.append(req)
-                self._daily_traded_krw += req.amount_krw
+                executed_reqs.append(
+                    OrderRequest(req.asset, req.side, filled, req.origin)
+                )
+                self._daily_traded_krw += filled
                 # 주문은 이미 체결됨 — 기록 실패가 나머지 주문 실행을 막으면 안 됨
                 try:
                     self.portfolio.record_trade(
-                        req.asset, req.side, req.amount_krw, origin=req.origin
+                        req.asset, req.side, filled, origin=req.origin
                     )
                 except Exception as e:
                     logger.error(f"거래 기록 실패 (주문은 체결됨): {req.asset} — {e}")
                     self.alerts.send_error_alert(
                         "거래 기록 실패",
-                        f"{req.side} {req.asset} {req.amount_krw:,.0f} KRW 주문은 "
+                        f"{req.side} {req.asset} {filled:,.0f} KRW 주문은 "
                         f"체결됐으나 DB 기록 실패: {e}",
                     )
-            else:
-                rejected.append((req.asset, f"실행 실패: {report.error}"))
+            if not report.success:
+                rejected.append((
+                    req.asset,
+                    f"체결 {filled:,.0f}/{req.amount_krw:,.0f} KRW — {report.error}",
+                ))
         result = {"executed": executed, "rejected": rejected, "halted": False}
         logger.info(f"{label} 완료: 실행 {executed}건, 거부 {len(rejected)}건")
         if not dry_run:

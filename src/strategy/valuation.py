@@ -54,8 +54,11 @@ def dca_multiplier(valuation: MarketValuation) -> float:
 # 구간 선형 보간 앵커 — Mayer 밴드 경계(1.0/2.0/3.0) ±0.1 전이 구간.
 # 계단식 대신 연속 함수: 경계에서 목표가 ±10%p 점프하는 절벽 효과
 # (Mayer 노이즈 → 대규모 왕복 매매)를 제거한다.
-_TILT_MAYER_ANCHORS = (0.9, 1.1, 1.9, 2.1, 2.9, 3.1)
-_TILT_OFFSET_ANCHORS = (+0.10, 0.0, 0.0, -0.10, -0.10, -0.20)
+# 매수측 피라미드: 바닥이 깊어질수록 목표를 더 올린다 (0.9→+10%p,
+# 0.7→+15%p, 0.5→+20%p). 57개 시작점 검증에서 MDD·Sharpe 동일,
+# 수익만 개선 — 폭락장 매집을 밸류에이션(Mayer)에 앵커한 피라미드.
+_TILT_MAYER_ANCHORS = (0.5, 0.7, 0.9, 1.1, 1.9, 2.1, 2.9, 3.1)
+_TILT_OFFSET_ANCHORS = (+0.20, +0.15, +0.10, 0.0, 0.0, -0.10, -0.10, -0.20)
 
 
 def contrarian_crypto_target(mayer_ratio: float, base_target: float) -> float:

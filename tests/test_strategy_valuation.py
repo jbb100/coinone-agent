@@ -77,7 +77,9 @@ class TestContrarianCryptoTarget:
     """
 
     @pytest.mark.parametrize("mayer,expected", [
-        (0.5, 0.70), (0.9, 0.70),    # 바닥권: +10%p
+        (0.3, 0.80), (0.5, 0.80),    # 깊은 바닥: +20%p (피라미드 최심부)
+        (0.7, 0.75),                 # 심화 매집: +15%p
+        (0.9, 0.70),                 # 바닥권: +10%p
         (1.0, 0.65),                 # 전이 구간: +5%p (절벽 없음)
         (1.1, 0.60), (1.9, 0.60),    # 적정: 기본 유지
         (2.0, 0.55),                 # 전이 구간: -5%p
@@ -103,7 +105,7 @@ class TestContrarianCryptoTarget:
         assert abs(a - b) < 0.011
 
     def test_offsets_follow_base_target(self):
-        assert contrarian_crypto_target(0.8, base_target=0.50) == pytest.approx(0.60)
+        assert contrarian_crypto_target(0.5, base_target=0.50) == pytest.approx(0.70)
         assert contrarian_crypto_target(3.5, base_target=0.50) == pytest.approx(0.30)
 
     def test_clamped_to_valid_ratio(self):

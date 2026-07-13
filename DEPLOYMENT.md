@@ -151,6 +151,34 @@ crontab -e
 > 목표+밴드 위에서만 팔도록 설계돼 있어, 같은 날 어떤 순서로 돌아도
 > 서로 반대 매매가 발생하지 않는다.
 
+### 2. 운영 안정성 (필수 점검)
+
+```bash
+# (1) 타임존 — 일일 거래량 한도의 '오늘' 경계와 크론 시각이 전부
+#     서버 로컬 시간 기준이다. 반드시 KST로 맞출 것:
+sudo timedatectl set-timezone Asia/Seoul
+
+# (2) 크론 생존 감시 (dead-man switch) — 무거래 날은 Slack이 조용하므로
+#     '조용한 시장'과 '죽은 크론'을 핑으로 구분한다 (healthchecks.io 무료):
+#     daily-check 크론 라인 끝에 붙이기:
+#     ... kairos1_main.py daily-check >> /var/log/kairos/daily-check.log 2>&1 && curl -fsS --retry 3 https://hc-ping.com/<uuid> > /dev/null
+#     (주간 DCA는 코드 내 하트비트 알림이 매주 월요일 무조건 발송됨)
+
+# (3) 로그 로테이션 — /etc/logrotate.d/kairos:
+cat <<'CONF' | sudo tee /etc/logrotate.d/kairos
+/var/log/kairos/*.log {
+    monthly
+    rotate 12
+    compress
+    missingok
+    notifempty
+}
+CONF
+
+# (4) DB 백업 (매일 09:40, 30일 보관):
+# 40 9 * * * sqlite3 /path/to/kairos-1/data/kairos1.db ".backup /path/to/backups/kairos1-$(date +\%Y\%m\%d).db" && find /path/to/backups -name 'kairos1-*.db' -mtime +30 -delete
+```
+
 ### 2. 시스템 서비스 등록 (Ubuntu)
 ```bash
 # 서비스 파일 생성
