@@ -1835,3 +1835,27 @@ class TestDatabaseInitialization:
         # 초기화 시 예외 발생
         with pytest.raises(Exception):
             DatabaseManager(config)
+
+
+@pytest.mark.database
+class TestTradedKrwToday:
+    """오늘 체결 거래액 합계 — 프로세스 간 일일 거래량 한도 공유용"""
+
+    @pytest.fixture
+    def db_manager(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+        config = Mock()
+        config.get = Mock(return_value=db_path)
+        return DatabaseManager(config)
+
+    def test_sums_only_todays_trades(self, db_manager):
+        db_manager.save_trade({"asset": "BTC", "side": "buy", "amount_krw": 1_000_000})
+        db_manager.save_trade({"asset": "ETH", "side": "sell", "amount_krw": 500_000})
+        db_manager.save_trade({
+            "asset": "BTC", "side": "buy", "amount_krw": 9_000_000,
+            "trade_date": datetime.now() - timedelta(days=1),
+        })
+        assert db_manager.get_traded_krw_today() == pytest.approx(1_500_000)
+
+    def test_zero_when_no_trades(self, db_manager):
+        assert db_manager.get_traded_krw_today() == 0.0

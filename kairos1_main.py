@@ -50,7 +50,9 @@ class KairosSimple:
         self.alerts = alerts
         self.guard = risk_guard
         self.config = config
-        self._daily_traded_krw = 0.0
+        # 일일 거래량 한도는 프로세스 간 공유 — weekly-dca(09:00)와
+        # daily-check(09:10)가 별도 프로세스라 0에서 시작하면 한도가 2배가 됨
+        self._daily_traded_krw = float(portfolio.get_traded_krw_today())
 
     # ------------------------------------------------------------------ 조립
     @classmethod

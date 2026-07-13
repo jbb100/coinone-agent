@@ -10,7 +10,8 @@ from src.portfolio.portfolio import PortfolioSnapshot
 from src.strategy.valuation import MarketValuation
 
 
-def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000):
+def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000,
+                traded_today=0.0):
     holdings = holdings or {
         "BTC": 30_000_000, "ETH": 18_000_000, "XRP": 6_000_000, "SOL": 6_000_000
     }
@@ -19,6 +20,7 @@ def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000):
     market.get_mayer_ratio.return_value = mayer
     market.get_price_change_24h.return_value = {a: 0.0 for a in holdings}
     portfolio = MagicMock()
+    portfolio.get_traded_krw_today.return_value = traded_today
     portfolio.get_snapshot.return_value = PortfolioSnapshot(
         holdings_krw=holdings, krw_balance=krw, taken_at=datetime.now()
     )
@@ -101,6 +103,20 @@ def test_daily_check_buys_when_underweight():
     sys_.run_daily_check(dry_run=False)
     sides = [c.args[0].side for c in executor.execute.call_args_list]
     assert "buy" in sides
+
+
+def test_daily_volume_limit_includes_prior_process_trades():
+    """같은 날 앞선 프로세스(예: 09:00 주간 DCA)가 이미 체결한 거래액이
+    일일 한도(50M)에 합산돼야 함 — 프로세스별 0부터 계산하면 실질 한도 2배"""
+    holdings = {
+        "BTC": 20_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000
+    }
+    sys_, executor, _ = make_system(holdings=holdings, krw=60_000_000,
+                                    traded_today=50_000_000)  # 이미 한도 도달
+    result = sys_.run_daily_check(dry_run=False)  # 크립토 40% → 매수 트리거
+    executor.execute.assert_not_called()
+    assert result["executed"] == 0
+    assert len(result["rejected"]) > 0
 
 
 def test_sells_execute_before_buys():

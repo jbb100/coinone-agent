@@ -44,6 +44,10 @@ class PortfolioService:
             taken_at=datetime.now(),
         )
 
+    def get_traded_krw_today(self) -> float:
+        """오늘 체결된 거래액 합계 — 프로세스 간 일일 거래량 한도 공유용."""
+        return float(self.db.get_traded_krw_today())
+
     def record_trade(self, asset: str, side: str, amount_krw: float, origin: str) -> None:
         self.db.save_trade({
             "asset": asset,
