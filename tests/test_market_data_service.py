@@ -96,3 +96,28 @@ def test_price_change_24h_missing_data_raises():
     binance.get_historical_klines.return_value = pd.DataFrame({"Close": [100.0]})
     with pytest.raises(DataUnavailableError):
         svc.get_price_change_24h(["BTC"])
+
+
+class TestRelativeReturns:
+    """26주 BTC 대비 상대수익 — 상대강도 편출 입력"""
+
+    def test_computes_alt_over_btc_return(self):
+        svc, binance, *_ = make_service()
+
+        def klines(symbol, interval, limit):
+            # BTC 2배 상승, ETH 1.5배 상승 → ETH 상대수익 = 1.5/2 - 1 = -0.25
+            first, last = (100.0, 200.0) if symbol == "BTCUSDT" else (10.0, 15.0)
+            closes = [first] + [first] * (limit - 2) + [last]
+            return pd.DataFrame({"Close": pd.Series(closes)})
+
+        binance.get_historical_klines.side_effect = klines
+        rel = svc.get_relative_returns(["ETH"])
+        assert rel["ETH"] == pytest.approx(-0.25)
+
+    def test_insufficient_history_raises(self):
+        svc, binance, *_ = make_service()
+        binance.get_historical_klines.return_value = pd.DataFrame(
+            {"Close": pd.Series([1.0] * 10)}
+        )
+        with pytest.raises(DataUnavailableError):
+            svc.get_relative_returns(["ETH"])

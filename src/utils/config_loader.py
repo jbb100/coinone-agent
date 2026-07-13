@@ -97,11 +97,25 @@ class ConfigLoader:
                 with open(key_path, 'rb') as f:
                     self._encryption_key = f.read()
                 logger.info("암호화 키 로드 완료")
-            else:
+            elif self._has_encrypted_values(self._config_data):
+                # 복호화가 실제로 필요할 때만 경고 (운영 로그 노이즈 방지)
                 logger.warning(f"암호화 키 파일을 찾을 수 없습니다: {key_path}")
-                
+            else:
+                logger.debug(f"암호화 키 파일 없음 (encrypted: 값도 없음): {key_path}")
+
         except Exception as e:
             logger.error(f"암호화 키 로드 실패: {e}")
+
+    @classmethod
+    def _has_encrypted_values(cls, node) -> bool:
+        """config 안에 'encrypted:' 접두 값이 하나라도 있는지 재귀 검사"""
+        if isinstance(node, str):
+            return node.startswith("encrypted:")
+        if isinstance(node, dict):
+            return any(cls._has_encrypted_values(v) for v in node.values())
+        if isinstance(node, list):
+            return any(cls._has_encrypted_values(v) for v in node)
+        return False
     
     def get(self, key_path: str, default: Any = None) -> Any:
         """

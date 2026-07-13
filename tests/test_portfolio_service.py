@@ -63,3 +63,36 @@ def test_traded_krw_today_delegates_to_db():
     svc, db = make_service(balances={}, prices={})
     db.get_traded_krw_today.return_value = 12_345.0
     assert svc.get_traded_krw_today() == pytest.approx(12_345.0)
+
+
+def test_record_snapshot_saves_totals_and_assets():
+    """일일 스냅샷 축적 — 월간 수익률 산출의 데이터 원천"""
+    from datetime import datetime
+    svc, db = make_service(balances={}, prices={})
+    snap = PortfolioSnapshot(
+        holdings_krw={"BTC": 50_000_000.0, "ETH": 10_000_000.0},
+        krw_balance=40_000_000.0,
+        taken_at=datetime.now(),
+    )
+    svc.record_snapshot(snap)
+    (data,), _ = db.save_portfolio_snapshot.call_args
+    assert data["total_value_krw"] == pytest.approx(100_000_000.0)
+    assert data["assets"]["BTC"]["value_krw"] == pytest.approx(50_000_000.0)
+    assert data["assets"]["KRW"] == pytest.approx(40_000_000.0)
+
+
+def test_value_change_30d_from_earliest_snapshot():
+    svc, db = make_service(balances={}, prices={})
+    db.get_portfolio_history.return_value = [
+        {"snapshot_date": "2026-06-14 09:10:00", "total_value_krw": 80_000_000.0},
+        {"snapshot_date": "2026-07-13 09:10:00", "total_value_krw": 95_000_000.0},
+    ]
+    change = svc.get_value_change_30d(current_total_krw=100_000_000.0)
+    assert change == pytest.approx(0.25)  # 80M → 100M
+
+
+def test_value_change_30d_none_when_no_history():
+    """데이터 축적 전에는 수익률 주장 금지 (fail-loud 대신 None)"""
+    svc, db = make_service(balances={}, prices={})
+    db.get_portfolio_history.return_value = []
+    assert svc.get_value_change_30d(current_total_krw=100_000_000.0) is None

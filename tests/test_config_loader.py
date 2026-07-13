@@ -668,3 +668,46 @@ class TestConfigLoaderValidation:
         result = loader.validate_required_config(['logging.level'])
 
         assert result is False
+
+
+class TestEncryptionKeyWarning:
+    """암호화 키 부재 경고 — 실제로 암호화된 값이 있을 때만 경고.
+
+    운영 로그에 매 실행마다 무의미한 WARNING이 찍히는 것 방지
+    (API 키는 crontab 환경변수로 주입, config에 encrypted: 값 없음)."""
+
+    def _load_with_capture(self, tmp_path, config_data):
+        import yaml
+        from loguru import logger as loguru_logger
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            yaml.dump(config_data, f)
+        records = []
+        sink = loguru_logger.add(
+            lambda m: records.append(m.record), level="DEBUG"
+        )
+        try:
+            ConfigLoader(str(path))
+        finally:
+            loguru_logger.remove(sink)
+        return records
+
+    def test_no_encrypted_values_no_warning(self, tmp_path):
+        records = self._load_with_capture(tmp_path, {
+            "security": {"encryption": {"enabled": True,
+                                        "key_file": "/nonexistent/key"}},
+            "api": {"coinone": {"api_key": "plain-value"}},
+        })
+        warnings = [r for r in records
+                    if r["level"].name == "WARNING" and "암호화 키" in r["message"]]
+        assert warnings == []
+
+    def test_encrypted_values_present_warns(self, tmp_path):
+        records = self._load_with_capture(tmp_path, {
+            "security": {"encryption": {"enabled": True,
+                                        "key_file": "/nonexistent/key"}},
+            "api": {"coinone": {"api_key": "encrypted:abc123"}},
+        })
+        warnings = [r for r in records
+                    if r["level"].name == "WARNING" and "암호화 키" in r["message"]]
+        assert warnings

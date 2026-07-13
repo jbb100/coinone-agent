@@ -49,11 +49,15 @@ def run_backtest(
     crypto_target: float = 0.60,
     start: int = 0,
     contrarian_tilt: bool = True,
+    enable_dca: bool = True,
+    enable_rebalance: bool = True,
 ) -> BacktestResult:
     """start: 투자 시작 주차 인덱스. 거래·적립은 start부터 시작하되
     200주MA·심리 프록시는 start 이전 데이터까지 활용한다
     (실전에서 과거 시세는 시장에 이미 존재하므로).
-    contrarian_tilt: 프로덕션과 동일한 Mayer 밴드 목표 비중 틸트."""
+    contrarian_tilt: 프로덕션과 동일한 Mayer 밴드 목표 비중 틸트.
+    enable_dca/enable_rebalance: 컴포넌트 ablation용 — 주간 적립 현금은
+    항상 들어오고, 끈 컴포넌트만 배치를 멈춘다."""
     dca_cfg = DCAConfig(
         base_amount_krw=WEEKLY_BASE_DCA, crypto_weights={"BTC": 1.0},
         max_single_dca_krw=5 * WEEKLY_BASE_DCA, krw_usage_cap=0.25,
@@ -92,11 +96,12 @@ def run_backtest(
             mult = 1.0  # 워밍업 구간: 기본 DCA만 (MA 없으면 틸트도 불가)
 
         # 실운영과 동일: 매수 후 비중이 (틸트된) 목표를 넘지 않도록 상한
-        for order in plan_weekly_dca(
+        dca_orders = plan_weekly_dca(
             dca_cfg, mult, krw,
             crypto_value_krw=btc_qty * price,
             target_crypto_ratio=week_reb_cfg.crypto_target,
-        ):
+        ) if enable_dca else []
+        for order in dca_orders:
             spend = order.amount_krw
             btc_qty += spend * (1 - cost) / price
             krw -= spend
@@ -104,7 +109,10 @@ def run_backtest(
             trades += 1
 
         holdings = {"BTC": btc_qty * price}
-        for order in plan_rebalance(week_reb_cfg, holdings, krw):
+        reb_orders = (
+            plan_rebalance(week_reb_cfg, holdings, krw) if enable_rebalance else []
+        )
+        for order in reb_orders:
             if order.side == "sell":
                 btc_qty -= order.amount_krw / price
                 krw += order.amount_krw * (1 - cost)
@@ -199,6 +207,10 @@ if __name__ == "__main__":
     parser.add_argument("--target", type=float, default=0.60, help="크립토 목표 비중")
     parser.add_argument("--no-tilt", action="store_true",
                         help="역발상 목표 비중 틸트 비활성화 (고정 목표 비교용)")
+    parser.add_argument("--no-dca", action="store_true",
+                        help="주간 DCA 비활성화 (컴포넌트 ablation용)")
+    parser.add_argument("--no-rebalance", action="store_true",
+                        help="밴드 리밸런싱 비활성화 (컴포넌트 ablation용)")
     args = parser.parse_args()
     tilt = not args.no_tilt
 
@@ -218,7 +230,8 @@ if __name__ == "__main__":
         print(f"{'시작일':>10} | {'기간':>5} | {'투입원금':>14} | {'최종자산':>14} | "
               f"{'배수':>5} | {'MDD':>7} | {'Sharpe':>6} | 거래")
         for s, date, r in sweep_starts(
-            df, starts, crypto_target=args.target, contrarian_tilt=tilt
+            df, starts, crypto_target=args.target, contrarian_tilt=tilt,
+            enable_dca=not args.no_dca, enable_rebalance=not args.no_rebalance,
         ):
             weeks = len(df) - s
             invested = 10_000_000 + WEEKLY_BASE_DCA * weeks

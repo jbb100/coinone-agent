@@ -1,7 +1,12 @@
 """src/strategy/rebalance.py 테스트 — 밴드 리밸런싱 (상승 익절·하락 매집)."""
 import pytest
 
-from src.strategy.rebalance import RebalanceConfig, RebalanceOrder, plan_rebalance
+from src.strategy.rebalance import (
+    RebalanceConfig,
+    RebalanceOrder,
+    apply_crash_guard,
+    plan_rebalance,
+)
 
 CONFIG = RebalanceConfig(
     crypto_target=0.60,
@@ -71,3 +76,44 @@ def test_dust_trades_dropped():
 
 def test_empty_portfolio_no_orders():
     assert plan_rebalance(CONFIG, {}, krw_balance=0) == []
+
+
+class TestCrashGuard:
+    """급락 시 분할 진입 — FOMO 가드(급등 매수 금지)의 대칭 리스크 컨트롤.
+
+    24h -10% 이상 급락한 자산의 리밸런싱 매수는 절반만 집행하고, 나머지는
+    다음날 체크가 (여전히 밴드 이탈이면) 마저 산다 — 낙하는 칼날을 하루에
+    다 받지 않는 시간 분산."""
+
+    def test_crash_buy_is_scaled_down(self):
+        orders = [RebalanceOrder("BTC", "buy", 1_000_000)]
+        out = apply_crash_guard(
+            orders, {"BTC": -0.12},
+            threshold=-0.10, buy_fraction=0.5, min_trade_krw=10_000,
+        )
+        assert out == [RebalanceOrder("BTC", "buy", 500_000)]
+
+    def test_normal_dip_buy_unchanged(self):
+        orders = [RebalanceOrder("BTC", "buy", 1_000_000)]
+        out = apply_crash_guard(
+            orders, {"BTC": -0.05},
+            threshold=-0.10, buy_fraction=0.5, min_trade_krw=10_000,
+        )
+        assert out == orders
+
+    def test_sell_never_scaled(self):
+        # 매도(익절)는 급락과 무관하게 전량 — 가드는 매수 진입만 분산
+        orders = [RebalanceOrder("ETH", "sell", 1_000_000)]
+        out = apply_crash_guard(
+            orders, {"ETH": -0.20},
+            threshold=-0.10, buy_fraction=0.5, min_trade_krw=10_000,
+        )
+        assert out == orders
+
+    def test_scaled_below_min_trade_dropped(self):
+        orders = [RebalanceOrder("XRP", "buy", 15_000)]
+        out = apply_crash_guard(
+            orders, {"XRP": -0.15},
+            threshold=-0.10, buy_fraction=0.5, min_trade_krw=10_000,
+        )
+        assert out == []  # 7,500 < 최소 주문 → 제외
