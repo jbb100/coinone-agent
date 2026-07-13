@@ -302,6 +302,50 @@ def test_monthly_report_without_history_notes_accumulating():
     assert "축적" in body
 
 
+def test_unexpected_exception_sends_error_alert_and_halts():
+    """서버 로그를 못 보는 무인 운영: 어떤 오류도 조용히 죽으면 안 됨 —
+    데이터 오류(warning)가 아닌 예상치 못한 예외는 error 알림 + 중단"""
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_snapshot.side_effect = RuntimeError("boom")
+    result = sys_.run_daily_check(dry_run=False)
+    assert result["halted"]
+    alerts.send_error_alert.assert_called_once()
+
+
+def test_execution_phase_exception_also_alerts():
+    """플래닝뿐 아니라 실행 단계 예외도 알림 커버"""
+    holdings = {
+        "BTC": 40_000_000, "ETH": 24_000_000, "XRP": 8_000_000, "SOL": 8_000_000
+    }
+    sys_, executor, alerts = make_system(holdings=holdings, krw=20_000_000)
+    executor.execute.side_effect = RuntimeError("unexpected")
+    result = sys_.run_daily_check(dry_run=False)
+    assert result["halted"]
+    alerts.send_error_alert.assert_called_once()
+
+
+def test_rebalance_alert_includes_decision_context():
+    """거래 알림에 판단 근거(비중/목표) 포함 — Slack만 보고 이해 가능해야"""
+    holdings = {
+        "BTC": 40_000_000, "ETH": 24_000_000, "XRP": 8_000_000, "SOL": 8_000_000
+    }
+    sys_, _, alerts = make_system(holdings=holdings, krw=20_000_000)
+    sys_.run_daily_check(dry_run=False)
+    _, body = alerts.send_info_alert.call_args.args
+    assert "목표" in body and "80.0%" in body  # 현재 비중 80% → 목표로 복귀
+
+
+def test_dca_alert_includes_multiplier_context():
+    holdings = {
+        "BTC": 20_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000
+    }
+    sys_, _, alerts = make_system(fg=20, mayer=1.5, holdings=holdings,
+                                  krw=60_000_000)
+    sys_.run_weekly_dca(dry_run=False)
+    _, body = alerts.send_info_alert.call_args.args
+    assert "승수" in body and "F&G" in body
+
+
 def test_sells_execute_before_buys():
     """매도 먼저 실행해 KRW 확보 후 매수"""
     holdings = {"BTC": 50_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000}
@@ -432,3 +476,11 @@ def test_record_trade_failure_does_not_abort_remaining_orders():
     assert executor.execute.call_count >= 2
     assert result["executed"] >= 2
     assert alerts.send_error_alert.called  # 기록 실패는 알림으로 통지
+
+
+def test_monthly_report_exception_sends_error_alert():
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_snapshot.side_effect = RuntimeError("boom")
+    result = sys_.run_monthly_report()
+    assert result["halted"]
+    alerts.send_error_alert.assert_called_once()
