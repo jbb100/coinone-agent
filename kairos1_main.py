@@ -183,7 +183,7 @@ class KairosSimple:
         base = self.config.rebalance.crypto_target
         return contrarian_crypto_target(mayer, base) if self.config.contrarian_tilt else base
 
-    def _effective_weights(self) -> Dict[str, float]:
+    def _effective_weights(self, notes=None) -> Dict[str, float]:
         """모든 사이클이 공유하는 단일 자산 가중치 — 상대강도 편출 반영.
 
         26주 BTC 대비 열위 알트의 가중치를 연속 감축(감축분은 BTC로).
@@ -197,26 +197,30 @@ class KairosSimple:
         demoted = {a: w for a, w in effective.items()
                    if abs(w - weights[a]) > 1e-9}
         if demoted:
-            logger.info(
-                "상대강도 편출: "
-                + ", ".join(f"{a} {weights[a]:.0%}→{w:.1%}"
-                            for a, w in sorted(demoted.items()))
+            msg = "상대강도 편출: " + ", ".join(
+                f"{a} {weights[a]:.0%}→{w:.1%}" for a, w in sorted(demoted.items())
             )
+            logger.info(msg)
+            if notes is not None:
+                notes.append(msg)
         return effective
 
     def run_weekly_dca(self, dry_run: bool = False) -> Dict:
+        return self._guarded("주간 DCA", lambda: self._weekly_dca(dry_run))
+
+    def run_daily_check(self, dry_run: bool = False) -> Dict:
+        return self._guarded("일일 밴드 체크", lambda: self._daily_check(dry_run))
+
+    def _weekly_dca(self, dry_run: bool) -> Dict:
         """주간 DCA: 공포·저평가일수록 많이 매수.
 
         단, 매수 후 크립토 비중이 (틸트된) 목표를 넘지 않도록 상한 —
         목표 도달 시 현금을 보존해 다음 하락 매집 재원으로 남긴다."""
         import dataclasses
 
-        try:
-            valuation = self.market.get_valuation()
-            weights = self._effective_weights()
-            snap = self.portfolio.get_snapshot()
-        except (DataUnavailableError, InsufficientDataError) as e:
-            return self._halt("주간 DCA", e)
+        valuation = self.market.get_valuation()
+        weights = self._effective_weights()
+        snap = self.portfolio.get_snapshot()
         mult = dca_multiplier(valuation)
         target = self._tilted_target(valuation.mayer_ratio)
         dca_cfg = dataclasses.replace(self.config.dca, crypto_weights=weights)
@@ -224,15 +228,16 @@ class KairosSimple:
             dca_cfg, mult, snap.krw_balance,
             crypto_value_krw=snap.crypto_value_krw, target_crypto_ratio=target,
         )
-        logger.info(
-            f"DCA 승수 {mult:.2f} (F&G={valuation.fear_greed}, "
-            f"Mayer={valuation.mayer_ratio:.2f}) | 크립토 {snap.crypto_ratio:.1%}"
-            f"/목표 {target:.1%} → 주문 {len(orders)}건"
-        )
+        notes = [
+            f"승수 {mult:.2f} (F&G={valuation.fear_greed}, "
+            f"Mayer={valuation.mayer_ratio:.2f}) | "
+            f"크립토 {snap.crypto_ratio:.1%} → 목표 {target:.1%}"
+        ]
+        logger.info(f"{notes[0]} → 주문 {len(orders)}건")
         if not orders and snap.crypto_ratio >= target:
             logger.info("목표 비중 도달 — 이번 주 DCA 현금 보존")
         requests = [OrderRequest(o.asset, "buy", o.amount_krw, "dca") for o in orders]
-        result = self._execute_all("주간 DCA", requests, snap, dry_run)
+        result = self._execute_all("주간 DCA", requests, snap, dry_run, notes=notes)
         if not dry_run and result["executed"] == 0 and not result["rejected"]:
             # 주간 하트비트 — 무거래 주에도 최소 주 1회 알림이 가야
             # '조용한 시장'과 '죽은 크론'을 구분할 수 있다
@@ -244,57 +249,62 @@ class KairosSimple:
             )
         return result
 
-    def run_daily_check(self, dry_run: bool = False) -> Dict:
+    def _daily_check(self, dry_run: bool) -> Dict:
         """일일 밴드 체크: 이탈 시에만 목표 비중으로 복귀.
 
         역발상 틸트가 켜져 있으면 Mayer ratio로 목표 비중을 연속 조절한다
         (바닥권일수록 높게, 과열일수록 낮게)."""
         import dataclasses
 
+        notes = []
+        reb_cfg = self.config.rebalance
+        if self.config.contrarian_tilt:
+            mayer = self.market.get_mayer_ratio()
+            target = self._tilted_target(mayer)
+            if target != reb_cfg.crypto_target:
+                msg = (f"역발상 틸트: Mayer={mayer:.2f} → 목표 "
+                       f"{reb_cfg.crypto_target:.0%} → {target:.1%}")
+                logger.info(msg)
+                notes.append(msg)
+            reb_cfg = dataclasses.replace(reb_cfg, crypto_target=target)
+        reb_cfg = dataclasses.replace(
+            reb_cfg, crypto_weights=self._effective_weights(notes)
+        )
+        snap = self.portfolio.get_snapshot()
         try:
-            reb_cfg = self.config.rebalance
-            if self.config.contrarian_tilt:
-                mayer = self.market.get_mayer_ratio()
-                target = self._tilted_target(mayer)
-                if target != reb_cfg.crypto_target:
-                    logger.info(
-                        f"역발상 틸트: Mayer={mayer:.2f} → 목표 "
-                        f"{reb_cfg.crypto_target:.0%} → {target:.1%}"
-                    )
-                reb_cfg = dataclasses.replace(reb_cfg, crypto_target=target)
-            reb_cfg = dataclasses.replace(
-                reb_cfg, crypto_weights=self._effective_weights()
-            )
-            snap = self.portfolio.get_snapshot()
-            try:
-                # 월간 수익률 데이터 축적 — 기록 실패가 거래를 막으면 안 됨
-                self.portfolio.record_snapshot(snap)
-            except Exception as e:
-                logger.error(f"스냅샷 기록 실패 (체크는 계속): {e}")
-            orders = plan_rebalance(reb_cfg, snap.holdings_krw, snap.krw_balance)
-            if not orders:
-                logger.info(f"밴드 내 (크립토 {snap.crypto_ratio:.1%}) — 거래 없음")
-                return {"executed": 0, "rejected": [], "halted": False,
-                        "note": "밴드 내 — 거래 없음"}
-            changes = self.market.get_price_change_24h([o.asset for o in orders])
-            guarded = apply_crash_guard(
-                orders, changes,
-                threshold=reb_cfg.crash_threshold,
-                buy_fraction=reb_cfg.crash_buy_fraction,
-                min_trade_krw=reb_cfg.min_trade_krw,
-            )
-            if guarded != orders:
-                logger.info("크래시 가드: 급락 자산 매수 분할 진입 적용")
-            orders = guarded
-        except (DataUnavailableError, InsufficientDataError) as e:
-            return self._halt("일일 밴드 체크", e)
+            # 월간 수익률 데이터 축적 — 기록 실패가 거래를 막으면 안 됨
+            self.portfolio.record_snapshot(snap)
+        except Exception as e:
+            logger.error(f"스냅샷 기록 실패 (체크는 계속): {e}")
+        orders = plan_rebalance(reb_cfg, snap.holdings_krw, snap.krw_balance)
+        if not orders:
+            logger.info(f"밴드 내 (크립토 {snap.crypto_ratio:.1%}) — 거래 없음")
+            return {"executed": 0, "rejected": [], "halted": False,
+                    "note": "밴드 내 — 거래 없음"}
+        notes.insert(0, f"크립토 {snap.crypto_ratio:.1%} → 목표 "
+                        f"{reb_cfg.crypto_target:.1%} 복귀")
+        changes = self.market.get_price_change_24h([o.asset for o in orders])
+        guarded = apply_crash_guard(
+            orders, changes,
+            threshold=reb_cfg.crash_threshold,
+            buy_fraction=reb_cfg.crash_buy_fraction,
+            min_trade_krw=reb_cfg.min_trade_krw,
+        )
+        if guarded != orders:
+            msg = "크래시 가드: 급락 자산 매수 분할 진입"
+            logger.info(msg)
+            notes.append(msg)
+        orders = guarded
         requests = [
             OrderRequest(o.asset, o.side, o.amount_krw, "rebalance") for o in orders
         ]
         return self._execute_all("밴드 리밸런싱", requests, snap, dry_run,
-                                 price_changes=changes)
+                                 price_changes=changes, notes=notes)
 
     def run_monthly_report(self) -> Dict:
+        return self._guarded("월간 리포트", self._monthly_report)
+
+    def _monthly_report(self) -> Dict:
         from src.report.reporter import Reporter
 
         snap = self.portfolio.get_snapshot()
@@ -331,7 +341,8 @@ class KairosSimple:
         }
 
     # ---------------------------------------------------------------- 내부
-    def _execute_all(self, label, requests, snap, dry_run, price_changes=None) -> Dict:
+    def _execute_all(self, label, requests, snap, dry_run,
+                     price_changes=None, notes=None) -> Dict:
         executed, rejected = 0, []
         executed_reqs = []
         # 매도 먼저 실행해 KRW 확보 후 매수 (하락장 리밸런싱 매수 자금)
@@ -381,16 +392,18 @@ class KairosSimple:
         result = {"executed": executed, "rejected": rejected, "halted": False}
         logger.info(f"{label} 완료: 실행 {executed}건, 거부 {len(rejected)}건")
         if not dry_run:
-            self._notify_result(label, executed_reqs, rejected)
+            self._notify_result(label, executed_reqs, rejected, notes)
         return result
 
-    def _notify_result(self, label, executed_reqs, rejected) -> None:
+    def _notify_result(self, label, executed_reqs, rejected, notes=None) -> None:
         """체결·거부 내역 Slack 통지 — 무거래 날은 조용히 (알림 피로 방지).
 
+        판단 근거(notes: 틸트·편출·승수·가드)를 함께 실어 서버 로그 없이
+        Slack만으로 왜 거래했는지 이해할 수 있게 한다.
         알림 실패가 사이클 결과를 바꾸면 안 됨 (주문은 이미 체결됨)."""
         if not executed_reqs and not rejected:
             return
-        lines = [
+        lines = [f"📐 {n}" for n in (notes or [])] + [
             f"✅ {r.side} {r.asset} {r.amount_krw:,.0f} KRW" for r in executed_reqs
         ] + [f"🚫 {asset}: {reason}" for asset, reason in rejected]
         body = "\n".join(lines)
@@ -406,9 +419,30 @@ class KairosSimple:
         except Exception as e:
             logger.error(f"Slack 알림 실패 (거래는 정상 처리됨): {e}")
 
+    def _guarded(self, label: str, fn) -> Dict:
+        """무인 운영 가드 — 어떤 실패도 조용히 죽지 않고 Slack에 남긴다."""
+        try:
+            return fn()
+        except (DataUnavailableError, InsufficientDataError) as e:
+            return self._halt(label, e)
+        except Exception as e:
+            return self._crash(label, e)
+
     def _halt(self, label: str, error: Exception) -> Dict:
         logger.error(f"{label} 중단: {error}")
         self.alerts.send_warning_alert(f"{label} 중단", f"데이터 이상: {error}")
+        return {"executed": 0, "rejected": [], "halted": True, "error": str(error)}
+
+    def _crash(self, label: str, error: Exception) -> Dict:
+        """예상치 못한 예외 — 데이터 이상(warning)과 구분해 error로 통지."""
+        logger.exception(f"{label} 비정상 종료: {error}")
+        try:
+            self.alerts.send_error_alert(
+                f"{label} 비정상 종료",
+                f"예상치 못한 오류로 사이클 중단: {error}",
+            )
+        except Exception as alert_err:
+            logger.error(f"오류 알림 발송도 실패: {alert_err}")
         return {"executed": 0, "rejected": [], "halted": True, "error": str(error)}
 
 
