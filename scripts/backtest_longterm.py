@@ -91,7 +91,12 @@ def run_backtest(
         else:
             mult = 1.0  # 워밍업 구간: 기본 DCA만 (MA 없으면 틸트도 불가)
 
-        for order in plan_weekly_dca(dca_cfg, mult, krw):
+        # 실운영과 동일: 매수 후 비중이 (틸트된) 목표를 넘지 않도록 상한
+        for order in plan_weekly_dca(
+            dca_cfg, mult, krw,
+            crypto_value_krw=btc_qty * price,
+            target_crypto_ratio=week_reb_cfg.crypto_target,
+        ):
             spend = order.amount_krw
             btc_qty += spend * (1 - cost) / price
             krw -= spend

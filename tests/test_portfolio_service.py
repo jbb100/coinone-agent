@@ -56,3 +56,10 @@ def test_record_trade_persists_to_db():
     assert saved["side"] == "buy"
     assert saved["amount_krw"] == 500_000.0
     assert saved["origin"] == "dca"
+
+
+def test_traded_krw_today_delegates_to_db():
+    """일일 거래량 한도 시딩용 — DB의 오늘 거래액 합계를 그대로 노출"""
+    svc, db = make_service(balances={}, prices={})
+    db.get_traded_krw_today.return_value = 12_345.0
+    assert svc.get_traded_krw_today() == pytest.approx(12_345.0)

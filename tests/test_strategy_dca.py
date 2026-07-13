@@ -52,6 +52,46 @@ def test_zero_balance_returns_empty():
     assert plan_weekly_dca(CONFIG, multiplier=3.0, krw_balance=0) == []
 
 
+class TestTargetRatioCap:
+    """목표 비중 인지형 DCA — 매수 후 크립토 비중이 목표를 넘지 않도록 상한.
+
+    불변식: DCA는 목표 비중 위로 사지 않고, 리밸런서는 목표+밴드 위에서만
+    판다 → 같은 포트폴리오 상태에서 매수·매도가 충돌할 수 없다.
+    """
+
+    def test_no_buy_when_crypto_at_or_above_target(self):
+        # 크립토 64% ≥ 목표 60% → 공포장이어도 매수 없음 (현금 보존)
+        orders = plan_weekly_dca(
+            CONFIG, multiplier=1.5, krw_balance=36_000_000,
+            crypto_value_krw=64_000_000, target_crypto_ratio=0.60,
+        )
+        assert orders == []
+
+    def test_buy_capped_to_target_headroom(self):
+        # 총자산 100M, 크립토 59% → 여유 1M < 계획 2M(2.0x) → 1M으로 상한
+        orders = plan_weekly_dca(
+            CONFIG, multiplier=2.0, krw_balance=41_000_000,
+            crypto_value_krw=59_000_000, target_crypto_ratio=0.60,
+        )
+        assert sum(o.amount_krw for o in orders) == pytest.approx(1_000_000)
+
+    def test_full_amount_when_ample_headroom(self):
+        # 크립토 40% → 여유 20M ≫ 계획 1M → 상한 미적용
+        orders = plan_weekly_dca(
+            CONFIG, multiplier=1.0, krw_balance=60_000_000,
+            crypto_value_krw=40_000_000, target_crypto_ratio=0.60,
+        )
+        assert sum(o.amount_krw for o in orders) == pytest.approx(1_000_000)
+
+    def test_partial_cap_args_raise(self):
+        # fail-loud: 둘 중 하나만 주면 호출 오류
+        with pytest.raises(ValueError):
+            plan_weekly_dca(
+                CONFIG, multiplier=1.0, krw_balance=10_000_000,
+                crypto_value_krw=50_000_000,
+            )
+
+
 def test_invalid_weights_raise():
     with pytest.raises(ValueError):
         DCAConfig(

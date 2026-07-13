@@ -68,19 +68,37 @@ class TestDcaMultiplier:
 class TestContrarianCryptoTarget:
     """역발상 목표 비중 틸트 — 바닥권에 비중을 올리고 과열에 내린다.
 
-    465주 32개 시작점 스윕에서 고정 0.60 대비 전 구간 동등 이상 검증
-    (평균 1.69x→1.77x, 최악 MDD -50.5%→-46.9%, Sharpe 1.78→1.83).
-    밴드 경계는 기존 Mayer 밴드(1.0/2.0/3.0) 재사용 — 신규 피팅 금지.
+    경계(1.0/2.0/3.0)는 기존 Mayer 밴드 재사용 — 신규 피팅 금지.
+    계단식이 아닌 구간 선형 보간: 경계 ±0.1 전이 구간에서 목표가 연속으로
+    변해, Mayer가 경계를 오가며 목표가 ±10%p씩 점프하는 절벽 효과
+    (예: 1.01→0.99 시 60%→70% 점프 → 수백만 원 왕복 매매)를 제거한다.
     """
 
     @pytest.mark.parametrize("mayer,expected", [
-        (0.5, 0.70), (0.99, 0.70),   # 바닥권: +10%p
-        (1.0, 0.60), (1.99, 0.60),   # 적정: 기본 유지
-        (2.0, 0.50), (2.99, 0.50),   # 확장: -10%p
-        (3.0, 0.40), (5.0, 0.40),    # 과열: -20%p
+        (0.5, 0.70), (0.9, 0.70),    # 바닥권: +10%p
+        (1.0, 0.65),                 # 전이 구간: +5%p (절벽 없음)
+        (1.1, 0.60), (1.9, 0.60),    # 적정: 기본 유지
+        (2.0, 0.55),                 # 전이 구간: -5%p
+        (2.1, 0.50), (2.9, 0.50),    # 확장: -10%p
+        (3.0, 0.45),                 # 전이 구간: -15%p
+        (3.1, 0.40), (5.0, 0.40),    # 과열: -20%p
     ])
-    def test_boundaries_with_default_base(self, mayer, expected):
+    def test_piecewise_linear_tilt(self, mayer, expected):
         assert contrarian_crypto_target(mayer, base_target=0.60) == pytest.approx(expected)
+
+    def test_target_is_monotonically_nonincreasing_in_mayer(self):
+        """싸질수록 비중이 낮아지는 일은 없어야 함 (역발상 방향성)"""
+        targets = [
+            contrarian_crypto_target(m / 100, base_target=0.60)
+            for m in range(10, 400, 5)
+        ]
+        assert all(a >= b for a, b in zip(targets, targets[1:]))
+
+    def test_small_mayer_noise_moves_target_smoothly(self):
+        """경계 근처 0.02 노이즈가 목표를 1%p 이상 흔들면 안 됨 (플립플롭 방지)"""
+        a = contrarian_crypto_target(0.99, base_target=0.60)
+        b = contrarian_crypto_target(1.01, base_target=0.60)
+        assert abs(a - b) < 0.011
 
     def test_offsets_follow_base_target(self):
         assert contrarian_crypto_target(0.8, base_target=0.50) == pytest.approx(0.60)

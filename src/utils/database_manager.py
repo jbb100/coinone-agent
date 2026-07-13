@@ -429,7 +429,27 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"거래 내역 저장 실패: {e}")
             raise
-    
+
+    def get_traded_krw_today(self) -> float:
+        """오늘 체결된 거래액 합계 (KRW).
+
+        일일 거래량 한도는 프로세스 간 공유돼야 한다 — weekly-dca와
+        daily-check가 별도 프로세스라 메모리 누적만으로는 한도가 2배가 된다.
+        trade_date는 str(datetime)으로 저장되므로 앞 10자가 YYYY-MM-DD.
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COALESCE(SUM(amount_krw), 0) FROM trade_history "
+                    "WHERE substr(trade_date, 1, 10) = ?",
+                    (datetime.now().strftime("%Y-%m-%d"),),
+                )
+                return float(cursor.fetchone()[0])
+        except Exception as e:
+            logger.error(f"오늘 거래액 조회 실패: {e}")
+            raise
+
     def save_portfolio_snapshot(self, portfolio_data: Dict) -> int:
         """
         포트폴리오 스냅샷 저장

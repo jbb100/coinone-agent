@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """KAIROS-Simple: 장기 역발상 매집형 자동 트레이딩.
 
-철학: 싸질수록 사고, 비싸질수록 판다.
-  - 주간 DCA: Fear&Greed × 200주MA 승수 (공포·바닥권에 많이, 탐욕·과열에 적게)
-  - 일일 밴드 체크: 목표 비중(기본 크립토 60/KRW 40) ±5%p 이탈 시에만
-    리밸런싱 — 상승 초과분 자동 익절, 하락 미달분 자동 매집
-  - 역발상 틸트: Mayer ratio 밴드로 목표 비중 자체를 조절
-    (<1.0: +10%p | 2-3: -10%p | >=3: -20%p) — 역발상 레버를 자산배분에 직접
+철학: 싸질수록 사고, 비싸질수록 판다. 모든 사이클이 하나의 (틸트된)
+목표 비중을 공유해 서로 반대 매매를 하지 않는다.
+  - 역발상 틸트: Mayer ratio로 목표 비중을 연속 조절 (구간 선형 보간,
+    바닥권 +10%p ~ 과열 -20%p) — 역발상 레버를 자산배분에 직접
+  - 주간 DCA: Fear&Greed × 200주MA 승수 (공포·바닥권에 많이, 탐욕·과열에
+    적게). 단, 매수 후 비중이 목표를 넘지 않도록 상한 — 목표 도달 시
+    현금 보존 (리밸런서가 되팔 물량을 사지 않는다)
+  - 일일 밴드 체크: 목표 ±5%p 이탈 시에만 리밸런싱 — 상승 초과분 자동
+    익절, 하락 미달분 자동 매집
   - fail-loud: 데이터 이상 시 하드코딩 폴백 없이 거래 중단 + 알림
+
+역할 위계: Mayer(장주기 밸류에이션)가 자산배분 목표를 정하고, F&G(단기
+심리)는 목표 아래에서 신규 현금의 투입 속도만 조절한다.
 
 파이프라인: market_data → strategy(순수 함수) → risk_guard → executor → record/alert
 CLI: python kairos1_main.py {weekly-dca|daily-check|report|status} [--dry-run]
@@ -44,7 +50,9 @@ class KairosSimple:
         self.alerts = alerts
         self.guard = risk_guard
         self.config = config
-        self._daily_traded_krw = 0.0
+        # 일일 거래량 한도는 프로세스 간 공유 — weekly-dca(09:00)와
+        # daily-check(09:10)가 별도 프로세스라 0에서 시작하면 한도가 2배가 됨
+        self._daily_traded_krw = float(portfolio.get_traded_krw_today())
 
     # ------------------------------------------------------------------ 조립
     @classmethod
@@ -149,26 +157,42 @@ class KairosSimple:
         return system
 
     # ------------------------------------------------------------ 실행 사이클
+    def _tilted_target(self, mayer: float) -> float:
+        """모든 사이클이 공유하는 단일 목표 비중 — DCA와 리밸런서가 같은
+        목표를 보므로 한쪽이 사고 다른 쪽이 되파는 충돌이 없다."""
+        base = self.config.rebalance.crypto_target
+        return contrarian_crypto_target(mayer, base) if self.config.contrarian_tilt else base
+
     def run_weekly_dca(self, dry_run: bool = False) -> Dict:
-        """주간 DCA: 공포·저평가일수록 많이 매수."""
+        """주간 DCA: 공포·저평가일수록 많이 매수.
+
+        단, 매수 후 크립토 비중이 (틸트된) 목표를 넘지 않도록 상한 —
+        목표 도달 시 현금을 보존해 다음 하락 매집 재원으로 남긴다."""
         try:
             valuation = self.market.get_valuation()
             snap = self.portfolio.get_snapshot()
         except (DataUnavailableError, InsufficientDataError) as e:
             return self._halt("주간 DCA", e)
         mult = dca_multiplier(valuation)
-        orders = plan_weekly_dca(self.config.dca, mult, snap.krw_balance)
+        target = self._tilted_target(valuation.mayer_ratio)
+        orders = plan_weekly_dca(
+            self.config.dca, mult, snap.krw_balance,
+            crypto_value_krw=snap.crypto_value_krw, target_crypto_ratio=target,
+        )
         logger.info(
             f"DCA 승수 {mult:.2f} (F&G={valuation.fear_greed}, "
-            f"Mayer={valuation.mayer_ratio:.2f}) → 주문 {len(orders)}건"
+            f"Mayer={valuation.mayer_ratio:.2f}) | 크립토 {snap.crypto_ratio:.1%}"
+            f"/목표 {target:.1%} → 주문 {len(orders)}건"
         )
+        if not orders and snap.crypto_ratio >= target:
+            logger.info("목표 비중 도달 — 이번 주 DCA 현금 보존")
         requests = [OrderRequest(o.asset, "buy", o.amount_krw, "dca") for o in orders]
         return self._execute_all("주간 DCA", requests, snap, dry_run)
 
     def run_daily_check(self, dry_run: bool = False) -> Dict:
         """일일 밴드 체크: 이탈 시에만 목표 비중으로 복귀.
 
-        역발상 틸트가 켜져 있으면 Mayer ratio 밴드로 목표 비중을 조절한다
+        역발상 틸트가 켜져 있으면 Mayer ratio로 목표 비중을 연속 조절한다
         (바닥권일수록 높게, 과열일수록 낮게)."""
         import dataclasses
 
@@ -176,11 +200,11 @@ class KairosSimple:
             reb_cfg = self.config.rebalance
             if self.config.contrarian_tilt:
                 mayer = self.market.get_mayer_ratio()
-                target = contrarian_crypto_target(mayer, reb_cfg.crypto_target)
+                target = self._tilted_target(mayer)
                 if target != reb_cfg.crypto_target:
                     logger.info(
                         f"역발상 틸트: Mayer={mayer:.2f} → 목표 "
-                        f"{reb_cfg.crypto_target:.0%} → {target:.0%}"
+                        f"{reb_cfg.crypto_target:.0%} → {target:.1%}"
                     )
                 reb_cfg = dataclasses.replace(reb_cfg, crypto_target=target)
             snap = self.portfolio.get_snapshot()

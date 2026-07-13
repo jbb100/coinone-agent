@@ -10,7 +10,8 @@ from src.portfolio.portfolio import PortfolioSnapshot
 from src.strategy.valuation import MarketValuation
 
 
-def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000):
+def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000,
+                traded_today=0.0):
     holdings = holdings or {
         "BTC": 30_000_000, "ETH": 18_000_000, "XRP": 6_000_000, "SOL": 6_000_000
     }
@@ -19,6 +20,7 @@ def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000):
     market.get_mayer_ratio.return_value = mayer
     market.get_price_change_24h.return_value = {a: 0.0 for a in holdings}
     portfolio = MagicMock()
+    portfolio.get_traded_krw_today.return_value = traded_today
     portfolio.get_snapshot.return_value = PortfolioSnapshot(
         holdings_krw=holdings, krw_balance=krw, taken_at=datetime.now()
     )
@@ -40,10 +42,41 @@ def test_weekly_dca_places_buy_orders():
 
 
 def test_weekly_dca_dry_run_places_nothing():
-    sys_, executor, _ = make_system()
+    sys_, executor, _ = make_system(fg=20, mayer=0.9)  # 매수 계획이 있는 상황
     result = sys_.run_weekly_dca(dry_run=True)
     executor.execute.assert_not_called()
     assert result["executed"] == 0 and not result["halted"]
+
+
+def test_weekly_dca_skips_when_crypto_at_target():
+    """일관성 불변식: 크립토 비중이 이미 목표(60%)면 공포장이어도 DCA는
+    현금을 보존한다 — 10분 뒤 리밸런서가 되팔 물량을 사지 않는다"""
+    sys_, executor, _ = make_system(fg=20, mayer=1.5)  # 크립토 정확히 60%
+    result = sys_.run_weekly_dca(dry_run=False)
+    executor.execute.assert_not_called()
+    assert result["executed"] == 0 and not result["halted"]
+
+
+def test_weekly_dca_capped_by_target_headroom():
+    """크립토 59%/목표 60% → 여유 1M만 매수 (계획 2M이어도 목표 초과 금지)"""
+    holdings = {
+        "BTC": 29_500_000, "ETH": 17_700_000, "XRP": 5_900_000, "SOL": 5_900_000
+    }
+    sys_, executor, _ = make_system(fg=20, mayer=1.5, holdings=holdings,
+                                    krw=41_000_000)
+    result = sys_.run_weekly_dca(dry_run=False)
+    total = sum(c.args[0].amount_krw for c in executor.execute.call_args_list)
+    assert result["executed"] > 0
+    assert total == pytest.approx(1_000_000)
+
+
+def test_weekly_dca_cap_uses_fixed_target_when_tilt_disabled():
+    """틸트 꺼짐 + 바닥권이어도 고정 목표(60%) 기준으로 상한 적용"""
+    import dataclasses
+    sys_, executor, _ = make_system(fg=20, mayer=0.8)  # 크립토 정확히 60%
+    sys_.config = dataclasses.replace(sys_.config, contrarian_tilt=False)
+    sys_.run_weekly_dca(dry_run=False)
+    executor.execute.assert_not_called()
 
 
 def test_daily_check_no_orders_within_band():
@@ -70,6 +103,20 @@ def test_daily_check_buys_when_underweight():
     sys_.run_daily_check(dry_run=False)
     sides = [c.args[0].side for c in executor.execute.call_args_list]
     assert "buy" in sides
+
+
+def test_daily_volume_limit_includes_prior_process_trades():
+    """같은 날 앞선 프로세스(예: 09:00 주간 DCA)가 이미 체결한 거래액이
+    일일 한도(50M)에 합산돼야 함 — 프로세스별 0부터 계산하면 실질 한도 2배"""
+    holdings = {
+        "BTC": 20_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000
+    }
+    sys_, executor, _ = make_system(holdings=holdings, krw=60_000_000,
+                                    traded_today=50_000_000)  # 이미 한도 도달
+    result = sys_.run_daily_check(dry_run=False)  # 크립토 40% → 매수 트리거
+    executor.execute.assert_not_called()
+    assert result["executed"] == 0
+    assert len(result["rejected"]) > 0
 
 
 def test_sells_execute_before_buys():
