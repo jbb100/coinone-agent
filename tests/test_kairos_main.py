@@ -150,6 +150,40 @@ def test_weekly_dca_uses_demoted_weights():
     assert "XRP" not in assets  # 완전 편출 → DCA 매수 대상 제외
 
 
+def test_partial_fill_records_only_filled_amount():
+    """체결 확인: 부분 체결 시 실제 체결분만 기록하고 잔량은 거부 목록에"""
+    sys_, executor, _ = make_system(fg=20, mayer=0.9)
+    executor.execute.side_effect = lambda req: MagicMock(
+        success=False, filled_krw=req.amount_krw / 2, error="미체결 잔량 취소 (체결 50%)"
+    )
+    result = sys_.run_weekly_dca(dry_run=False)
+    assert result["executed"] > 0            # 체결분은 실행으로 집계
+    assert len(result["rejected"]) > 0       # 잔량은 거부 사유로 노출
+    recorded = [c.args[2] for c in sys_.portfolio.record_trade.call_args_list]
+    requested = [c.args[0].amount_krw for c in executor.execute.call_args_list]
+    assert recorded == pytest.approx([r / 2 for r in requested])
+
+
+def test_zero_fill_not_recorded_as_trade():
+    sys_, executor, _ = make_system(fg=20, mayer=0.9)
+    executor.execute.return_value = MagicMock(
+        success=False, filled_krw=0.0, error="미체결 잔량 취소 (체결 0%)"
+    )
+    result = sys_.run_weekly_dca(dry_run=False)
+    assert result["executed"] == 0
+    sys_.portfolio.record_trade.assert_not_called()
+
+
+def test_weekly_dca_sends_heartbeat_when_no_trades():
+    """주간 무거래여도 하트비트 알림 — '조용한 시장'과 '죽은 크론' 구분"""
+    sys_, _, alerts = make_system(fg=20, mayer=1.5)  # 목표 도달 → 매수 0
+    sys_.run_weekly_dca(dry_run=False)
+    alerts.send_info_alert.assert_called_once()
+    title, body = alerts.send_info_alert.call_args.args
+    assert "주간" in title
+    assert "총자산" in body
+
+
 def test_daily_check_crash_guard_halves_crashed_asset_buys():
     """24h -10% 이상 급락 자산의 리밸런싱 매수는 절반만 (분할 진입),
     급락하지 않은 자산은 전량 매수"""
