@@ -9,7 +9,9 @@
     적게). 단, 매수 후 비중이 목표를 넘지 않도록 상한 — 목표 도달 시
     현금 보존 (리밸런서가 되팔 물량을 사지 않는다)
   - 일일 밴드 체크: 목표 ±5%p 이탈 시에만 리밸런싱 — 상승 초과분 자동
-    익절, 하락 미달분 자동 매집
+    익절, 하락 미달분 자동 매집. 24h -10% 급락 자산은 분할 진입(크래시 가드)
+  - 상대강도 편출: 26주 BTC 대비 열위 알트의 목표 가중치를 연속 감축
+    (-30%까지 유지, -50%에서 0), 감축분은 BTC로
   - fail-loud: 데이터 이상 시 하드코딩 폴백 없이 거래 중단 + 알림
 
 역할 위계: Mayer(장주기 밸류에이션)가 자산배분 목표를 정하고, F&G(단기
@@ -28,8 +30,12 @@ from loguru import logger
 from src.core.exceptions import DataUnavailableError, InsufficientDataError
 from src.risk.guard import OrderRequest, PortfolioContext, RiskGuard, RiskLimits
 from src.strategy.dca import DCAConfig, plan_weekly_dca
-from src.strategy.rebalance import RebalanceConfig, plan_rebalance
-from src.strategy.valuation import contrarian_crypto_target, dca_multiplier
+from src.strategy.rebalance import RebalanceConfig, apply_crash_guard, plan_rebalance
+from src.strategy.valuation import (
+    apply_relative_strength,
+    contrarian_crypto_target,
+    dca_multiplier,
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,9 @@ class SystemConfig:
     # 역발상 틸트: Mayer 밴드에 따라 목표 비중을 ±10~20%p 조절
     # (바닥권 +10%p, 과열 -20%p). False면 고정 목표.
     contrarian_tilt: bool = True
+    # 상대강도 편출: 26주 BTC 대비 열위 알트의 목표 가중치를 연속 감축,
+    # 감축분은 BTC로. False면 고정 가중치.
+    relative_demotion: bool = True
 
 
 class KairosSimple:
@@ -103,6 +112,12 @@ class KairosSimple:
                 crypto_weights=weights,
                 relative_band=float(loader.get("strategy.rebalance.relative_band", 0.20)),
                 min_trade_krw=float(loader.get("strategy.rebalance.min_trade_krw", 10_000)),
+                crash_threshold=float(
+                    loader.get("strategy.rebalance.crash_threshold_24h", -0.10)
+                ),
+                crash_buy_fraction=float(
+                    loader.get("strategy.rebalance.crash_buy_fraction", 0.5)
+                ),
             ),
             limits=RiskLimits(
                 max_single_trade_krw=float(loader.get("risk.max_single_trade_krw", 10_000_000)),
@@ -112,6 +127,9 @@ class KairosSimple:
             ),
             contrarian_tilt=str(
                 loader.get("strategy.targets.contrarian_tilt", True)
+            ).lower() in ("true", "1", "yes"),
+            relative_demotion=str(
+                loader.get("strategy.targets.relative_demotion", True)
             ).lower() in ("true", "1", "yes"),
         )
 
@@ -163,20 +181,45 @@ class KairosSimple:
         base = self.config.rebalance.crypto_target
         return contrarian_crypto_target(mayer, base) if self.config.contrarian_tilt else base
 
+    def _effective_weights(self) -> Dict[str, float]:
+        """모든 사이클이 공유하는 단일 자산 가중치 — 상대강도 편출 반영.
+
+        26주 BTC 대비 열위 알트의 가중치를 연속 감축(감축분은 BTC로).
+        DCA와 리밸런서가 같은 가중치를 봐야 충돌이 없다."""
+        weights = self.config.rebalance.crypto_weights
+        alts = [a for a in weights if a != "BTC"]
+        if not self.config.relative_demotion or not alts:
+            return weights
+        rel = self.market.get_relative_returns(alts)
+        effective = apply_relative_strength(weights, rel)
+        demoted = {a: w for a, w in effective.items()
+                   if abs(w - weights[a]) > 1e-9}
+        if demoted:
+            logger.info(
+                "상대강도 편출: "
+                + ", ".join(f"{a} {weights[a]:.0%}→{w:.1%}"
+                            for a, w in sorted(demoted.items()))
+            )
+        return effective
+
     def run_weekly_dca(self, dry_run: bool = False) -> Dict:
         """주간 DCA: 공포·저평가일수록 많이 매수.
 
         단, 매수 후 크립토 비중이 (틸트된) 목표를 넘지 않도록 상한 —
         목표 도달 시 현금을 보존해 다음 하락 매집 재원으로 남긴다."""
+        import dataclasses
+
         try:
             valuation = self.market.get_valuation()
+            weights = self._effective_weights()
             snap = self.portfolio.get_snapshot()
         except (DataUnavailableError, InsufficientDataError) as e:
             return self._halt("주간 DCA", e)
         mult = dca_multiplier(valuation)
         target = self._tilted_target(valuation.mayer_ratio)
+        dca_cfg = dataclasses.replace(self.config.dca, crypto_weights=weights)
         orders = plan_weekly_dca(
-            self.config.dca, mult, snap.krw_balance,
+            dca_cfg, mult, snap.krw_balance,
             crypto_value_krw=snap.crypto_value_krw, target_crypto_ratio=target,
         )
         logger.info(
@@ -207,13 +250,30 @@ class KairosSimple:
                         f"{reb_cfg.crypto_target:.0%} → {target:.1%}"
                     )
                 reb_cfg = dataclasses.replace(reb_cfg, crypto_target=target)
+            reb_cfg = dataclasses.replace(
+                reb_cfg, crypto_weights=self._effective_weights()
+            )
             snap = self.portfolio.get_snapshot()
+            try:
+                # 월간 수익률 데이터 축적 — 기록 실패가 거래를 막으면 안 됨
+                self.portfolio.record_snapshot(snap)
+            except Exception as e:
+                logger.error(f"스냅샷 기록 실패 (체크는 계속): {e}")
             orders = plan_rebalance(reb_cfg, snap.holdings_krw, snap.krw_balance)
             if not orders:
                 logger.info(f"밴드 내 (크립토 {snap.crypto_ratio:.1%}) — 거래 없음")
                 return {"executed": 0, "rejected": [], "halted": False,
                         "note": "밴드 내 — 거래 없음"}
             changes = self.market.get_price_change_24h([o.asset for o in orders])
+            guarded = apply_crash_guard(
+                orders, changes,
+                threshold=reb_cfg.crash_threshold,
+                buy_fraction=reb_cfg.crash_buy_fraction,
+                min_trade_krw=reb_cfg.min_trade_krw,
+            )
+            if guarded != orders:
+                logger.info("크래시 가드: 급락 자산 매수 분할 진입 적용")
+            orders = guarded
         except (DataUnavailableError, InsufficientDataError) as e:
             return self._halt("일일 밴드 체크", e)
         requests = [
@@ -227,9 +287,15 @@ class KairosSimple:
 
         snap = self.portfolio.get_snapshot()
         reporter = Reporter(self.binance, self.alerts)
-        # 포트폴리오 수익률은 DB 기반 산출이 붙기 전까지 벤치마크 비교만 제공
+        # 일일 스냅샷 이력 기반 30일 총자산 변화율 (입출금 포함 단순 변화)
+        portfolio_return = self.portfolio.get_value_change_30d(snap.total_value_krw)
+        if portfolio_return is not None:
+            return reporter.monthly_report(
+                portfolio_return, snap.total_value_krw, snap.crypto_ratio
+            )
         benchmark = reporter.btc_benchmark_return(days=30)
         report = {
+            "portfolio_return": None,
             "total_value_krw": snap.total_value_krw,
             "crypto_ratio": snap.crypto_ratio,
             "btc_benchmark_return_30d": benchmark,
@@ -237,7 +303,7 @@ class KairosSimple:
         self.alerts.send_info_alert(
             "월간 리포트",
             f"총자산 {snap.total_value_krw:,.0f} KRW | 크립토 {snap.crypto_ratio:.0%} "
-            f"| BTC 30일 {benchmark:+.1%}",
+            f"| BTC 30일 {benchmark:+.1%} | 포트폴리오 수익률: 스냅샷 데이터 축적 중",
         )
         return report
 

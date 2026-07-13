@@ -34,6 +34,30 @@ class MarketDataService:
         ma = ma_200w(klines["Close"])          # 부족/NaN 시 InsufficientDataError
         return float(klines["Close"].iloc[-1]) / ma
 
+    def get_relative_returns(
+        self, assets: List[str], anchor: str = "BTC", weeks: int = 26
+    ) -> Dict[str, float]:
+        """앵커(BTC) 대비 26주 상대수익 — 상대강도 편출 입력.
+
+        rel = (자산 26주 수익배수 / 앵커 26주 수익배수) - 1
+        """
+        def growth(symbol: str) -> float:
+            klines = self.binance.get_historical_klines(
+                symbol=f"{symbol}USDT", interval="1w", limit=weeks + 1
+            )
+            if klines is None or len(klines) < weeks + 1 or "Close" not in klines:
+                raise DataUnavailableError(
+                    f"{symbol} 주봉 {weeks + 1}개 조회 실패 — 이번 사이클 거래 중단"
+                )
+            first = float(klines["Close"].iloc[-(weeks + 1)])
+            last = float(klines["Close"].iloc[-1])
+            if first <= 0:
+                raise DataUnavailableError(f"{symbol} 주봉 가격 이상: {first}")
+            return last / first
+
+        anchor_growth = growth(anchor)
+        return {asset: growth(asset) / anchor_growth - 1.0 for asset in assets}
+
     def get_prices_krw(self, assets: List[str]) -> Dict[str, float]:
         prices = {}
         for asset in assets:

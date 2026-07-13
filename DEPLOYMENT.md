@@ -112,42 +112,44 @@ chmod +x scripts/*.py kairos1_main.py
 
 ### 1. 기본 동작 테스트
 ```bash
-# 시스템 초기화 테스트
-python kairos1_main.py --system-status
+# 포트폴리오 상태 조회 (읽기 전용)
+python kairos1_main.py status
 
-# API 연결 테스트
-python kairos1_main.py --test-alerts
+# 주문 없이 사이클 시뮬레이션
+python kairos1_main.py weekly-dca --dry-run
+python kairos1_main.py daily-check --dry-run
 ```
 
-### 2. 모듈별 테스트
+### 2. 전체 테스트 스위트
 ```bash
-# 주간 시장 분석 테스트
-python kairos1_main.py --weekly-analysis
-
-# DRY RUN 리밸런싱 테스트
-python kairos1_main.py --quarterly-rebalance --dry-run
-
-# 성과 보고서 테스트
-python kairos1_main.py --performance-report 30
+kairos_env/bin/python -m pytest tests/ -q
 ```
 
-## 🔄 자동화 설정
+## 🔄 자동화 설정 (KAIROS-Simple)
 
 ### 1. 크론잡 설정
 ```bash
 # 크론탭 편집
 crontab -e
 
-# 다음 내용 추가:
-# 주간 시장 분석 (매주 월요일 09:00)
-0 9 * * 1 /path/to/kairos_env/bin/python /path/to/kairos-1/kairos1_main.py --weekly-analysis
+# 상단에 환경변수 (API 키는 config 대신 crontab 환경변수로 주입):
+# COINONE_API_KEY=...
+# COINONE_SECRET_KEY=...
+# SLACK_WEBHOOK_URL=...
 
-# 분기별 리밸런싱 (분기 첫째주 월요일 09:00)
-0 9 1-7 1,4,7,10 1 /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/quarterly_rebalance.py
+# 주간 DCA (매주 월요일 09:00) — 공포·저평가일수록 많이, 목표 비중까지만
+0 9 * * 1 cd /path/to/kairos-1 && kairos_env/bin/python kairos1_main.py weekly-dca >> /var/log/kairos/weekly-dca.log 2>&1
 
-# 일일 성과 보고서 (매일 18:00)
-0 18 * * * /path/to/kairos_env/bin/python /path/to/kairos-1/scripts/performance_report.py --periods 7 30 --send-alert
+# 일일 밴드 체크 (매일 09:10) — 목표 ±5%p 이탈 시에만 리밸런싱
+10 9 * * * cd /path/to/kairos-1 && kairos_env/bin/python kairos1_main.py daily-check >> /var/log/kairos/daily-check.log 2>&1
+
+# 월간 리포트 (매월 1일 09:30)
+30 9 1 * * cd /path/to/kairos-1 && kairos_env/bin/python kairos1_main.py report >> /var/log/kairos/report.log 2>&1
 ```
+
+> 실행 순서는 무관하다: DCA는 목표 비중 위로 사지 않고 리밸런서는
+> 목표+밴드 위에서만 팔도록 설계돼 있어, 같은 날 어떤 순서로 돌아도
+> 서로 반대 매매가 발생하지 않는다.
 
 ### 2. 시스템 서비스 등록 (Ubuntu)
 ```bash

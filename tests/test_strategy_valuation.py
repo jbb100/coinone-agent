@@ -4,10 +4,12 @@ import pytest
 
 from src.strategy.valuation import (
     MarketValuation,
+    apply_relative_strength,
     contrarian_crypto_target,
     dca_multiplier,
     fg_multiplier,
     ma_200w,
+    relative_weight_factor,
     valuation_multiplier,
 )
 from src.core.exceptions import InsufficientDataError
@@ -111,6 +113,57 @@ class TestContrarianCryptoTarget:
     def test_non_positive_mayer_raises(self):
         with pytest.raises(ValueError):
             contrarian_crypto_target(0.0, base_target=0.60)
+
+
+class TestRelativeWeightFactor:
+    """상대강도 편출 — 26주 BTC 대비 성과가 나쁠수록 알트 목표 가중치 감축.
+
+    구간 선형(틸트와 동일 방식): -30%까지는 유지, -50%에서 0, 사이는 보간.
+    연속 함수라 경계 노이즈가 급격한 편출입 매매를 만들지 않는다."""
+
+    @pytest.mark.parametrize("rel,factor", [
+        (0.5, 1.0), (0.0, 1.0), (-0.3, 1.0),   # BTC 대비 -30%까지 유지
+        (-0.4, 0.5),                            # 전이 구간
+        (-0.5, 0.0), (-0.8, 0.0),               # -50% 이하 완전 편출
+    ])
+    def test_piecewise_linear(self, rel, factor):
+        assert relative_weight_factor(rel) == pytest.approx(factor)
+
+
+class TestApplyRelativeStrength:
+    WEIGHTS = {"BTC": 0.5, "ETH": 0.3, "XRP": 0.1, "SOL": 0.1}
+
+    def test_underperformer_weight_moves_to_btc(self):
+        # XRP가 BTC 대비 -40% → 가중치 절반(0.05), 빠진 0.05는 BTC로
+        out = apply_relative_strength(
+            self.WEIGHTS, {"ETH": 0.0, "XRP": -0.4, "SOL": 0.0}
+        )
+        assert out["XRP"] == pytest.approx(0.05)
+        assert out["BTC"] == pytest.approx(0.55)
+        assert out["ETH"] == pytest.approx(0.30)
+        assert sum(out.values()) == pytest.approx(1.0)
+
+    def test_no_underperformance_keeps_weights(self):
+        out = apply_relative_strength(
+            self.WEIGHTS, {"ETH": 0.1, "XRP": 0.0, "SOL": -0.2}
+        )
+        assert out == pytest.approx(self.WEIGHTS)
+
+    def test_full_demotion_zeroes_weight(self):
+        out = apply_relative_strength(
+            self.WEIGHTS, {"ETH": 0.0, "XRP": -0.6, "SOL": 0.0}
+        )
+        assert out["XRP"] == pytest.approx(0.0)
+        assert out["BTC"] == pytest.approx(0.60)
+
+    def test_missing_anchor_raises(self):
+        with pytest.raises(ValueError):
+            apply_relative_strength({"ETH": 1.0}, {"ETH": 0.0})
+
+    def test_missing_relative_return_raises(self):
+        # fail-loud: 데이터 누락 시 조용히 1.0 취급 금지
+        with pytest.raises(ValueError):
+            apply_relative_strength(self.WEIGHTS, {"ETH": 0.0, "XRP": -0.4})
 
 
 class TestMa200w:

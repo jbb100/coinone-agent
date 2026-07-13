@@ -48,6 +48,32 @@ class PortfolioService:
         """오늘 체결된 거래액 합계 — 프로세스 간 일일 거래량 한도 공유용."""
         return float(self.db.get_traded_krw_today())
 
+    def record_snapshot(self, snap: PortfolioSnapshot) -> None:
+        """일일 스냅샷 기록 — 월간 수익률 산출의 데이터 원천."""
+        self.db.save_portfolio_snapshot({
+            "total_value_krw": snap.total_value_krw,
+            "assets": {
+                **{asset: {"balance": 0.0, "value_krw": value}
+                   for asset, value in snap.holdings_krw.items()},
+                "KRW": snap.krw_balance,
+            },
+        })
+
+    def get_value_change_30d(self, current_total_krw: float):
+        """최근 30일 총자산 변화율 (입출금 포함 단순 변화).
+
+        스냅샷 이력이 없으면 None — 데이터 없이 수익률을 주장하지 않는다.
+        """
+        history = self.db.get_portfolio_history(30)
+        baseline = next(
+            (float(row["total_value_krw"]) for row in history
+             if float(row.get("total_value_krw", 0)) > 0),
+            None,
+        )
+        if baseline is None:
+            return None
+        return current_total_krw / baseline - 1.0
+
     def record_trade(self, asset: str, side: str, amount_krw: float, origin: str) -> None:
         self.db.save_trade({
             "asset": asset,

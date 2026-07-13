@@ -19,6 +19,9 @@ def make_system(fg=50, mayer=1.5, holdings=None, krw=40_000_000,
     market.get_valuation.return_value = MarketValuation(fg, mayer)
     market.get_mayer_ratio.return_value = mayer
     market.get_price_change_24h.return_value = {a: 0.0 for a in holdings}
+    market.get_relative_returns.return_value = {
+        a: 0.0 for a in holdings if a != "BTC"
+    }
     portfolio = MagicMock()
     portfolio.get_traded_krw_today.return_value = traded_today
     portfolio.get_snapshot.return_value = PortfolioSnapshot(
@@ -105,6 +108,65 @@ def test_daily_check_buys_when_underweight():
     assert "buy" in sides
 
 
+def test_relative_demotion_rotates_weak_alt_into_btc():
+    """XRP가 26주간 BTC 대비 -40% → 목표 가중치 절반(10%→5%), 빠진 비중은
+    BTC로 → 개별 이탈 리밸런싱이 XRP 매도·BTC 매수를 만든다"""
+    sys_, executor, _ = make_system()  # 크립토 정확히 60%, 총비중 밴드 내
+    sys_.market.get_relative_returns.return_value = {
+        "ETH": 0.0, "XRP": -0.4, "SOL": 0.0
+    }
+    result = sys_.run_daily_check(dry_run=False)
+    orders = {c.args[0].asset: c.args[0] for c in executor.execute.call_args_list}
+    assert result["executed"] > 0
+    assert orders["XRP"].side == "sell"
+    assert orders["XRP"].amount_krw == pytest.approx(3_000_000)  # 6M → 3M
+    assert orders["BTC"].side == "buy"
+
+
+def test_relative_demotion_disabled_keeps_base_weights():
+    import dataclasses
+    sys_, executor, _ = make_system()
+    sys_.config = dataclasses.replace(sys_.config, relative_demotion=False)
+    sys_.market.get_relative_returns.return_value = {
+        "ETH": 0.0, "XRP": -0.6, "SOL": 0.0
+    }
+    result = sys_.run_daily_check(dry_run=False)
+    executor.execute.assert_not_called()
+    assert result["executed"] == 0
+
+
+def test_weekly_dca_uses_demoted_weights():
+    """DCA도 편출된 가중치로 매수해야 함 — 리밸런서와 같은 목표를 봐야
+    한쪽이 사고 다른 쪽이 파는 충돌이 없다"""
+    holdings = {
+        "BTC": 20_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000
+    }
+    sys_, executor, _ = make_system(holdings=holdings, krw=60_000_000)  # 40%
+    sys_.market.get_relative_returns.return_value = {
+        "ETH": 0.0, "XRP": -0.6, "SOL": 0.0
+    }
+    sys_.run_weekly_dca(dry_run=False)
+    assets = [c.args[0].asset for c in executor.execute.call_args_list]
+    assert "XRP" not in assets  # 완전 편출 → DCA 매수 대상 제외
+
+
+def test_daily_check_crash_guard_halves_crashed_asset_buys():
+    """24h -10% 이상 급락 자산의 리밸런싱 매수는 절반만 (분할 진입),
+    급락하지 않은 자산은 전량 매수"""
+    holdings = {
+        "BTC": 20_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000
+    }
+    sys_, executor, _ = make_system(holdings=holdings, krw=60_000_000)  # 40% → 매수
+    sys_.market.get_price_change_24h.return_value = {
+        "BTC": -0.15, "ETH": -0.03, "XRP": 0.0, "SOL": 0.0
+    }
+    sys_.run_daily_check(dry_run=False)
+    amounts = {c.args[0].asset: c.args[0].amount_krw
+               for c in executor.execute.call_args_list}
+    assert amounts["BTC"] == pytest.approx(5_000_000)   # 10M 계획 → 절반
+    assert amounts["ETH"] == pytest.approx(6_000_000)   # -3%는 급락 아님 → 전량
+
+
 def test_daily_volume_limit_includes_prior_process_trades():
     """같은 날 앞선 프로세스(예: 09:00 주간 DCA)가 이미 체결한 거래액이
     일일 한도(50M)에 합산돼야 함 — 프로세스별 0부터 계산하면 실질 한도 2배"""
@@ -168,6 +230,42 @@ def test_slack_failure_does_not_break_cycle():
     alerts.send_info_alert.side_effect = Exception("slack down")
     result = sys_.run_daily_check(dry_run=False)
     assert result["executed"] > 0 and not result["halted"]
+
+
+def test_daily_check_records_snapshot_even_without_trades():
+    """월간 수익률 데이터 축적 — 무거래 날에도 스냅샷은 기록"""
+    sys_, _, _ = make_system()  # 밴드 내 → 거래 없음
+    sys_.run_daily_check(dry_run=False)
+    sys_.portfolio.record_snapshot.assert_called_once()
+
+
+def test_monthly_report_uses_portfolio_return_when_history_exists():
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_value_change_30d.return_value = 0.08
+    sys_.binance = MagicMock()
+    import pandas as pd
+    sys_.binance.get_historical_klines.return_value = pd.DataFrame(
+        {"Close": [100.0] * 30 + [105.0]}
+    )
+    report = sys_.run_monthly_report()
+    assert report["portfolio_return"] == pytest.approx(0.08)
+    alerts.send_info_alert.assert_called_once()
+    _, body = alerts.send_info_alert.call_args.args
+    assert "+8.0%" in body
+
+
+def test_monthly_report_without_history_notes_accumulating():
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_value_change_30d.return_value = None
+    sys_.binance = MagicMock()
+    import pandas as pd
+    sys_.binance.get_historical_klines.return_value = pd.DataFrame(
+        {"Close": [100.0] * 30 + [105.0]}
+    )
+    report = sys_.run_monthly_report()
+    assert report.get("portfolio_return") is None
+    _, body = alerts.send_info_alert.call_args.args
+    assert "축적" in body
 
 
 def test_sells_execute_before_buys():

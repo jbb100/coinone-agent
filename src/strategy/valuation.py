@@ -4,6 +4,7 @@
 비싸질수록(탐욕·MA 대비 과열) 승수를 줄인다.
 """
 from dataclasses import dataclass
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -83,3 +84,43 @@ def ma_200w(weekly_closes: pd.Series) -> float:
     if window.isna().any():
         raise InsufficientDataError("200주MA 윈도우에 NaN 포함 — 데이터 오염")
     return float(window.mean())
+
+
+# 상대강도 편출 앵커 — 26주 BTC 대비 상대수익 기준 구간 선형.
+# -30%까지는 유지, -50%에서 완전 편출. 연속 함수라 경계 노이즈가
+# 급격한 편출입 매매를 만들지 않는다 (틸트와 동일한 설계 원칙).
+_RS_REL_ANCHORS = (-0.5, -0.3)
+_RS_FACTOR_ANCHORS = (0.0, 1.0)
+
+
+def relative_weight_factor(rel_return: float) -> float:
+    """BTC 대비 상대수익 → 목표 가중치 유지 비율 (0~1)."""
+    return float(np.interp(rel_return, _RS_REL_ANCHORS, _RS_FACTOR_ANCHORS))
+
+
+def apply_relative_strength(
+    weights: Dict[str, float],
+    rel_returns: Dict[str, float],
+    anchor: str = "BTC",
+) -> Dict[str, float]:
+    """장기 열위 알트의 목표 가중치를 연속 감축하고, 감축분을 앵커(BTC)로.
+
+    "싸질수록 산다"는 사이클 자산에만 유효하다 — BTC 대비 구조적으로
+    우하향하는 알트를 목표 비중대로 계속 사주는 것을 막는 편출 규칙.
+    가중치 합은 항상 보존된다.
+    """
+    if anchor not in weights:
+        raise ValueError(f"앵커 자산 {anchor}이 가중치에 없음: {weights}")
+    missing = [a for a in weights if a != anchor and a not in rel_returns]
+    if missing:
+        raise ValueError(f"상대수익 데이터 누락: {missing}")
+    out = {}
+    freed = 0.0
+    for asset, weight in weights.items():
+        if asset == anchor:
+            continue
+        factor = relative_weight_factor(rel_returns[asset])
+        out[asset] = weight * factor
+        freed += weight * (1.0 - factor)
+    out[anchor] = weights[anchor] + freed
+    return out

@@ -24,6 +24,9 @@ class RebalanceConfig:
     crypto_weights: Dict[str, float]
     relative_band: float
     min_trade_krw: float
+    # 크래시 가드: 24h 급락(threshold 이하) 자산의 매수를 분할 진입
+    crash_threshold: float = -0.10
+    crash_buy_fraction: float = 0.5
 
 
 def plan_rebalance(
@@ -64,3 +67,32 @@ def plan_rebalance(
         side = "buy" if diff > 0 else "sell"
         orders.append(RebalanceOrder(asset, side, abs(diff)))
     return orders
+
+
+def apply_crash_guard(
+    orders: List[RebalanceOrder],
+    price_change_24h: Dict[str, float],
+    threshold: float,
+    buy_fraction: float,
+    min_trade_krw: float,
+) -> List[RebalanceOrder]:
+    """급락 시 분할 진입 — FOMO 가드(급등 매수 금지)의 대칭 리스크 컨트롤.
+
+    24h 변동이 threshold(예: -10%) 이하인 자산의 매수는 buy_fraction만
+    집행한다. 일일 체크가 매일 돌므로 밴드 이탈이 지속되면 남은 미달분을
+    다음날 마저 산다 — 며칠에 걸친 자연스러운 시간 분산 진입.
+    매도(익절)는 건드리지 않는다.
+    """
+    out = []
+    for order in orders:
+        if (
+            order.side == "buy"
+            and price_change_24h.get(order.asset, 0.0) <= threshold
+        ):
+            scaled = order.amount_krw * buy_fraction
+            if scaled < min_trade_krw:
+                continue
+            out.append(RebalanceOrder(order.asset, "buy", scaled))
+        else:
+            out.append(order)
+    return out
