@@ -255,6 +255,7 @@ class KairosSimple:
     # ---------------------------------------------------------------- 내부
     def _execute_all(self, label, requests, snap, dry_run, price_changes=None) -> Dict:
         executed, rejected = 0, []
+        executed_reqs = []
         # 매도 먼저 실행해 KRW 확보 후 매수 (하락장 리밸런싱 매수 자금)
         for req in sorted(requests, key=lambda r: r.side != "sell"):
             ctx = PortfolioContext(
@@ -276,6 +277,7 @@ class KairosSimple:
             report = self.executor.execute(req)
             if report.success:
                 executed += 1
+                executed_reqs.append(req)
                 self._daily_traded_krw += req.amount_krw
                 # 주문은 이미 체결됨 — 기록 실패가 나머지 주문 실행을 막으면 안 됨
                 try:
@@ -293,7 +295,31 @@ class KairosSimple:
                 rejected.append((req.asset, f"실행 실패: {report.error}"))
         result = {"executed": executed, "rejected": rejected, "halted": False}
         logger.info(f"{label} 완료: 실행 {executed}건, 거부 {len(rejected)}건")
+        if not dry_run:
+            self._notify_result(label, executed_reqs, rejected)
         return result
+
+    def _notify_result(self, label, executed_reqs, rejected) -> None:
+        """체결·거부 내역 Slack 통지 — 무거래 날은 조용히 (알림 피로 방지).
+
+        알림 실패가 사이클 결과를 바꾸면 안 됨 (주문은 이미 체결됨)."""
+        if not executed_reqs and not rejected:
+            return
+        lines = [
+            f"✅ {r.side} {r.asset} {r.amount_krw:,.0f} KRW" for r in executed_reqs
+        ] + [f"🚫 {asset}: {reason}" for asset, reason in rejected]
+        body = "\n".join(lines)
+        try:
+            if executed_reqs:
+                self.alerts.send_info_alert(
+                    f"{label}: 실행 {len(executed_reqs)}건"
+                    + (f", 거부 {len(rejected)}건" if rejected else ""),
+                    body,
+                )
+            else:
+                self.alerts.send_warning_alert(f"{label}: 전량 거부", body)
+        except Exception as e:
+            logger.error(f"Slack 알림 실패 (거래는 정상 처리됨): {e}")
 
     def _halt(self, label: str, error: Exception) -> Dict:
         logger.error(f"{label} 중단: {error}")

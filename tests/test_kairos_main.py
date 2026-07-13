@@ -119,6 +119,57 @@ def test_daily_volume_limit_includes_prior_process_trades():
     assert len(result["rejected"]) > 0
 
 
+def test_executed_trades_send_slack_summary():
+    """체결 내역은 Slack으로 통지돼야 함 — 로그 파일에만 남으면 안 됨"""
+    holdings = {
+        "BTC": 40_000_000, "ETH": 24_000_000, "XRP": 8_000_000, "SOL": 8_000_000
+    }
+    sys_, _, alerts = make_system(holdings=holdings, krw=20_000_000)  # 80% → 매도
+    sys_.run_daily_check(dry_run=False)
+    alerts.send_info_alert.assert_called_once()
+    title, body = alerts.send_info_alert.call_args.args
+    assert "밴드 리밸런싱" in title
+    assert "sell" in body and "BTC" in body and "KRW" in body
+
+
+def test_no_trade_sends_no_slack():
+    """밴드 내 무거래 날은 조용해야 함 (알림 피로 방지)"""
+    sys_, _, alerts = make_system()
+    sys_.run_daily_check(dry_run=False)
+    alerts.send_info_alert.assert_not_called()
+    alerts.send_warning_alert.assert_not_called()
+
+
+def test_all_rejected_sends_warning_with_reasons():
+    """전량 거부는 경고로 통지 — 거부 사유 포함"""
+    holdings = {
+        "BTC": 20_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000
+    }
+    sys_, _, alerts = make_system(holdings=holdings, krw=60_000_000,
+                                  traded_today=50_000_000)  # 한도 도달 → 전량 거부
+    sys_.run_daily_check(dry_run=False)
+    alerts.send_warning_alert.assert_called_once()
+    _, body = alerts.send_warning_alert.call_args.args
+    assert "한도" in body
+
+
+def test_dry_run_sends_no_slack():
+    sys_, _, alerts = make_system(fg=20, mayer=0.9)
+    sys_.run_weekly_dca(dry_run=True)
+    alerts.send_info_alert.assert_not_called()
+
+
+def test_slack_failure_does_not_break_cycle():
+    """알림 실패가 거래 결과 반환을 막으면 안 됨 (주문은 이미 체결됨)"""
+    holdings = {
+        "BTC": 40_000_000, "ETH": 24_000_000, "XRP": 8_000_000, "SOL": 8_000_000
+    }
+    sys_, _, alerts = make_system(holdings=holdings, krw=20_000_000)
+    alerts.send_info_alert.side_effect = Exception("slack down")
+    result = sys_.run_daily_check(dry_run=False)
+    assert result["executed"] > 0 and not result["halted"]
+
+
 def test_sells_execute_before_buys():
     """매도 먼저 실행해 KRW 확보 후 매수"""
     holdings = {"BTC": 50_000_000, "ETH": 12_000_000, "XRP": 4_000_000, "SOL": 4_000_000}
