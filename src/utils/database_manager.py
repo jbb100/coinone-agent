@@ -489,7 +489,12 @@ class DatabaseManager:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     datetime.now(),
-                    portfolio_data.get("total_krw", 0),
+                    # record_snapshot은 total_value_krw로, 구 호출부는 total_krw로
+                    # 넘긴다 — 한쪽만 읽으면 총자산이 0으로 저장돼 월간 수익률·
+                    # 전일 대비가 영원히 '축적 중'이 된다
+                    portfolio_data.get(
+                        "total_value_krw", portfolio_data.get("total_krw", 0)
+                    ),
                     krw_balance,
                     btc_balance, btc_value,
                     eth_balance, eth_value,

@@ -74,6 +74,20 @@ class PortfolioService:
             return None
         return current_total_krw / baseline - 1.0
 
+    def get_previous_total_krw(self):
+        """오늘 이전 가장 최근 스냅샷의 총자산 — 데일리 브리핑 전일 대비용.
+
+        이력이 없으면 None — 데이터 없이 변화율을 주장하지 않는다.
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
+        totals = [
+            float(row["total_value_krw"])
+            for row in self.db.get_portfolio_history(7)
+            if float(row.get("total_value_krw") or 0) > 0
+            and str(row.get("snapshot_date", ""))[:10] < today
+        ]
+        return totals[-1] if totals else None
+
     def record_trade(self, asset: str, side: str, amount_krw: float, origin: str) -> None:
         self.db.save_trade({
             "asset": asset,

@@ -641,6 +641,27 @@ class TestSavePortfolioSnapshot:
 
         assert record_id > 0
 
+    def test_save_portfolio_snapshot_persists_total_value_krw(self, db_manager):
+        """회귀 방지: PortfolioService.record_snapshot이 넘기는 total_value_krw
+        키가 그대로 저장돼야 함 — total_krw만 읽으면 총자산이 전부 0으로
+        기록돼 월간 수익률·전일 대비가 영원히 '축적 중'이 된다"""
+        db_manager.save_portfolio_snapshot({
+            "total_value_krw": 100_000_000.0,
+            "assets": {
+                "KRW": 40_000_000.0,
+                "BTC": {"balance": 0.0, "value_krw": 60_000_000.0},
+            },
+        })
+        history = db_manager.get_portfolio_history(days=1)
+        assert len(history) == 1
+        assert float(history[0]["total_value_krw"]) == pytest.approx(100_000_000.0)
+
+    def test_save_portfolio_snapshot_legacy_total_krw_still_works(self, db_manager):
+        """기존 호출부 호환: total_krw 키도 계속 인식"""
+        db_manager.save_portfolio_snapshot({"total_krw": 5_000_000, "assets": {}})
+        history = db_manager.get_portfolio_history(days=1)
+        assert float(history[0]["total_value_krw"]) == pytest.approx(5_000_000.0)
+
 
 @pytest.mark.database
 class TestTwapExecutionPlan:

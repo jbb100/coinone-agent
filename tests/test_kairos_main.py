@@ -484,3 +484,59 @@ def test_monthly_report_exception_sends_error_alert():
     result = sys_.run_monthly_report()
     assert result["halted"]
     alerts.send_error_alert.assert_called_once()
+
+
+# ------------------------------------------------------------- 데일리 브리핑
+def test_daily_briefing_always_sends_even_without_trades():
+    """브리핑은 무거래 날에도 무조건 발송 — 매일 오는 생존 신호"""
+    sys_, _, alerts = make_system()  # 밴드 내, 거래 없음
+    sys_.portfolio.get_previous_total_krw.return_value = None
+    result = sys_.run_daily_briefing()
+    assert not result["halted"]
+    alerts.send_info_alert.assert_called_once()
+    title, body = alerts.send_info_alert.call_args.args
+    assert "브리핑" in title
+    assert "총자산" in body and "100,000,000" in body
+
+
+def test_daily_briefing_includes_tilted_target():
+    """바닥권(Mayer 0.8)이면 기본 60%가 아닌 틸트된 목표가 브리핑에 반영"""
+    from src.strategy.valuation import contrarian_crypto_target
+    sys_, _, alerts = make_system(mayer=0.8)
+    sys_.portfolio.get_previous_total_krw.return_value = None
+    sys_.run_daily_briefing()
+    _, body = alerts.send_info_alert.call_args.args
+    tilted = contrarian_crypto_target(0.8, 0.60)
+    assert f"목표 {tilted:.1%}" in body
+    assert "목표 60.0%" not in body
+
+
+def test_daily_briefing_survives_market_data_failure():
+    """브리핑의 핵심은 잔고+생존 신호 — 시장 데이터 실패로 죽으면 안 됨"""
+    sys_, _, alerts = make_system()
+    sys_.market.get_valuation.side_effect = DataUnavailableError("F&G down")
+    sys_.portfolio.get_previous_total_krw.return_value = None
+    result = sys_.run_daily_briefing()
+    assert not result["halted"]
+    alerts.send_info_alert.assert_called_once()
+    _, body = alerts.send_info_alert.call_args.args
+    assert "총자산" in body
+    assert "실패" in body  # 시장 데이터 실패도 숨기지 않고 표기
+
+
+def test_daily_briefing_balance_failure_sends_error_alert():
+    """잔고 조회 실패는 브리핑을 못 보내는 상황 — 에러 알림으로 대체
+    (어느 쪽이든 매일 무언가는 Slack에 도착해야 한다)"""
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_snapshot.side_effect = RuntimeError("API down")
+    result = sys_.run_daily_briefing()
+    assert result["halted"]
+    alerts.send_error_alert.assert_called_once()
+
+
+def test_daily_briefing_includes_daily_change_when_history_exists():
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_previous_total_krw.return_value = 98_000_000.0
+    sys_.run_daily_briefing()
+    _, body = alerts.send_info_alert.call_args.args
+    assert "+2.0%" in body
