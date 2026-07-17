@@ -143,6 +143,10 @@ crontab -e
 # 일일 밴드 체크 (매일 09:10) — 목표 ±5%p 이탈 시에만 리밸런싱
 10 9 * * * cd /path/to/kairos-1 && kairos_env/bin/python kairos1_main.py daily-check >> /var/log/kairos/daily-check.log 2>&1
 
+# 데일리 브리핑 (매일 09:20) — 잔고·비중·시장 상태를 매일 Slack 발송.
+# daily-check 이후에 돌려 당일 리밸런싱이 반영된 상태로 전달한다.
+20 9 * * * cd /path/to/kairos-1 && kairos_env/bin/python kairos1_main.py briefing >> /var/log/kairos/briefing.log 2>&1
+
 # 월간 리포트 (매월 1일 09:30)
 30 9 1 * * cd /path/to/kairos-1 && kairos_env/bin/python kairos1_main.py report >> /var/log/kairos/report.log 2>&1
 ```
@@ -158,11 +162,11 @@ crontab -e
 #     서버 로컬 시간 기준이다. 반드시 KST로 맞출 것:
 sudo timedatectl set-timezone Asia/Seoul
 
-# (2) 크론 생존 감시 (dead-man switch) — 무거래 날은 Slack이 조용하므로
-#     '조용한 시장'과 '죽은 크론'을 핑으로 구분한다 (healthchecks.io 무료):
-#     daily-check 크론 라인 끝에 붙이기:
-#     ... kairos1_main.py daily-check >> /var/log/kairos/daily-check.log 2>&1 && curl -fsS --retry 3 https://hc-ping.com/<uuid> > /dev/null
-#     (주간 DCA는 코드 내 하트비트 알림이 매주 월요일 무조건 발송됨)
+# (2) 크론 생존 감시 (dead-man switch) — 데일리 브리핑(09:20)이 매일
+#     무조건 Slack으로 발송되므로, 브리핑이 하루라도 끊기면 시스템 이상.
+#     Slack 자체 장애까지 커버하려면 healthchecks.io 핑을 병행 (선택):
+#     briefing 크론 라인 끝에 붙이기:
+#     ... kairos1_main.py briefing >> /var/log/kairos/briefing.log 2>&1 && curl -fsS --retry 3 https://hc-ping.com/<uuid> > /dev/null
 
 # (3) 로그 로테이션 — /etc/logrotate.d/kairos:
 cat <<'CONF' | sudo tee /etc/logrotate.d/kairos

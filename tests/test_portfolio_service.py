@@ -96,3 +96,35 @@ def test_value_change_30d_none_when_no_history():
     svc, db = make_service(balances={}, prices={})
     db.get_portfolio_history.return_value = []
     assert svc.get_value_change_30d(current_total_krw=100_000_000.0) is None
+
+
+def test_previous_total_uses_latest_snapshot_before_today():
+    """데일리 브리핑 전일 대비 — 오늘 이전의 가장 최근 스냅샷 기준"""
+    from datetime import datetime, timedelta
+    svc, db = make_service(balances={}, prices={})
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d 09:10:00")
+    day_before = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d 09:10:00")
+    today = datetime.now().strftime("%Y-%m-%d 09:10:00")
+    db.get_portfolio_history.return_value = [
+        {"snapshot_date": day_before, "total_value_krw": 90_000_000.0},
+        {"snapshot_date": yesterday, "total_value_krw": 95_000_000.0},
+        {"snapshot_date": today, "total_value_krw": 100_000_000.0},  # 오늘 것은 제외
+    ]
+    assert svc.get_previous_total_krw() == pytest.approx(95_000_000.0)
+
+
+def test_previous_total_skips_zero_rows():
+    """과거 버그로 total 0으로 저장된 행은 기준으로 쓰지 않는다"""
+    from datetime import datetime, timedelta
+    svc, db = make_service(balances={}, prices={})
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d 09:10:00")
+    db.get_portfolio_history.return_value = [
+        {"snapshot_date": yesterday, "total_value_krw": 0.0},
+    ]
+    assert svc.get_previous_total_krw() is None
+
+
+def test_previous_total_none_without_history():
+    svc, db = make_service(balances={}, prices={})
+    db.get_portfolio_history.return_value = []
+    assert svc.get_previous_total_krw() is None

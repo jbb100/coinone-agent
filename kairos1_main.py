@@ -18,7 +18,7 @@
 심리)는 목표 아래에서 신규 현금의 투입 속도만 조절한다.
 
 파이프라인: market_data → strategy(순수 함수) → risk_guard → executor → record/alert
-CLI: python kairos1_main.py {weekly-dca|daily-check|report|status} [--dry-run]
+CLI: python kairos1_main.py {weekly-dca|daily-check|briefing|report|status} [--dry-run]
 """
 import argparse
 import sys
@@ -301,6 +301,38 @@ class KairosSimple:
         return self._execute_all("밴드 리밸런싱", requests, snap, dry_run,
                                  price_changes=changes, notes=notes)
 
+    def run_daily_briefing(self) -> Dict:
+        return self._guarded("데일리 브리핑", self._daily_briefing)
+
+    def _daily_briefing(self) -> Dict:
+        """데일리 브리핑: 무거래 날에도 매일 발송되는 잔고 현황 + 생존 신호.
+
+        핵심은 잔고와 '살아있음' — 시장 데이터 실패로 브리핑 자체가 죽으면
+        안 되므로 시장 라인만 실패 표기로 강등한다. 잔고 조회 실패는
+        _guarded가 에러 알림으로 통지 (어느 쪽이든 매일 무언가는 도착)."""
+        from src.report.briefing import compose_briefing
+
+        snap = self.portfolio.get_snapshot()
+        try:
+            valuation = self.market.get_valuation()
+            target = self._tilted_target(valuation.mayer_ratio)
+            market_line = (f"Mayer {valuation.mayer_ratio:.2f} | "
+                           f"F&G {valuation.fear_greed}")
+        except (DataUnavailableError, InsufficientDataError) as e:
+            target = self.config.rebalance.crypto_target
+            market_line = f"조회 실패 ({e})"
+        title, body = compose_briefing(
+            snap,
+            target_ratio=target,
+            band_pp=self.config.rebalance.band_pp,
+            market_line=market_line,
+            prev_total_krw=self.portfolio.get_previous_total_krw(),
+            traded_today_krw=self._daily_traded_krw,
+        )
+        self.alerts.send_info_alert(title, body)
+        return {"executed": 0, "rejected": [], "halted": False,
+                "note": "브리핑 발송"}
+
     def run_monthly_report(self) -> Dict:
         return self._guarded("월간 리포트", self._monthly_report)
 
@@ -449,7 +481,8 @@ class KairosSimple:
 def main() -> int:
     parser = argparse.ArgumentParser(description="KAIROS-Simple 장기 역발상 매집")
     parser.add_argument(
-        "command", choices=["weekly-dca", "daily-check", "report", "status"]
+        "command",
+        choices=["weekly-dca", "daily-check", "briefing", "report", "status"],
     )
     parser.add_argument("--dry-run", action="store_true", help="주문 없이 시뮬레이션")
     parser.add_argument("--config", default="config/config.yaml")
@@ -460,6 +493,8 @@ def main() -> int:
         result = system.run_weekly_dca(dry_run=args.dry_run)
     elif args.command == "daily-check":
         result = system.run_daily_check(dry_run=args.dry_run)
+    elif args.command == "briefing":
+        result = system.run_daily_briefing()
     elif args.command == "report":
         result = system.run_monthly_report()
     else:

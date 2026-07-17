@@ -54,7 +54,8 @@ src/
 ├── risk/guard.py            # 단일 리스크 관문
 ├── execution/executor.py    # 지정가(슬리피지 0.5% 상한)·재시도·TWAP 분할
 ├── portfolio/portfolio.py   # 잔고 스냅샷·거래 기록
-└── report/reporter.py       # 성과 리포트 (벤치마크 = 실제 BTC 보유 수익률)
+├── report/reporter.py       # 성과 리포트 (벤치마크 = 실제 BTC 보유 수익률)
+└── report/briefing.py       # 데일리 브리핑 (매일 발송 — 잔고 + 생존 신호)
 ```
 
 ## 사용법
@@ -65,6 +66,7 @@ export COINONE_API_KEY=... COINONE_SECRET_KEY=...
 
 python kairos1_main.py weekly-dca --dry-run    # 주간 DCA (매주 월 09:00 권장)
 python kairos1_main.py daily-check --dry-run   # 일일 밴드 체크 (매일 09:00 권장)
+python kairos1_main.py briefing                # 데일리 브리핑 (매일 09:20 권장)
 python kairos1_main.py report                  # 월간 성과 리포트
 python kairos1_main.py status                  # 현재 포트폴리오 상태
 ```
@@ -72,10 +74,14 @@ python kairos1_main.py status                  # 현재 포트폴리오 상태
 `--dry-run`을 빼면 실제 주문이 나갑니다. 스케줄링은 cron 예시:
 
 ```cron
-0 9 * * 1  cd /path/to/repo && python kairos1_main.py weekly-dca
-0 9 * * *  cd /path/to/repo && python kairos1_main.py daily-check
-0 9 1 * *  cd /path/to/repo && python kairos1_main.py report
+0 9 * * 1   cd /path/to/repo && python kairos1_main.py weekly-dca
+0 9 * * *   cd /path/to/repo && python kairos1_main.py daily-check
+20 9 * * *  cd /path/to/repo && python kairos1_main.py briefing
+0 9 1 * *   cd /path/to/repo && python kairos1_main.py report
 ```
+
+브리핑은 무거래 날에도 매일 발송됩니다 — 잔고·비중·시장 상태를 전하는
+동시에, 알림이 하루라도 끊기면 시스템 이상을 바로 알 수 있는 생존 신호입니다.
 
 ## 백테스트
 
