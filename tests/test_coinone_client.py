@@ -1143,17 +1143,30 @@ class TestGetOrderStatus:
             "avg_price": "50000000"
         }
 
-        result = client.get_order_status("order_123")
+        result = client.get_order_status("order_123", "BTC")
 
         assert result["result"] == "success"
         assert result["status"] == "filled"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_get_order_status_sends_required_market_params(self, mock_request, client):
+        """v2.1 order/info는 quote/target_currency 필수 — 누락 시 조회가
+        실패해 체결 추적이 전면 불능이 되는 회귀 방지"""
+        mock_request.return_value = {"result": "success"}
+
+        client.get_order_status("order_123", "eth")
+
+        params = mock_request.call_args.args[2]
+        assert params["order_id"] == "order_123"
+        assert params["quote_currency"] == "KRW"
+        assert params["target_currency"] == "ETH"
 
     @patch.object(CoinoneClient, '_make_request')
     def test_get_order_status_404(self, mock_request, client):
         """주문을 찾을 수 없음 (404)"""
         mock_request.side_effect = Exception("404 Not Found")
 
-        result = client.get_order_status("nonexistent_order")
+        result = client.get_order_status("nonexistent_order", "BTC")
 
         assert result["result"] == "success"
         assert result["status"] == "not_found"
@@ -1164,7 +1177,7 @@ class TestGetOrderStatus:
         mock_request.side_effect = Exception("500 Server Error")
 
         with pytest.raises(Exception):
-            client.get_order_status("order_123")
+            client.get_order_status("order_123", "BTC")
 
 
 @pytest.mark.trading
@@ -1181,9 +1194,22 @@ class TestCancelOrder:
         """주문 취소 성공"""
         mock_request.return_value = {"result": "success"}
 
-        result = client.cancel_order("order_123")
+        result = client.cancel_order("order_123", "BTC")
 
         assert result["result"] == "success"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_cancel_order_sends_required_market_params(self, mock_request, client):
+        """v2.1 order/cancel는 quote/target_currency 필수 — 누락 시 취소가
+        실패해 낡은 지정가가 호가창에 방치되는 회귀 방지"""
+        mock_request.return_value = {"result": "success"}
+
+        client.cancel_order("order_123", "sol")
+
+        params = mock_request.call_args.args[2]
+        assert params["order_id"] == "order_123"
+        assert params["quote_currency"] == "KRW"
+        assert params["target_currency"] == "SOL"
 
     @patch.object(CoinoneClient, '_make_request')
     def test_cancel_order_failure(self, mock_request, client):
@@ -1194,7 +1220,7 @@ class TestCancelOrder:
             "error_msg": "Order cannot be cancelled"
         }
 
-        result = client.cancel_order("order_123")
+        result = client.cancel_order("order_123", "BTC")
 
         assert result["result"] == "error"
 
@@ -1203,7 +1229,7 @@ class TestCancelOrder:
         """주문을 찾을 수 없음 (404) - 이미 완료/취소"""
         mock_request.side_effect = Exception("404 Not Found")
 
-        result = client.cancel_order("completed_order")
+        result = client.cancel_order("completed_order", "BTC")
 
         assert result["result"] == "success"
         assert result["status"] == "not_found"
@@ -1214,7 +1240,7 @@ class TestCancelOrder:
         mock_request.side_effect = Exception("Network error")
 
         with pytest.raises(Exception):
-            client.cancel_order("order_123")
+            client.cancel_order("order_123", "BTC")
 
 
 @pytest.mark.trading
@@ -1597,3 +1623,87 @@ class TestPrivateAPIParamsNone:
         assert result["result"] == "success"
         # params가 None이면 {}로 대체되어 호출됨
         mock_post.assert_called_once()
+
+
+@pytest.mark.trading
+class TestOrderAmbiguityAndTimeout:
+    """운영 회귀 방지: 주문 POST의 네트워크 모호 실패(응답 유실)를 일반
+    실패와 동일 취급해 재시도하면 이중 주문이 발생한다. 또한 requests에
+    timeout이 없으면 크론 전체가 무한 대기한다."""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_place_order_network_failure_marked_ambiguous(self, mock_request, client):
+        """접수 여부를 알 수 없는 네트워크 실패 → ambiguous 표시"""
+        import requests as req
+        mock_request.side_effect = req.exceptions.ConnectionError("conn reset")
+
+        result = client.place_order("BTC", "buy", 0.01, price=100_000_000.0)
+
+        assert result["success"] is False
+        assert result.get("ambiguous") is True
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_place_order_client_error_not_ambiguous(self, mock_request, client):
+        """4xx는 서버가 주문을 거부한 것 — 미접수 확정이므로 재시도 안전"""
+        import requests as req
+        response = Mock()
+        response.status_code = 400
+        mock_request.side_effect = req.exceptions.HTTPError(response=response)
+
+        result = client.place_order("BTC", "buy", 0.01, price=100_000_000.0)
+
+        assert result["success"] is False
+        assert not result.get("ambiguous")
+
+    @patch('src.trading.coinone_client.requests.post')
+    def test_private_request_has_timeout(self, mock_post, client):
+        mock_post.return_value.json.return_value = {"result": "success"}
+        mock_post.return_value.raise_for_status = Mock()
+
+        client._make_request("POST", "/v2.1/account/balance/all", {}, is_public=False)
+
+        assert mock_post.call_args.kwargs.get("timeout", 0) > 0
+
+    @patch('src.trading.coinone_client.requests.get')
+    def test_public_request_has_timeout(self, mock_get, client):
+        mock_get.return_value.json.return_value = {"result": "success"}
+        mock_get.return_value.raise_for_status = Mock()
+
+        client._make_request("GET", "/public/v2/ticker_new/KRW/BTC", {}, is_public=True)
+
+        assert mock_get.call_args.kwargs.get("timeout", 0) > 0
+
+
+@pytest.mark.trading
+class TestOrderParamSerialization:
+    """지정가/수량 직렬화 — int() 절삭은 1,000 KRW 미만 자산(소수 호가 단위)
+    에서 슬리피지 캡을 위반하고, str(float)는 1e-4 미만 수량을 지수 표기로
+    보내 주문이 거부될 수 있다"""
+
+    @pytest.fixture
+    def client(self):
+        return CoinoneClient(api_key="test", secret_key="test")
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_limit_price_preserves_fractional_tick(self, mock_request, client):
+        mock_request.return_value = {"result": "success", "order_id": "x"}
+
+        client.place_order("XRP", "sell", 100.0, price=796.5)
+
+        params = mock_request.call_args.args[2]
+        assert params["price"] == "796.5"
+
+    @patch.object(CoinoneClient, '_make_request')
+    def test_limit_qty_fixed_point_not_scientific(self, mock_request, client):
+        mock_request.return_value = {"result": "success", "order_id": "x"}
+
+        client.place_order("BTC", "buy", 6.25e-05, price=160_000_000.0)
+
+        params = mock_request.call_args.args[2]
+        assert "e" not in params["qty"].lower()
+        assert params["qty"] == "0.0000625"
+        assert params["price"] == "160000000"

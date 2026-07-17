@@ -62,17 +62,26 @@ class PortfolioService:
     def get_value_change_30d(self, current_total_krw: float):
         """최근 30일 총자산 변화율 (입출금 포함 단순 변화).
 
-        스냅샷 이력이 없으면 None — 데이터 없이 수익률을 주장하지 않는다.
+        (변화율, 관측 창 일수) 튜플을 반환 — 5일치 데이터로 계산한 수익률을
+        30일 벤치마크와 비교하는 사과-오렌지 비교를 막으려면 호출부가
+        실제 창을 알아야 한다. 오늘 이전 스냅샷이 없으면 None — 당일
+        스냅샷을 기준선으로 잡으면 수익률이 항상 ≈0%가 된다.
         """
-        history = self.db.get_portfolio_history(30)
+        today = datetime.now().strftime("%Y-%m-%d")
         baseline = next(
-            (float(row["total_value_krw"]) for row in history
-             if float(row.get("total_value_krw", 0)) > 0),
+            ((float(row["total_value_krw"]), str(row["snapshot_date"])[:10])
+             for row in self.db.get_portfolio_history(30)
+             if float(row.get("total_value_krw") or 0) > 0
+             and str(row.get("snapshot_date", ""))[:10] < today),
             None,
         )
         if baseline is None:
             return None
-        return current_total_krw / baseline - 1.0
+        value, date_str = baseline
+        window_days = (
+            datetime.now() - datetime.strptime(date_str, "%Y-%m-%d")
+        ).days
+        return current_total_krw / value - 1.0, max(window_days, 1)
 
     def get_previous_total_krw(self):
         """오늘 이전 가장 최근 스냅샷의 총자산 — 데일리 브리핑 전일 대비용.

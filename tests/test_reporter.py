@@ -42,3 +42,18 @@ def test_monthly_report_includes_vs_benchmark_and_sends_alert():
     assert report["btc_benchmark_return"] == pytest.approx(0.10)
     assert report["excess_return"] == pytest.approx(0.05)
     assert alerts.send_info_alert.called
+
+
+def test_monthly_report_benchmark_matches_observation_window():
+    """포트폴리오 수익률이 5일치 관측이면 벤치마크도 5일로 — 서로 다른
+    창의 수익률을 빼서 초과수익이라 주장하면 안 됨"""
+    reporter, alerts = make_reporter(btc_closes=[100.0, 105.0, 110.0])
+    report = reporter.monthly_report(
+        portfolio_return=0.02, total_value_krw=100_000_000, crypto_ratio=0.60,
+        window_days=5,
+    )
+    reporter.binance.get_historical_klines.assert_called_once()
+    assert reporter.binance.get_historical_klines.call_args.kwargs["limit"] == 6
+    assert report["window_days"] == 5
+    _, body = alerts.send_info_alert.call_args.args
+    assert "5일" in body

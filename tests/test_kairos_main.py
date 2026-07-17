@@ -275,7 +275,7 @@ def test_daily_check_records_snapshot_even_without_trades():
 
 def test_monthly_report_uses_portfolio_return_when_history_exists():
     sys_, _, alerts = make_system()
-    sys_.portfolio.get_value_change_30d.return_value = 0.08
+    sys_.portfolio.get_value_change_30d.return_value = (0.08, 30)
     sys_.binance = MagicMock()
     import pandas as pd
     sys_.binance.get_historical_klines.return_value = pd.DataFrame(
@@ -486,6 +486,50 @@ def test_monthly_report_exception_sends_error_alert():
     alerts.send_error_alert.assert_called_once()
 
 
+def test_sell_proceeds_fund_subsequent_buys():
+    """매도 우선 실행의 목적은 매수 자금 확보 — 가드가 매도 대금을 못 보면
+    매도만 체결되고 매수가 거부되는 한쪽 다리 리밸런싱이 된다"""
+    from src.risk.guard import RiskGuard, RiskLimits
+    # 내부 이탈: BTC 22M(가중치 50% 대비 -27%) → BTC 8M 매수 + 나머지 매도
+    holdings = {"BTC": 22_000_000, "ETH": 22_000_000,
+                "XRP": 8_000_000, "SOL": 8_000_000}
+    sys_, executor, _ = make_system(holdings=holdings, krw=40_000_000)
+    executor.execute.side_effect = lambda req: MagicMock(
+        success=True, filled_krw=req.amount_krw
+    )
+    # KRW 하한 38%: 매도 대금(+8M) 없이는 BTC 8M 매수가 거부되는 수준
+    sys_.guard = RiskGuard(RiskLimits(
+        max_single_trade_krw=10_000_000, max_daily_volume_krw=50_000_000,
+        min_krw_ratio=0.38, fomo_surge_threshold=0.15,
+    ))
+    result = sys_.run_daily_check(dry_run=False)
+    sides = {c.args[0].asset: c.args[0].side
+             for c in executor.execute.call_args_list}
+    assert sides.get("BTC") == "buy"
+    assert not result["rejected"]
+
+
+def test_min_krw_floor_enforced_across_batch():
+    """여러 매수가 각자 배치 시작 시점 잔고로 검증되면 합산 후 KRW 하한이
+    뚫린다 — 체결마다 잔고를 갱신해 하한을 실제로 집행해야 함"""
+    from src.risk.guard import RiskGuard, RiskLimits
+    holdings = {"BTC": 20_000_000, "ETH": 12_000_000,
+                "XRP": 4_000_000, "SOL": 4_000_000}
+    sys_, executor, _ = make_system(holdings=holdings, krw=60_000_000)
+    executor.execute.side_effect = lambda req: MagicMock(
+        success=True, filled_krw=req.amount_krw
+    )
+    # 하한 45% → 매수 여력은 60M-45M=15M뿐인데 밴드 복귀 계획은 20M 매수
+    sys_.guard = RiskGuard(RiskLimits(
+        max_single_trade_krw=10_000_000, max_daily_volume_krw=50_000_000,
+        min_krw_ratio=0.45, fomo_surge_threshold=0.15,
+    ))
+    result = sys_.run_daily_check(dry_run=False)
+    bought = sum(c.args[0].amount_krw for c in executor.execute.call_args_list)
+    assert bought <= 15_000_000 + 1
+    assert result["rejected"]  # 하한에 걸린 잔여 매수는 거부로 기록
+
+
 # ------------------------------------------------------------- 데일리 브리핑
 def test_daily_briefing_always_sends_even_without_trades():
     """브리핑은 무거래 날에도 무조건 발송 — 매일 오는 생존 신호"""
@@ -540,3 +584,52 @@ def test_daily_briefing_includes_daily_change_when_history_exists():
     sys_.run_daily_briefing()
     _, body = alerts.send_info_alert.call_args.args
     assert "+2.0%" in body
+
+
+# --------------------------------------------------- 조립 단계 크래시 알림
+def test_main_assembly_failure_sends_alert_and_exits_nonzero(monkeypatch):
+    """fail-loud 계약: config·DB·클라이언트 조립 실패는 _guarded 밖이라
+    Slack 없이 조용히 죽었다 — main이 잡아서 통지하고 종료코드 1"""
+    import sys as _sys
+    import kairos1_main as km
+    monkeypatch.setattr(_sys, "argv", ["kairos1_main.py", "briefing"])
+    monkeypatch.setattr(
+        km.KairosSimple, "from_yaml",
+        MagicMock(side_effect=RuntimeError("db locked")),
+    )
+    sent = {}
+    monkeypatch.setattr(
+        km, "_crash_alert_best_effort",
+        lambda command, config_path, error: sent.update(
+            command=command, error=str(error)
+        ),
+    )
+    rc = km.main()
+    assert rc == 1
+    assert sent["command"] == "briefing"
+    assert "db locked" in sent["error"]
+
+
+def test_crash_alert_falls_back_to_webhook(monkeypatch):
+    """AlertSystem 조립조차 실패(예: config 파손)하면 SLACK_WEBHOOK_URL로
+    직접 POST — 어떤 실패 클래스에서도 Slack이 조용하면 안 됨"""
+    from unittest.mock import patch as _patch
+    import kairos1_main as km
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.example/x")
+    with _patch("src.monitoring.alert_system.AlertSystem",
+                side_effect=Exception("config broken")):
+        with _patch("requests.post") as mock_post:
+            km._crash_alert_best_effort(
+                "daily-check", "config/config.yaml", RuntimeError("yaml error")
+            )
+    assert mock_post.called
+    assert mock_post.call_args.args[0] == "https://hooks.slack.example/x"
+    assert "yaml error" in str(mock_post.call_args.kwargs.get("json"))
+
+
+def test_dry_run_does_not_record_snapshot():
+    """--dry-run 스모크 테스트가 스냅샷을 남기면 전일 대비·30일 수익률
+    기준선이 오염된다 — dry-run은 DB에 아무것도 쓰지 않는다"""
+    sys_, _, _ = make_system()
+    sys_.run_daily_check(dry_run=True)
+    sys_.portfolio.record_snapshot.assert_not_called()
