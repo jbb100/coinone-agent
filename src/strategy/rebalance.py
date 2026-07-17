@@ -45,8 +45,16 @@ def plan_rebalance(
     asset_breach = False
     if crypto_value > 0:
         for asset, target_w in config.crypto_weights.items():
-            actual_w = holdings_krw.get(asset, 0.0) / crypto_value
-            if target_w > 0 and abs(actual_w / target_w - 1.0) > config.relative_band:
+            actual = holdings_krw.get(asset, 0.0)
+            if target_w <= 0:
+                # 완전 편출(목표 0) 자산: 잔여 포지션 자체가 트리거 —
+                # 다른 이탈을 기다리며 무기한 방치되면 안 된다
+                if actual >= config.min_trade_krw:
+                    asset_breach = True
+                    break
+                continue
+            actual_w = actual / crypto_value
+            if abs(actual_w / target_w - 1.0) > config.relative_band:
                 asset_breach = True
                 break
 

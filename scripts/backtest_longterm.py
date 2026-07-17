@@ -126,13 +126,20 @@ def run_backtest(
         values.append(krw + btc_qty * price)
 
     series = pd.Series(values)
-    weekly_ret = series.pct_change().dropna()
+    # 시간가중 수익률: 주간 적립(외부 입금)은 수익이 아니다 —
+    # r_t = (V_t − 입금) / V_{t−1} − 1. 원시 가치 시계열로 계산하면
+    # 입금이 수익률로 잡혀 Sharpe가 부풀고 MDD가 완충된다.
+    weekly_ret = ((series - WEEKLY_BASE_DCA) / series.shift(1) - 1.0).dropna()
     sharpe = (
         float(weekly_ret.mean() / weekly_ret.std() * np.sqrt(52))
         if len(weekly_ret) > 1 and weekly_ret.std() > 0
         else 0.0
     )
-    drawdown = float((series / series.cummax() - 1).min())
+    twr_index = (1.0 + weekly_ret).cumprod()
+    drawdown = (
+        float((twr_index / twr_index.cummax() - 1).min())
+        if len(twr_index) > 0 else 0.0
+    )
     return BacktestResult(
         final_value=float(series.iloc[-1]), total_buy_krw=float(buys),
         total_sell_krw=float(sells), total_trades=int(trades),

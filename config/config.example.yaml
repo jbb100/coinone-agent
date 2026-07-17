@@ -7,8 +7,7 @@ api:
     api_key: "${COINONE_API_KEY}"
     secret_key: "${COINONE_SECRET_KEY}"
     sandbox: "${COINONE_SANDBOX:true}"
-    rate_limit: "${API_RATE_LIMIT_PER_MINUTE:100}"
-    timeout: "${API_REQUEST_TIMEOUT:30}"
+    timeout: "${API_REQUEST_TIMEOUT:30}"   # HTTP 요청 타임아웃(초)
 
 strategy:
   # 고정 목표 비중 — 시장 상황(강세/약세)에 따라 바꾸지 않는다.
@@ -20,11 +19,15 @@ strategy:
     # <1.0: +10%p(바닥권 매집) | 1-2: 기본 | 2-3: -10%p | >=3: -20%p(과열 익절)
     # 465주 32개 시작점 백테스트에서 고정 목표 대비 전 구간 동등 이상.
     contrarian_tilt: true
+    # 상대강도 편출: 26주 BTC 대비 열위 알트 가중치 연속 감축 (감축분은 BTC로)
+    relative_demotion: true
 
   rebalance:
     band_pp: 0.05         # 총 크립토 비중 ±5%p 이탈 시에만 거래 (수수료 대비 충분히 넓게)
     relative_band: 0.20   # 개별 코인 크립토 내 목표 대비 상대 ±20%
     min_trade_krw: 10000
+    crash_threshold_24h: -0.10   # 24h 이만큼 급락한 자산의 매수는 분할 진입
+    crash_buy_fraction: 0.5      # 급락 자산 매수 집행 비율 (잔여분은 다음날)
 
   dca:
     base_amount_krw: 1000000   # 주간 기본 매수액
@@ -36,17 +39,19 @@ risk:
   max_daily_volume_krw: 50000000   # 일일 거래량 상한 (5천만원)
   min_krw_ratio: 0.10              # 최소 KRW 비중 (전량 몰빵 방지)
   fomo_surge_threshold: 0.15       # 24h +15% 급등 자산은 DCA 외 매수 금지
-  data_max_age_hours: 24           # 데이터 신선도 한도
 
 execution:
   twap_slice_krw: 5000000   # 이 금액 초과 주문은 TWAP 분할
   slippage_cap: 0.005       # 지정가 슬리피지 상한 0.5%
   max_retries: 3
+  fill_timeout_sec: 45      # 체결 대기 타임아웃 — 초과 시 미체결 잔량 취소
+  poll_interval_sec: 3      # 체결 상태 폴링 간격
 
 scheduler:
-  weekly_dca:     { cron: "0 9 * * 1", timezone: "Asia/Seoul" }   # 매주 월 09:00
-  daily_check:    { cron: "0 9 * * *", timezone: "Asia/Seoul" }   # 매일 09:00
-  monthly_report: { cron: "0 9 1 * *", timezone: "Asia/Seoul" }   # 매월 1일 09:00
+  weekly_dca:      { cron: "0 9 * * 1", timezone: "Asia/Seoul" }   # 매주 월 09:00
+  daily_check:     { cron: "10 9 * * *", timezone: "Asia/Seoul" }  # 매일 09:10
+  daily_briefing:  { cron: "20 9 * * *", timezone: "Asia/Seoul" }  # 매일 09:20
+  monthly_report:  { cron: "0 9 1 * *", timezone: "Asia/Seoul" }   # 매월 1일 09:00
 
 notifications:
   email:

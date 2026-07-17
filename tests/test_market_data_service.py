@@ -82,18 +82,30 @@ def test_get_prices_krw_invalid_price_raises():
         svc.get_prices_krw(["BTC"])
 
 
-def test_price_change_24h_computed_from_daily_klines():
+def test_price_change_24h_uses_rolling_hourly_window():
+    """운영 회귀 방지: 일봉 iloc[-2] 기준은 'UTC 자정 이후 변동'이라
+    09:10 KST(=00:10 UTC) 크론 실행 시 항상 ≈0%가 되어 크래시 가드·FOMO
+    가드가 결코 발동하지 않았다 — 반드시 시간봉 24시간 창으로 계산"""
     svc, binance, _, _ = make_service()
+    # 26개 시간봉: 24시간 전(-25번째) 100 → 현재(-1번째) 116
+    closes = [90.0, 100.0] + [110.0] * 23 + [116.0]
     binance.get_historical_klines.return_value = pd.DataFrame(
-        {"Close": [100.0, 116.0]}
+        {"Close": pd.Series(closes)}
     )
     change = svc.get_price_change_24h(["BTC"])
     assert change["BTC"] == pytest.approx(0.16)
+    kwargs = binance.get_historical_klines.call_args.kwargs
+    assert kwargs["interval"] == "1h"
+    # 제공자는 기본 5년치를 긁는다 — 시작 시각을 좁혀야 함
+    assert kwargs.get("start_date") is not None
 
 
 def test_price_change_24h_missing_data_raises():
+    """시간봉이 24시간치 미만이면 fail-loud (가드가 0%로 착각하면 안 됨)"""
     svc, binance, _, _ = make_service()
-    binance.get_historical_klines.return_value = pd.DataFrame({"Close": [100.0]})
+    binance.get_historical_klines.return_value = pd.DataFrame(
+        {"Close": pd.Series([100.0] * 10)}
+    )
     with pytest.raises(DataUnavailableError):
         svc.get_price_change_24h(["BTC"])
 

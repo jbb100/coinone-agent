@@ -155,6 +155,7 @@ class KairosSimple:
             api_key=loader.get("api.coinone.api_key"),
             secret_key=loader.get("api.coinone.secret_key"),
             sandbox=sandbox_raw in ("true", "1", "yes"),
+            timeout=float(loader.get("api.coinone.timeout", 30)),
         ))
         binance = BinanceDataProvider()
         external = ExternalAPIClient()
@@ -171,6 +172,7 @@ class KairosSimple:
             max_retries=int(loader.get("execution.max_retries", 3)),
             fill_timeout=float(loader.get("execution.fill_timeout_sec", 45)),
             poll_interval=float(loader.get("execution.poll_interval_sec", 3)),
+            slippage_cap=float(loader.get("execution.slippage_cap", 0.005)),
         )
         system = cls.from_components(market, portfolio, executor, alerts, config)
         system.binance = binance  # report 커맨드용
@@ -271,11 +273,13 @@ class KairosSimple:
             reb_cfg, crypto_weights=self._effective_weights(notes)
         )
         snap = self.portfolio.get_snapshot()
-        try:
-            # 월간 수익률 데이터 축적 — 기록 실패가 거래를 막으면 안 됨
-            self.portfolio.record_snapshot(snap)
-        except Exception as e:
-            logger.error(f"스냅샷 기록 실패 (체크는 계속): {e}")
+        if not dry_run:
+            # dry-run이 스냅샷을 남기면 전일 대비·30일 수익률 기준선 오염
+            try:
+                # 월간 수익률 데이터 축적 — 기록 실패가 거래를 막으면 안 됨
+                self.portfolio.record_snapshot(snap)
+            except Exception as e:
+                logger.error(f"스냅샷 기록 실패 (체크는 계속): {e}")
         orders = plan_rebalance(reb_cfg, snap.holdings_krw, snap.krw_balance)
         if not orders:
             logger.info(f"밴드 내 (크립토 {snap.crypto_ratio:.1%}) — 거래 없음")
@@ -342,10 +346,12 @@ class KairosSimple:
         snap = self.portfolio.get_snapshot()
         reporter = Reporter(self.binance, self.alerts)
         # 일일 스냅샷 이력 기반 30일 총자산 변화율 (입출금 포함 단순 변화)
-        portfolio_return = self.portfolio.get_value_change_30d(snap.total_value_krw)
-        if portfolio_return is not None:
+        change = self.portfolio.get_value_change_30d(snap.total_value_krw)
+        if change is not None:
+            portfolio_return, window_days = change
             return reporter.monthly_report(
-                portfolio_return, snap.total_value_krw, snap.crypto_ratio
+                portfolio_return, snap.total_value_krw, snap.crypto_ratio,
+                window_days=window_days,
             )
         benchmark = reporter.btc_benchmark_return(days=30)
         report = {
@@ -377,11 +383,15 @@ class KairosSimple:
                      price_changes=None, notes=None) -> Dict:
         executed, rejected = 0, []
         executed_reqs = []
+        # KRW 러닝 잔고 — 배치 시작 스냅샷으로 모든 주문을 검증하면
+        # (a) 여러 매수가 합산 후 KRW 하한을 뚫고, (b) 매도 대금으로
+        # 승인돼야 할 매수가 거부된다(한쪽 다리 리밸런싱). 체결마다 갱신.
+        krw_running = snap.krw_balance
         # 매도 먼저 실행해 KRW 확보 후 매수 (하락장 리밸런싱 매수 자금)
         for req in sorted(requests, key=lambda r: r.side != "sell"):
             ctx = PortfolioContext(
                 total_value_krw=snap.total_value_krw,
-                krw_balance=snap.krw_balance,
+                krw_balance=krw_running,
                 daily_traded_krw=self._daily_traded_krw,
                 price_change_24h=price_changes or {},
             )
@@ -404,6 +414,7 @@ class KairosSimple:
                     OrderRequest(req.asset, req.side, filled, req.origin)
                 )
                 self._daily_traded_krw += filled
+                krw_running += filled if req.side == "sell" else -filled
                 # 주문은 이미 체결됨 — 기록 실패가 나머지 주문 실행을 막으면 안 됨
                 try:
                     self.portfolio.record_trade(
@@ -478,6 +489,40 @@ class KairosSimple:
         return {"executed": 0, "rejected": [], "halted": True, "error": str(error)}
 
 
+def _crash_alert_best_effort(command: str, config_path: str, error) -> None:
+    """조립 단계(설정 파싱·DB·클라이언트 생성) 실패도 Slack에 남긴다.
+
+    _guarded는 run_* 안쪽만 덮는다 — 여기서 죽으면 briefing 하트비트까지
+    조용히 끊겨 fail-loud 계약이 깨진다. AlertSystem 조립조차 실패하면
+    SLACK_WEBHOOK_URL 환경변수로 직접 POST한다."""
+    import os
+
+    msg = f"'{command}' 실행 불가 — 시스템 조립 단계 오류: {error}"
+    try:
+        from src.monitoring.alert_system import AlertSystem
+        from src.utils.config_loader import ConfigLoader
+
+        AlertSystem(ConfigLoader(config_path)).send_error_alert(
+            "시스템 시작 실패", msg
+        )
+        return
+    except Exception as e:
+        logger.warning(f"AlertSystem 경유 크래시 알림 실패, webhook 직접 시도: {e}")
+    try:
+        import requests
+
+        webhook = os.environ.get("SLACK_WEBHOOK_URL")
+        if webhook:
+            requests.post(
+                webhook, json={"text": f"🚨 KAIROS 시스템 시작 실패\n{msg}"},
+                timeout=10,
+            )
+        else:
+            logger.error("SLACK_WEBHOOK_URL 미설정 — 크래시 알림 발송 불가")
+    except Exception as e:
+        logger.error(f"크래시 알림 발송 실패: {e}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="KAIROS-Simple 장기 역발상 매집")
     parser.add_argument(
@@ -488,17 +533,23 @@ def main() -> int:
     parser.add_argument("--config", default="config/config.yaml")
     args = parser.parse_args()
 
-    system = KairosSimple.from_yaml(args.config)
-    if args.command == "weekly-dca":
-        result = system.run_weekly_dca(dry_run=args.dry_run)
-    elif args.command == "daily-check":
-        result = system.run_daily_check(dry_run=args.dry_run)
-    elif args.command == "briefing":
-        result = system.run_daily_briefing()
-    elif args.command == "report":
-        result = system.run_monthly_report()
-    else:
-        result = system.get_status()
+    try:
+        system = KairosSimple.from_yaml(args.config)
+        if args.command == "weekly-dca":
+            result = system.run_weekly_dca(dry_run=args.dry_run)
+        elif args.command == "daily-check":
+            result = system.run_daily_check(dry_run=args.dry_run)
+        elif args.command == "briefing":
+            result = system.run_daily_briefing()
+        elif args.command == "report":
+            result = system.run_monthly_report()
+        else:
+            result = system.get_status()
+    except Exception as e:
+        # run_*는 자체 가드가 있다 — 여기 오는 건 조립·status 단계 예외
+        logger.exception(f"시스템 조립/실행 실패: {e}")
+        _crash_alert_best_effort(args.command, args.config, e)
+        return 1
     print(result)
     return 1 if result.get("halted") else 0
 

@@ -81,14 +81,32 @@ def test_record_snapshot_saves_totals_and_assets():
     assert data["assets"]["KRW"] == pytest.approx(40_000_000.0)
 
 
-def test_value_change_30d_from_earliest_snapshot():
+def test_value_change_30d_returns_change_and_window_days():
+    """수익률은 실제 관측 창(일수)과 함께 반환 — 5일치 데이터로 계산한
+    수익률을 30일 BTC 벤치마크와 비교하는 사과-오렌지 비교 방지"""
+    from datetime import datetime, timedelta
     svc, db = make_service(balances={}, prices={})
+    d28 = (datetime.now() - timedelta(days=28)).strftime("%Y-%m-%d 09:10:00")
+    d1 = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d 09:10:00")
     db.get_portfolio_history.return_value = [
-        {"snapshot_date": "2026-06-14 09:10:00", "total_value_krw": 80_000_000.0},
-        {"snapshot_date": "2026-07-13 09:10:00", "total_value_krw": 95_000_000.0},
+        {"snapshot_date": d28, "total_value_krw": 80_000_000.0},
+        {"snapshot_date": d1, "total_value_krw": 95_000_000.0},
     ]
-    change = svc.get_value_change_30d(current_total_krw=100_000_000.0)
+    change, days = svc.get_value_change_30d(current_total_krw=100_000_000.0)
     assert change == pytest.approx(0.25)  # 80M → 100M
+    assert days == 28
+
+
+def test_value_change_30d_excludes_same_day_baseline():
+    """당일 09:10 스냅샷을 기준선으로 잡으면 수익률이 항상 ≈0%로 나온다 —
+    오늘 이전 스냅샷이 없으면 None (데이터 축적 중)"""
+    from datetime import datetime
+    svc, db = make_service(balances={}, prices={})
+    today = datetime.now().strftime("%Y-%m-%d 09:10:00")
+    db.get_portfolio_history.return_value = [
+        {"snapshot_date": today, "total_value_krw": 100_000_000.0},
+    ]
+    assert svc.get_value_change_30d(current_total_krw=100_500_000.0) is None
 
 
 def test_value_change_30d_none_when_no_history():

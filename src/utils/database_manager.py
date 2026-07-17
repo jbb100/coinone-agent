@@ -116,11 +116,21 @@ class DatabaseManager:
                         market_season TEXT,
                         target_allocation TEXT,
                         twap_orders_detail TEXT,
+                        result_data TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         completed_at TEXT
                     )
                 """)
+
+                # 구버전 DB 마이그레이션: result_data 컬럼이 없으면 상태
+                # 업데이트(UPDATE ... SET result_data)가 조용히 실패한다
+                cursor.execute("PRAGMA table_info(twap_executions)")
+                twap_cols = {row[1] for row in cursor.fetchall()}
+                if "result_data" not in twap_cols:
+                    cursor.execute(
+                        "ALTER TABLE twap_executions ADD COLUMN result_data TEXT"
+                    )
 
                 # 시장 분석 테이블
                 cursor.execute("""
@@ -149,6 +159,20 @@ class DatabaseManager:
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+
+                # 구버전 DB 마이그레이션: 과거 배포본의 wide 스키마
+                # (자산별 컬럼, portfolio_detail 없음)에도 현재 INSERT가
+                # 동작하도록 누락 컬럼 추가
+                cursor.execute("PRAGMA table_info(portfolio_snapshots)")
+                snapshot_cols = {row[1] for row in cursor.fetchall()}
+                for col, col_type in {
+                    "total_value_krw": "REAL DEFAULT 0",
+                    "portfolio_detail": "TEXT",
+                }.items():
+                    if col not in snapshot_cols:
+                        cursor.execute(
+                            f"ALTER TABLE portfolio_snapshots ADD COLUMN {col} {col_type}"
+                        )
 
                 # 거래 기록 테이블
                 cursor.execute("""
@@ -463,30 +487,15 @@ class DatabaseManager:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                
-                assets = portfolio_data.get("assets", {})
-                
-                # 각 자산의 정보 추출
-                def get_asset_info(asset_name):
-                    asset_data = assets.get(asset_name, {})
-                    if isinstance(asset_data, dict):
-                        return asset_data.get("balance", 0), asset_data.get("value_krw", 0)
-                    else:
-                        return asset_data, 0
-                
-                btc_balance, btc_value = get_asset_info("BTC")
-                eth_balance, eth_value = get_asset_info("ETH")
-                xrp_balance, xrp_value = get_asset_info("XRP")
-                sol_balance, sol_value = get_asset_info("SOL")
-                krw_balance = assets.get("KRW", 0)
-                
+
+                # INSERT는 반드시 _initialize_database의 DDL 컬럼과 일치해야
+                # 한다 — 과거 자산별 컬럼(krw_balance, btc_balance…)에 쓰던
+                # INSERT가 좁은 스키마와 어긋나 운영에서 스냅샷 저장이 전부
+                # 조용히 실패했다. 자산 상세는 portfolio_detail JSON에 보존.
                 cursor.execute("""
                     INSERT INTO portfolio_snapshots (
-                        snapshot_date, total_value_krw, krw_balance,
-                        btc_balance, btc_value_krw, eth_balance, eth_value_krw,
-                        xrp_balance, xrp_value_krw, sol_balance, sol_value_krw,
-                        portfolio_data
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        snapshot_date, total_value_krw, portfolio_detail
+                    ) VALUES (?, ?, ?)
                 """, (
                     datetime.now(),
                     # record_snapshot은 total_value_krw로, 구 호출부는 total_krw로
@@ -495,19 +504,14 @@ class DatabaseManager:
                     portfolio_data.get(
                         "total_value_krw", portfolio_data.get("total_krw", 0)
                     ),
-                    krw_balance,
-                    btc_balance, btc_value,
-                    eth_balance, eth_value,
-                    xrp_balance, xrp_value,
-                    sol_balance, sol_value,
                     json.dumps(serialize_for_json(portfolio_data))
                 ))
-                
+
                 record_id = cursor.lastrowid
                 conn.commit()
-                
+
                 return record_id
-                
+
         except Exception as e:
             logger.error(f"포트폴리오 스냅샷 저장 실패: {e}")
             raise
@@ -854,23 +858,26 @@ class DatabaseManager:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                # 주문 상세는 twap_orders_detail 컬럼에 저장된다 —
+                # 존재하지 않는 execution_plan 컬럼을 SELECT하면 예외가
+                # 삼켜져 항상 빈 리스트가 반환됐다
                 cursor.execute("""
-                    SELECT id, start_time, execution_plan, status, created_at
-                    FROM twap_executions 
+                    SELECT id, start_time, twap_orders_detail, status, created_at
+                    FROM twap_executions
                     WHERE status = 'active'
                     ORDER BY created_at DESC
                 """)
-                
+
                 results = []
                 for row in cursor.fetchall():
                     results.append({
                         "id": row[0],
                         "start_time": row[1],
-                        "execution_plan": json.loads(row[2]),
+                        "execution_plan": json.loads(row[2]) if row[2] else None,
                         "status": row[3],
                         "created_at": row[4]
                     })
-                
+
                 return results
             
         except Exception as e:
@@ -937,19 +944,21 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # 먼저 rebalance_results 테이블에서 조회
+                # save_rebalance_result가 쓰는 테이블은 rebalance_history다 —
+                # 아무도 쓰지 않는 rebalance_results를 읽으면 영원히 비어 있다
                 cursor.execute("""
-                    SELECT timestamp, success, orders_executed, total_value_before, total_value_after
-                    FROM rebalance_results 
+                    SELECT rebalance_date, success, orders_executed,
+                           total_value_before, total_value_after
+                    FROM rebalance_history
                     WHERE success = 1
-                    ORDER BY timestamp DESC 
+                    ORDER BY rebalance_date DESC
                     LIMIT 1
                 """)
-                
+
                 row = cursor.fetchone()
                 if row:
                     return {
-                        "timestamp": row["timestamp"],
+                        "timestamp": row["rebalance_date"],
                         "success": bool(row["success"]),
                         "orders_executed": row["orders_executed"],
                         "total_value_before": row["total_value_before"],

@@ -566,40 +566,20 @@ class TestDatabaseManagerQuery:
 
 @pytest.mark.database
 class TestSavePortfolioSnapshot:
-    """포트폴리오 스냅샷 저장 테스트"""
+    """포트폴리오 스냅샷 저장 테스트
+
+    반드시 프로덕션 DDL(_initialize_database) 그대로 테스트한다 —
+    과거에 픽스처가 테이블을 drop하고 다른 스키마로 재생성해서,
+    INSERT가 실제 스키마에 없는 컬럼에 쓰는 치명 버그(운영에서 스냅샷
+    저장이 전부 실패)를 테스트가 가려버린 적이 있다."""
 
     @pytest.fixture
     def db_manager(self, tmp_path):
-        """DatabaseManager 인스턴스"""
+        """DatabaseManager 인스턴스 — 프로덕션 DDL 그대로"""
         db_path = str(tmp_path / "test.db")
         config = Mock()
         config.get = Mock(return_value=db_path)
-        db = DatabaseManager(config)
-        # portfolio_snapshots 테이블 구조 수정
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DROP TABLE IF EXISTS portfolio_snapshots")
-            cursor.execute("""
-                CREATE TABLE portfolio_snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    snapshot_date TEXT NOT NULL,
-                    total_value_krw REAL NOT NULL,
-                    krw_balance REAL,
-                    btc_balance REAL,
-                    btc_value_krw REAL,
-                    eth_balance REAL,
-                    eth_value_krw REAL,
-                    xrp_balance REAL,
-                    xrp_value_krw REAL,
-                    sol_balance REAL,
-                    sol_value_krw REAL,
-                    portfolio_data TEXT,
-                    portfolio_detail TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.commit()
-        return db
+        return DatabaseManager(config)
 
     def test_save_portfolio_snapshot_with_assets(self, db_manager):
         """자산 정보가 있는 스냅샷 저장"""
@@ -661,6 +641,46 @@ class TestSavePortfolioSnapshot:
         db_manager.save_portfolio_snapshot({"total_krw": 5_000_000, "assets": {}})
         history = db_manager.get_portfolio_history(days=1)
         assert float(history[0]["total_value_krw"]) == pytest.approx(5_000_000.0)
+
+    def test_save_portfolio_snapshot_stores_full_detail_json(self, db_manager):
+        """자산 상세는 portfolio_detail JSON에 보존 — 자산별 컬럼 없이도
+        (예: 자산 목록 변경) 전체 내역을 복원할 수 있어야 함"""
+        db_manager.save_portfolio_snapshot({
+            "total_value_krw": 100.0,
+            "assets": {"KRW": 40.0, "BTC": {"balance": 0.001, "value_krw": 60.0}},
+        })
+        history = db_manager.get_portfolio_history(days=1)
+        detail = json.loads(history[0]["portfolio_detail"])
+        assert detail["assets"]["BTC"]["value_krw"] == pytest.approx(60.0)
+
+    def test_save_portfolio_snapshot_migrates_legacy_wide_table(self, tmp_path):
+        """구버전 배포본이 만든 wide 스키마(portfolio_detail 없음) DB에서도
+        마이그레이션 후 저장·조회가 동작해야 함"""
+        import sqlite3
+        db_path = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE portfolio_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date TEXT NOT NULL,
+                total_value_krw REAL NOT NULL,
+                krw_balance REAL,
+                btc_balance REAL, btc_value_krw REAL,
+                eth_balance REAL, eth_value_krw REAL,
+                xrp_balance REAL, xrp_value_krw REAL,
+                sol_balance REAL, sol_value_krw REAL,
+                portfolio_data TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        conn.close()
+        config = Mock()
+        config.get = Mock(return_value=db_path)
+        db = DatabaseManager(config)
+        db.save_portfolio_snapshot({"total_value_krw": 77.0, "assets": {}})
+        history = db.get_portfolio_history(days=1)
+        assert float(history[0]["total_value_krw"]) == pytest.approx(77.0)
 
 
 @pytest.mark.database
@@ -1880,3 +1900,67 @@ class TestTradedKrwToday:
 
     def test_zero_when_no_trades(self, db_manager):
         assert db_manager.get_traded_krw_today() == 0.0
+
+
+@pytest.mark.database
+class TestLatentQueryColumnMismatches:
+    """작성 테이블과 조회 테이블/컬럼 불일치 — 항상 빈 결과가 나오던 잠재 경로"""
+
+    @pytest.fixture
+    def db_manager(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+        config = Mock()
+        config.get = Mock(return_value=db_path)
+        return DatabaseManager(config)
+
+    def test_latest_rebalance_record_reads_saved_history(self, db_manager):
+        """save_rebalance_result는 rebalance_history에 쓰는데 조회는
+        rebalance_results를 봐서 영원히 비어 있었다"""
+        db_manager.save_rebalance_result({
+            "success": True,
+            "total_value_before": 100.0,
+            "total_value_after": 101.0,
+            "executed_orders": [1, 2],
+            "failed_orders": [],
+            "rebalance_summary": {"market_season": "neutral"},
+        })
+        record = db_manager.get_latest_rebalance_record()
+        assert record is not None
+        assert record["success"] is True
+        assert record["orders_executed"] == 2
+
+    def test_update_twap_status_with_result_data_persists(self, db_manager):
+        """result_data 컬럼 부재로 상태 업데이트가 조용히 실패하던 경로"""
+        with db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO twap_executions (execution_id, status, start_time)"
+                " VALUES ('e1', 'executing', '2026-01-01T00:00:00')"
+            )
+            conn.commit()
+            row_id = cursor.lastrowid
+        db_manager.update_twap_execution_status(
+            row_id, "completed", result_data={"filled": 1}
+        )
+        with db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT status FROM twap_executions WHERE id = ?", (row_id,)
+            )
+            assert cursor.fetchone()[0] == "completed"
+
+    def test_get_active_twap_executions_reads_existing_column(self, db_manager):
+        """존재하지 않는 execution_plan 컬럼 SELECT → 예외 삼킴 → 항상 []"""
+        import json as _json
+        with db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO twap_executions "
+                "(execution_id, status, start_time, twap_orders_detail)"
+                " VALUES ('e2', 'active', '2026-01-01T00:00:00', ?)",
+                (_json.dumps([{"asset": "BTC"}]),),
+            )
+            conn.commit()
+        results = db_manager.get_active_twap_executions()
+        assert len(results) == 1
+        assert results[0]["execution_plan"] == [{"asset": "BTC"}]

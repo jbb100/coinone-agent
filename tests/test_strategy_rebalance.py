@@ -117,3 +117,33 @@ class TestCrashGuard:
             threshold=-0.10, buy_fraction=0.5, min_trade_krw=10_000,
         )
         assert out == []  # 7,500 < 최소 주문 → 제외
+
+
+def test_fully_demoted_asset_triggers_own_sell():
+    """가중치 0으로 완전 편출된 자산은 스스로 리밸런싱을 트리거해야 함 —
+    'target_w > 0' 가드 때문에 다른 이탈이 생길 때까지 잔여 포지션이
+    무기한 방치되던 버그 회귀 방지"""
+    config = RebalanceConfig(
+        crypto_target=0.60, band_pp=0.05,
+        crypto_weights={"BTC": 0.6, "ETH": 0.3, "XRP": 0.1, "SOL": 0.0},
+        relative_band=0.20, min_trade_krw=10_000,
+    )
+    # 크립토 60M (총 100M의 60%, 밴드 내), SOL만 목표 0인데 6M 보유
+    holdings = {"BTC": 30_000_000, "ETH": 18_000_000,
+                "XRP": 6_000_000, "SOL": 6_000_000}
+    orders = plan_rebalance(config, holdings, krw_balance=40_000_000)
+    by_asset = {o.asset: o for o in orders}
+    assert by_asset["SOL"].side == "sell"
+    assert by_asset["SOL"].amount_krw == pytest.approx(6_000_000)
+
+
+def test_fully_demoted_dust_below_min_trade_ignored():
+    """편출 자산 잔여물이 최소 거래액 미만이면 트리거하지 않음 (먼지 방치 OK)"""
+    config = RebalanceConfig(
+        crypto_target=0.60, band_pp=0.05,
+        crypto_weights={"BTC": 0.6, "ETH": 0.3, "XRP": 0.1, "SOL": 0.0},
+        relative_band=0.20, min_trade_krw=10_000,
+    )
+    holdings = {"BTC": 30_000_000, "ETH": 18_000_000,
+                "XRP": 6_000_000, "SOL": 5_000}
+    assert plan_rebalance(config, holdings, krw_balance=35_995_000) == []

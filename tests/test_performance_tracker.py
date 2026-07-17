@@ -348,11 +348,12 @@ class TestCalculateTradeStatistics:
         assert stats["avg_trade_size"] == 0.0
 
     def test_all_successful_trades(self, tracker):
-        """모든 거래 성공"""
+        """trade_history 실제 컬럼(fee_krw/amount_krw) 기반 집계 —
+        기록되는 거래는 체결분뿐이므로 전 행이 성공 거래"""
         trades = [
-            {"status": "filled", "fee": 100, "amount": 10000},
-            {"status": "filled", "fee": 150, "amount": 15000},
-            {"status": "filled", "fee": 200, "amount": 20000}
+            {"side": "buy", "fee_krw": 100, "amount_krw": 10000},
+            {"side": "buy", "fee_krw": 150, "amount_krw": 15000},
+            {"side": "sell", "fee_krw": 200, "amount_krw": 20000}
         ]
 
         stats = tracker._calculate_trade_statistics(trades)
@@ -362,20 +363,6 @@ class TestCalculateTradeStatistics:
         assert stats["success_rate"] == 1.0
         assert stats["total_fees"] == 450
         assert stats["avg_trade_size"] == pytest.approx(15000, rel=0.01)
-
-    def test_mixed_trade_status(self, tracker):
-        """혼합 거래 상태"""
-        trades = [
-            {"status": "filled", "fee": 100, "amount": 10000},
-            {"status": "cancelled", "fee": 0, "amount": 5000},
-            {"status": "filled", "fee": 200, "amount": 20000}
-        ]
-
-        stats = tracker._calculate_trade_statistics(trades)
-
-        assert stats["total_trades"] == 3
-        assert stats["successful_trades"] == 2
-        assert stats["success_rate"] == pytest.approx(0.667, rel=0.01)
 
 
 @pytest.mark.monitoring
@@ -404,10 +391,11 @@ class TestGetCurrentAllocation:
         assert allocation is None
 
     def test_krw_only(self, tracker):
-        """KRW만 보유"""
+        """KRW만 보유 — 자산 상세는 portfolio_detail JSON에서 복원"""
+        import json as _json
         snapshot = {
             "total_value_krw": 1000000,
-            "krw_balance": 1000000
+            "portfolio_detail": _json.dumps({"assets": {"KRW": 1000000}}),
         }
         allocation = tracker._get_current_allocation(snapshot)
 
@@ -852,3 +840,48 @@ class TestBenchmarkReturnRealData:
             tracker._calculate_benchmark_return(
                 datetime(2026, 6, 1), datetime(2026, 7, 1)
             )
+
+
+@pytest.mark.monitoring
+class TestTradeStatisticsColumns:
+    """trade_history 실제 컬럼(side/fee_krw/amount_krw) 사용 — 존재하지 않는
+    status/fee/amount 키를 읽어 수수료·평균 거래액이 항상 0이던 버그"""
+
+    @pytest.fixture
+    def tracker(self):
+        config = Mock()
+        config.get_risk_config.return_value = {"three_line_check": {}}
+        return PerformanceTracker(config, Mock())
+
+    def test_statistics_from_actual_columns(self, tracker):
+        rows = [
+            {"side": "buy", "amount_krw": 100_000.0, "fee_krw": 200.0},
+            {"side": "sell", "amount_krw": 300_000.0, "fee_krw": None},
+        ]
+        stats = tracker._calculate_trade_statistics(rows)
+        assert stats["total_trades"] == 2
+        assert stats["total_fees"] == pytest.approx(200.0)
+        assert stats["avg_trade_size"] == pytest.approx(200_000.0)
+
+    def test_returns_skip_corrupt_zero_values(self, tracker):
+        """과거 버그로 0이 저장된 스냅샷이 섞여도 inf가 나오면 안 됨"""
+        import numpy as np
+        returns = tracker._calculate_returns([100.0, 0.0, 110.0])
+        assert np.isfinite(returns).all()
+
+    def test_allocation_parsed_from_portfolio_detail_json(self, tracker):
+        """스냅샷 자산 배분은 portfolio_detail JSON에서 복원 — 자산별
+        컬럼은 현 스키마에 존재하지 않는다"""
+        import json as _json
+        snapshot = {
+            "total_value_krw": 100_000.0,
+            "portfolio_detail": _json.dumps({
+                "assets": {
+                    "KRW": 40_000.0,
+                    "BTC": {"balance": 0.001, "value_krw": 60_000.0},
+                }
+            }),
+        }
+        allocation = tracker._get_current_allocation(snapshot)
+        assert allocation["KRW"] == pytest.approx(0.4)
+        assert allocation["BTC"] == pytest.approx(0.6)

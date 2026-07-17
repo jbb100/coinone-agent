@@ -22,6 +22,16 @@ from ..utils.constants import (
 )
 
 
+def _format_decimal(value: float) -> str:
+    """지수 표기 없는 고정 소수점 문자열 (코인원 API 파라미터용).
+
+    int() 절삭은 1,000 KRW 미만 자산의 소수 호가 단위(0.5 등)를 파괴해
+    슬리피지 캡을 위반하고, str(float)는 1e-4 미만 수량을 '6.25e-05'로
+    보내 파서에 따라 주문이 거부될 수 있다."""
+    text = f"{float(value):.8f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 class CoinoneClient:
     """
     코인원 거래소 API 클라이언트
@@ -31,15 +41,19 @@ class CoinoneClient:
     - Private API: POST 방식, v2.1
     """
     
-    def __init__(self, api_key: str, secret_key: str, sandbox: bool = False):
+    def __init__(self, api_key: str, secret_key: str, sandbox: bool = False,
+                 timeout: float = API_REQUEST_TIMEOUT):
         """
         Args:
             api_key: 코인원 API 키
             secret_key: 코인원 시크릿 키
             sandbox: 테스트 환경 사용 여부 (현재 지원하지 않음)
+            timeout: HTTP 요청 타임아웃(초) — 없으면 응답 유실 시 크론이
+                무한 대기한다
         """
         self.api_key = api_key
         self.secret_key = secret_key
+        self.timeout = float(timeout)
         
         # 코인원 실제 API 엔드포인트 사용
         self.base_url = "https://api.coinone.co.kr"
@@ -115,7 +129,8 @@ class CoinoneClient:
             # Public API는 인증 헤더 없이 GET 요청
             headers = {"Content-Type": "application/json"}
             try:
-                response = requests.get(url, headers=headers, params=params)
+                response = requests.get(url, headers=headers, params=params,
+                                        timeout=self.timeout)
                 response.raise_for_status()
                 return response.json()
             except requests.exceptions.RequestException as e:
@@ -128,7 +143,8 @@ class CoinoneClient:
             
             headers, body = self._create_signature(params)
             try:
-                response = requests.post(url, headers=headers, json=body)
+                response = requests.post(url, headers=headers, json=body,
+                                         timeout=self.timeout)
                 response.raise_for_status()
                 return response.json()
             except requests.exceptions.RequestException as e:
@@ -404,8 +420,8 @@ class CoinoneClient:
                     "quote_currency": "KRW",
                     "target_currency": currency.upper(),
                     "type": "LIMIT",
-                    "price": str(int(price)),
-                    "qty": str(amount),
+                    "price": _format_decimal(price),
+                    "qty": _format_decimal(amount),
                     "post_only": False
                 }
                 logger.info(f"지정가 주문: {side} {amount} {currency} @ {price}")
@@ -507,8 +523,23 @@ class CoinoneClient:
                         "qty": str(quantity)
                     }
             
-            response = self._make_request("POST", endpoint, params, is_public=False)
-            
+            try:
+                response = self._make_request("POST", endpoint, params, is_public=False)
+            except requests.exceptions.HTTPError as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status is not None and status < 500:
+                    # 4xx: 서버가 주문을 거부 — 미접수 확정, 재시도 안전
+                    logger.error(f"주문 거부 (HTTP {status}): {e}")
+                    return {"success": False, "error": str(e)}
+                logger.error(f"주문 접수 여부 불확실 (HTTP {status}): {e}")
+                return {"success": False, "ambiguous": True, "error": str(e)}
+            except requests.exceptions.RequestException as e:
+                # 타임아웃·연결 유실: POST가 거래소에 도달했는지 알 수 없다.
+                # 일반 실패로 취급해 재시도하면 이중 주문 위험 — ambiguous로
+                # 표시해 호출부가 재시도를 중단하게 한다.
+                logger.error(f"주문 접수 여부 불확실 (네트워크): {e}")
+                return {"success": False, "ambiguous": True, "error": str(e)}
+
             if response.get("result") == "success":
                 order_id = response.get("order_id", "unknown")
                 logger.info(f"✅ 주문 성공: {side} {amount} {currency} (주문ID: {order_id})")
@@ -518,7 +549,7 @@ class CoinoneClient:
                 error_msg = response.get("error_msg", "unknown error")
                 logger.error(f"❌ 주문 실패: {response}")
                 return {"success": False, "error_code": error_code, "error_msg": error_msg, "response": response}
-                
+
         except Exception as e:
             logger.error(f"주문 실행 실패: {e}")
             return {"success": False, "error": str(e)}
@@ -704,20 +735,26 @@ class CoinoneClient:
             logger.error(f"주문 크기 조정 실패: {e}")
             return amount
 
-    def get_order_status(self, order_id: str) -> Dict:
+    def get_order_status(self, order_id: str, currency: str) -> Dict:
         """
         주문 상태 조회 (Private API v2.1)
-        
+
         Args:
             order_id: 주문 ID
-            
+            currency: 대상 통화 (예: "BTC") — v2.1 order/info는
+                quote_currency/target_currency가 필수라 누락 시 조회 실패
+
         Returns:
             주문 상태 정보
         """
         try:
             # Private API v2.1: 특정 주문 정보 조회
-            params = {"order_id": order_id}
-            
+            params = {
+                "order_id": order_id,
+                "quote_currency": "KRW",
+                "target_currency": currency.upper(),
+            }
+
             response = self._make_request("POST", "/v2.1/order/info", params, is_public=False)
             logger.debug(f"주문 상태 조회: {order_id}")
             return response
@@ -735,20 +772,26 @@ class CoinoneClient:
                 logger.error(f"주문 상태 조회 실패: {e}")
                 raise
     
-    def cancel_order(self, order_id: str) -> Dict:
+    def cancel_order(self, order_id: str, currency: str) -> Dict:
         """
         주문 취소 (Private API v2.1)
-        
+
         Args:
             order_id: 주문 ID
-            
+            currency: 대상 통화 (예: "BTC") — v2.1 order/cancel은
+                quote_currency/target_currency가 필수라 누락 시 취소 실패
+
         Returns:
             주문 취소 결과
         """
         try:
             # Private API v2.1: 개별 주문 취소
-            params = {"order_id": order_id}
-            
+            params = {
+                "order_id": order_id,
+                "quote_currency": "KRW",
+                "target_currency": currency.upper(),
+            }
+
             response = self._make_request("POST", "/v2.1/order/cancel", params, is_public=False)
             
             if response.get("result") == "success":

@@ -217,225 +217,72 @@ class TestRateLimitedClientErrorHandling:
             assert "API Error" in str(excinfo.value)
 
 
-class TestWrapApiMethod:
-    """_wrap_api_method 메서드 테스트"""
+class TestRateLimitingActuallyApplied:
+    """운영 회귀 방지: 명시적 패스스루 메서드가 __getattr__ 래핑을 가려
+    거래 경로 전체가 무제한이던 버그 — 모든 API 메서드는 리미터를 거쳐야 함"""
 
     @pytest.fixture
-    def mock_original_client(self):
-        """원본 클라이언트 Mock"""
-        client = Mock()
-        client.get_balances.return_value = {'KRW': 1000000}
-        return client
+    def mock_coord(self):
+        coordinator = Mock()
+        coordinator.api_rate_limiter = AsyncMock()
+        coordinator.api_rate_limiter.acquire = AsyncMock()
+        return coordinator
 
-    def test_wrap_api_method_sync_mode(self, mock_original_client):
-        """동기 모드에서 API 메서드 래핑"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
+    def make_client(self, original, coord):
+        with patch('src.trading.rate_limited_client.get_system_coordinator',
+                   return_value=coord):
+            return RateLimitedCoinoneClient(original)
 
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
+    def test_trading_path_methods_go_through_limiter(self, mock_coord):
+        """place_order·get_order_status 등 파이프라인이 쓰는 모든 호출이
+        rate limiter acquire를 거쳐야 함"""
+        original = Mock()
+        original.place_order.return_value = {'success': True}
+        original.get_order_status.return_value = {}
+        original.cancel_order.return_value = {}
+        original.get_latest_price.return_value = 1.0
+        original.get_balances.return_value = {}
+        client = self.make_client(original, mock_coord)
 
-            # 이미 실행 중인 이벤트 루프 시뮬레이션
-            with patch('asyncio.get_running_loop') as mock_get_loop:
-                mock_loop = Mock()
-                mock_loop.is_running.return_value = True
-                mock_get_loop.return_value = mock_loop
+        client.place_order(currency='BTC', side='buy', amount=0.01)
+        client.get_order_status('123', 'BTC')
+        client.cancel_order('123', 'BTC')
+        client.get_latest_price('BTC')
+        client.get_balances()
 
-                # __getattr__을 통해 래핑된 메서드 호출
-                result = client.get_balances()
+        assert mock_coord.api_rate_limiter.acquire.call_count == 5
 
-                # 결과 확인
-                assert result == {'KRW': 1000000}
+    def test_method_called_exactly_once_when_limiter_fails(self, mock_coord):
+        """리미터 획득 실패는 호출을 막지 않되, 메서드는 정확히 1회만 —
+        폴백 재호출로 주문이 이중 제출되던 결함 회귀 방지"""
+        mock_coord.api_rate_limiter.acquire = AsyncMock(
+            side_effect=Exception("limiter down")
+        )
+        original = Mock()
+        original.place_order.return_value = {'success': True}
+        client = self.make_client(original, mock_coord)
 
-    def test_wrap_api_method_exception_handling(self, mock_original_client):
-        """래핑된 메서드 예외 처리 후 폴백"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = Mock()
-        # 에러 발생하도록 설정
-        mock_coord.api_rate_limiter.acquire = Mock(side_effect=Exception("Test error"))
+        result = client.place_order(currency='BTC', side='buy', amount=0.01)
 
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
+        assert result == {'success': True}
+        assert original.place_order.call_count == 1
 
-            # __getattr__을 통해 래핑된 메서드 호출 - 에러 시 원본 메서드로 폴백
-            result = client.get_balances()
+    def test_method_exception_propagates_without_second_call(self, mock_coord):
+        """원본 메서드 실패 시 예외 전파 — 부작용 있는 호출의 이중 실행 금지"""
+        original = Mock()
+        original.place_order.side_effect = Exception("API Error")
+        client = self.make_client(original, mock_coord)
 
-            # 원본 메서드가 호출되어 결과 반환
-            assert result == {'KRW': 1000000}
+        with pytest.raises(Exception, match="API Error"):
+            client.place_order(currency='BTC', side='buy', amount=0.01)
 
+        assert original.place_order.call_count == 1
 
-class TestAsyncApiCall:
-    """_async_api_call 메서드 테스트"""
+    def test_non_api_attributes_not_wrapped(self, mock_coord):
+        """네트워크 호출이 아닌 헬퍼(get_price_unit 등)는 리미터 미적용"""
+        original = Mock()
+        original.get_price_unit.return_value = 1000.0
+        client = self.make_client(original, mock_coord)
 
-    @pytest.fixture
-    def mock_original_client(self):
-        """원본 클라이언트 Mock"""
-        client = Mock()
-        client.get_balances.return_value = {'KRW': 2000000}
-        return client
-
-    @pytest.mark.asyncio
-    async def test_async_api_call(self, mock_original_client):
-        """비동기 API 호출"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
-        mock_coord.api_rate_limiter.acquire = AsyncMock()
-
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
-
-            result = await client._async_api_call(
-                mock_original_client.get_balances,
-                "get_balances"
-            )
-
-            # 속도 제한 acquire 호출 확인
-            mock_coord.api_rate_limiter.acquire.assert_called_once()
-            assert result == {'KRW': 2000000}
-
-    @pytest.mark.asyncio
-    async def test_async_api_call_with_args(self, mock_original_client):
-        """인자 포함 비동기 API 호출"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
-
-        mock_original_client.get_latest_price.return_value = 50000000.0
-
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
-
-            result = await client._async_api_call(
-                mock_original_client.get_latest_price,
-                "get_latest_price",
-                "BTC"
-            )
-
-            mock_original_client.get_latest_price.assert_called_once_with("BTC")
-            assert result == 50000000.0
-
-    @pytest.mark.asyncio
-    async def test_async_api_call_with_kwargs(self, mock_original_client):
-        """키워드 인자 포함 비동기 API 호출"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
-
-        mock_original_client.place_order.return_value = {'order_id': '456'}
-
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
-
-            result = await client._async_api_call(
-                mock_original_client.place_order,
-                "place_order",
-                currency="BTC",
-                side="buy"
-            )
-
-            mock_original_client.place_order.assert_called_once_with(currency="BTC", side="buy")
-            assert result['order_id'] == '456'
-
-
-class TestWrapApiMethodAdvanced:
-    """_wrap_api_method 추가 테스트 (누락 라인 커버)"""
-
-    @pytest.fixture
-    def mock_original_client(self):
-        """원본 클라이언트 Mock"""
-        client = Mock()
-        client.get_balances.return_value = {'KRW': 3000000}
-        client.get_ticker.return_value = {'price': 50000000}
-        return client
-
-    def test_wrap_api_method_new_event_loop(self, mock_original_client):
-        """이벤트 루프가 없을 때 새 루프 생성"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
-        mock_coord.api_rate_limiter.acquire = AsyncMock()
-
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
-
-            # 이벤트 루프가 없는 상황 시뮬레이션
-            with patch('asyncio.get_running_loop', side_effect=RuntimeError("No running event loop")):
-                # 새 루프 생성 mock
-                mock_loop = MagicMock()
-                mock_loop.is_running.return_value = False
-                mock_loop.run_until_complete = MagicMock(return_value={'KRW': 3000000})
-
-                with patch('asyncio.new_event_loop', return_value=mock_loop) as mock_new_loop:
-                    with patch('asyncio.set_event_loop') as mock_set_loop:
-                        # __getattr__를 통해 API 메서드 호출
-                        wrapped = client._wrap_api_method(mock_original_client.get_ticker, "get_ticker")
-                        result = wrapped()
-
-                        # 새 루프 생성 확인
-                        mock_new_loop.assert_called_once()
-                        mock_set_loop.assert_called_once_with(mock_loop)
-                        assert result == {'KRW': 3000000}
-
-    def test_wrap_api_method_running_loop_direct_call(self, mock_original_client):
-        """실행 중인 루프에서 직접 호출 (동기 모드)"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
-
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
-
-            # 실행 중인 루프 시뮬레이션
-            mock_loop = MagicMock()
-            mock_loop.is_running.return_value = True
-
-            with patch('asyncio.get_running_loop', return_value=mock_loop):
-                wrapped = client._wrap_api_method(mock_original_client.get_balances, "get_balances")
-                result = wrapped()
-
-                # 원본 메서드 직접 호출 확인
-                mock_original_client.get_balances.assert_called()
-                assert result == {'KRW': 3000000}
-
-    def test_wrap_api_method_exception_fallback(self, mock_original_client):
-        """예외 발생 시 원본 메서드로 폴백"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
-
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
-
-            # 예외 발생 시뮬레이션
-            with patch('asyncio.get_running_loop', side_effect=RuntimeError("No running loop")):
-                with patch('asyncio.new_event_loop', side_effect=Exception("Loop creation failed")):
-                    wrapped = client._wrap_api_method(mock_original_client.get_balances, "get_balances")
-                    result = wrapped()
-
-                    # 예외 발생해도 원본 메서드 호출
-                    assert result == {'KRW': 3000000}
-
-    def test_wrap_api_method_run_until_complete(self, mock_original_client):
-        """run_until_complete로 비동기 API 호출"""
-        mock_coord = Mock()
-        mock_coord.api_rate_limiter = AsyncMock()
-        mock_coord.api_rate_limiter.acquire = AsyncMock()
-
-        with patch('src.trading.rate_limited_client.get_system_coordinator', return_value=mock_coord):
-            client = RateLimitedCoinoneClient(mock_original_client)
-
-            # 이벤트 루프가 없고 새 루프 생성
-            with patch('asyncio.get_running_loop', side_effect=RuntimeError("No loop")):
-                # 실제로 새 루프를 생성하고 run_until_complete 호출
-                mock_loop = MagicMock()
-                mock_loop.is_running.return_value = False
-
-                # run_until_complete가 비동기 함수를 실행하고 결과 반환
-                async def mock_async_call(*args, **kwargs):
-                    return {'KRW': 3000000}
-
-                mock_loop.run_until_complete.side_effect = lambda coro: asyncio.get_event_loop().run_until_complete(
-                    mock_async_call()
-                ) if asyncio.iscoroutine(coro) else {'KRW': 3000000}
-
-                with patch('asyncio.new_event_loop', return_value=mock_loop):
-                    with patch('asyncio.set_event_loop'):
-                        wrapped = client._wrap_api_method(mock_original_client.get_balances, "get_balances")
-                        result = wrapped()
-
-                        assert mock_loop.run_until_complete.called or result == {'KRW': 3000000}
+        assert client.get_price_unit('BTC', 100.0) == 1000.0
+        mock_coord.api_rate_limiter.acquire.assert_not_called()

@@ -132,7 +132,11 @@ class PerformanceTracker:
         Returns:
             일간 수익률 배열
         """
-        values = np.array(portfolio_values)
+        # 과거 저장 버그로 0이 섞인 스냅샷 방어 — 0 분모는 inf를 만들어
+        # Sharpe·변동성·MDD 전부를 오염시킨다
+        values = np.array([v for v in portfolio_values if v and v > 0])
+        if len(values) < 2:
+            return np.array([])
         returns = (values[1:] - values[:-1]) / values[:-1]
         return returns
     
@@ -429,12 +433,16 @@ class PerformanceTracker:
                 "avg_trade_size": 0.0
             }
         
+        # trade_history 실제 컬럼: side/amount_krw/fee_krw (status·fee·amount
+        # 아님 — 잘못된 키를 읽으면 수수료·평균 거래액이 항상 0이 된다).
+        # 기록되는 거래는 체결분뿐이므로 전 행이 성공 거래다.
         total_trades = len(trade_history)
-        successful_trades = len([t for t in trade_history if t.get("status") == "filled"])
-        success_rate = successful_trades / total_trades if total_trades > 0 else 0.0
-        
-        total_fees = sum(t.get("fee", 0) for t in trade_history)
-        trade_sizes = [t.get("amount", 0) for t in trade_history if t.get("amount")]
+        successful_trades = total_trades
+        success_rate = 1.0 if total_trades > 0 else 0.0
+
+        total_fees = sum(t.get("fee_krw") or 0 for t in trade_history)
+        trade_sizes = [t.get("amount_krw", 0) for t in trade_history
+                       if t.get("amount_krw")]
         avg_trade_size = np.mean(trade_sizes) if trade_sizes else 0.0
         
         return {
@@ -458,19 +466,25 @@ class PerformanceTracker:
         total_value = portfolio_snapshot.get("total_value_krw", 0)
         if total_value <= 0:
             return None
-        
+
+        # 자산 상세는 portfolio_detail JSON에 저장된다 — 자산별 컬럼
+        # (krw_balance, btc_value_krw…)은 현 스키마에 존재하지 않는다
+        import json as _json
+
+        try:
+            detail = portfolio_snapshot.get("portfolio_detail")
+            assets = (_json.loads(detail) if isinstance(detail, str)
+                      else detail or {}).get("assets", {})
+        except (ValueError, TypeError):
+            assets = {}
+
         allocation = {}
-        
-        # 각 자산의 비중 계산
-        for asset in ["KRW", "BTC", "ETH", "XRP", "SOL"]:
-            if asset == "KRW":
-                value = portfolio_snapshot.get("krw_balance", 0)
-            else:
-                value = portfolio_snapshot.get(f"{asset.lower()}_value_krw", 0)
-            
-            allocation[asset] = value / total_value if total_value > 0 else 0.0
-        
-        return allocation
+        for asset, data in assets.items():
+            value = (data.get("value_krw", 0)
+                     if isinstance(data, dict) else float(data or 0))
+            allocation[asset] = value / total_value
+
+        return allocation or None
     
     def _assess_risk_level(self, metrics: PerformanceMetrics) -> str:
         """

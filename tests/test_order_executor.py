@@ -200,6 +200,16 @@ class TestFillConfirmation:
         assert not report.success
         assert report.filled_krw == pytest.approx(500_000, rel=0.01)
 
+    def test_fill_polling_and_cancel_pass_asset(self):
+        """order/info·order/cancel은 마켓(quote/target_currency) 지정이 필수 —
+        자산 미전달 시 잘못된 마켓을 조회해 체결 추적·취소가 불능이 된다"""
+        live = {"order": {"status": "live", "remain_qty": "1"}}
+        ex, coinone = self.make([live, live])
+        ex.execute(OrderRequest("ETH", "buy", 1_000_000, "dca"))
+        for call in coinone.get_order_status.call_args_list:
+            assert call.args[1] == "ETH"
+        assert coinone.cancel_order.call_args.args[1] == "ETH"
+
     def test_not_found_before_cancel_treated_as_filled(self):
         # 체결 완료된 주문은 조회에서 사라질 수 있음 (클라이언트가 not_found 반환)
         ex, coinone = self.make([{"result": "success", "status": "not_found"}])
@@ -207,3 +217,26 @@ class TestFillConfirmation:
         assert report.success
         assert report.filled_krw == pytest.approx(1_000_000)
         coinone.cancel_order.assert_not_called()
+
+
+def test_ambiguous_network_failure_not_retried():
+    """주문 도달 여부를 모르는 네트워크 실패는 재시도 금지 — 응답만 유실된
+    경우 재제출하면 이중 주문(2배 매수)이 된다. fail-safe로 즉시 중단."""
+    ex, coinone = make_executor(max_retries=3)
+    coinone.place_order.return_value = {
+        "success": False, "ambiguous": True, "error": "conn reset"
+    }
+    report = ex.execute(OrderRequest("BTC", "buy", 1_000_000, "dca"))
+    assert not report.success
+    assert coinone.place_order.call_count == 1
+    assert "불확실" in report.error
+
+
+def test_custom_slippage_cap_respected():
+    """config execution.slippage_cap이 실제 지정가에 반영돼야 함 —
+    하드코딩 상수만 쓰면 설정이 죽은 문서가 된다"""
+    ex, coinone = make_executor(price=100_000_000.0, slippage_cap=0.002)
+    ex.execute(OrderRequest("BTC", "buy", 1_000_000, "dca"))
+    assert coinone.place_order.call_args.kwargs["price"] == pytest.approx(
+        100_000_000.0 * 1.002
+    )

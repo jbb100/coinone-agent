@@ -22,19 +22,25 @@ class Reporter:
         return last / first - 1.0
 
     def monthly_report(
-        self, portfolio_return: float, total_value_krw: float, crypto_ratio: float
+        self, portfolio_return: float, total_value_krw: float,
+        crypto_ratio: float, window_days: int = 30,
     ) -> Dict:
-        benchmark = self.btc_benchmark_return(days=30)
+        """window_days: 포트폴리오 수익률의 실제 관측 창 — 벤치마크도 같은
+        창으로 계산해야 초과수익 비교가 성립한다 (배포 초기 5일치 수익률을
+        30일 BTC와 비교하는 오류 방지)."""
+        benchmark = self.btc_benchmark_return(days=window_days)
         report = {
             "portfolio_return": portfolio_return,
             "btc_benchmark_return": benchmark,
             "excess_return": portfolio_return - benchmark,
             "total_value_krw": total_value_krw,
             "crypto_ratio": crypto_ratio,
+            "window_days": window_days,
         }
         self.alerts.send_info_alert(
             "월간 성과 리포트",
-            f"수익률 {portfolio_return:+.1%} / BTC {benchmark:+.1%} "
+            f"수익률({window_days}일) {portfolio_return:+.1%} / "
+            f"BTC {benchmark:+.1%} "
             f"(초과 {report['excess_return']:+.1%}) | "
             f"총자산 {total_value_krw:,.0f} KRW | 크립토 {crypto_ratio:.0%}",
         )

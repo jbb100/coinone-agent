@@ -68,9 +68,12 @@ class AlertSystem:
         
         results = {}
         
-        # 채널 목록 결정
+        # 채널 목록 결정 — alert_type은 "system_info"·"daily_summary" 등
+        # 세부 유형이 오므로, 레벨 설정(error/warning/info) 조회는 error·
+        # warning 외 전부 info로 정규화한다 (config의 info: 채널이 죽는 것 방지)
         if channels is None:
-            channels = self.alert_levels.get(alert_type, ["slack"])
+            level_key = alert_type if alert_type in ("error", "warning") else "info"
+            channels = self.alert_levels.get(level_key, ["slack"])
         
         # 각 채널로 알림 발송
         for channel in channels:
@@ -323,14 +326,16 @@ class AlertSystem:
             mentions_config = self.slack_config.get("mentions", {})
             logger.info(f"[멘션] 설정 확인 - alert_type: {alert_type}")
             
-            # 특정 알림 유형별 멘션 확인
+            # 특정 알림 유형별 멘션 확인 — 반드시 복사본 사용:
+            # 설정 리스트를 그대로 참조하면 아래 append가 원본을 오염시켜
+            # 두 번째 에러 알림부터 '@here @here …'로 누적된다
             by_alert_type = mentions_config.get("by_alert_type", {})
-            mention_users = by_alert_type.get(alert_type, [])
+            mention_users = list(by_alert_type.get(alert_type, []))
             logger.info(f"[멘션] 알림 유형별 사용자: {mention_users}")
-            
+
             # 기본 멘션 사용자가 설정된 경우 (특정 유형별 설정이 없을 때만)
             if not mention_users:
-                mention_users = mentions_config.get("default_users", [])
+                mention_users = list(mentions_config.get("default_users", []))
                 logger.info(f"[멘션] 기본 사용자 사용: {mention_users}")
             
             # 전체 채널 멘션이 필요한 유형인지 확인
@@ -340,7 +345,7 @@ class AlertSystem:
             if alert_type == "error" or alert_type == "system_error":
                 # error 알림에 대한 특별 처리: 기본 사용자 + @here 추가
                 if not mention_users:  # 설정된 사용자가 없다면 기본값 사용
-                    mention_users = mentions_config.get("default_users", [])
+                    mention_users = list(mentions_config.get("default_users", []))
                 mention_users.append("@here")  # 민감한 알림이므로 @here 추가
                 logger.info(f"[멘션] 에러 알림 - @here 자동 추가: {mention_users}")
             elif alert_type in channel_mention_types:

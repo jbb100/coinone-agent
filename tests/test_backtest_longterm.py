@@ -128,3 +128,13 @@ def test_sweep_starts_returns_result_per_start():
         assert isinstance(result, BacktestResult)
         assert start_date == df.index[start]
         assert len(result.weekly_values) == len(df) - start
+
+
+def test_flat_market_sharpe_not_inflated_by_deposits():
+    """입금은 수익이 아니다 — 횡보장에서 주간 적립(250k)이 수익률로 잡히면
+    Sharpe가 크게 양수로 부풀려진다. 비용만 있는 횡보장의 시간가중 Sharpe는
+    0 이하여야 함"""
+    import pandas as pd
+    weekly = pd.DataFrame({"Close": [100.0] * 260})
+    r = run_backtest(weekly)
+    assert r.sharpe <= 0.0

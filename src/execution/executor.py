@@ -31,13 +31,15 @@ class ExecutionReport:
 class OrderExecutor:
     def __init__(self, coinone_client, twap_slice_krw: float,
                  max_retries: int = 3, retry_wait: float = 2.0,
-                 fill_timeout: float = 45.0, poll_interval: float = 3.0):
+                 fill_timeout: float = 45.0, poll_interval: float = 3.0,
+                 slippage_cap: float = SLIPPAGE_CAP):
         self.coinone = coinone_client
         self.twap_slice_krw = twap_slice_krw
         self.max_retries = max_retries
         self.retry_wait = retry_wait
         self.fill_timeout = fill_timeout
         self.poll_interval = poll_interval
+        self.slippage_cap = slippage_cap
 
     def execute(self, order: OrderRequest) -> ExecutionReport:
         report = ExecutionReport(request=order, success=True)
@@ -49,7 +51,7 @@ class OrderExecutor:
                 logger.error(f"{order.asset} {order.side} 슬라이스 실패: {err}")
                 break  # 부분 체결 상태로 중단 — filled_krw로 잔량 파악
             report.order_ids.append(order_id)
-            fraction = self._await_fill(order_id, ordered_qty)
+            fraction = self._await_fill(order_id, ordered_qty, order.asset)
             report.filled_krw += slice_krw * fraction
             if fraction < 1.0 - 1e-9:
                 # 미체결 잔량은 이미 취소됨 — 가격이 지정가 밖으로 움직인
@@ -63,14 +65,18 @@ class OrderExecutor:
         return report
 
     # ------------------------------------------------------------ 체결 확인
-    def _await_fill(self, order_id: str, ordered_qty: float) -> float:
-        """fill_timeout 내 체결을 폴링, 타임아웃 시 잔량 취소 → 체결 비율."""
+    def _await_fill(self, order_id: str, ordered_qty: float, asset: str) -> float:
+        """fill_timeout 내 체결을 폴링, 타임아웃 시 잔량 취소 → 체결 비율.
+
+        order/info·order/cancel은 마켓(quote/target_currency) 지정이 필수라
+        자산을 함께 전달한다 — 누락 시 조회·취소가 실패해 체결분이 0으로
+        집계되고 미체결 주문이 호가창에 방치된다."""
         deadline = time.monotonic() + self.fill_timeout
         fraction = 0.0
         while True:
             try:
                 fraction = self._fill_fraction(
-                    self.coinone.get_order_status(order_id), ordered_qty,
+                    self.coinone.get_order_status(order_id, asset), ordered_qty,
                     assume_filled_on_not_found=True,
                 )
             except Exception as e:
@@ -81,14 +87,14 @@ class OrderExecutor:
                 break
             time.sleep(self.poll_interval)
         try:
-            self.coinone.cancel_order(order_id)
+            self.coinone.cancel_order(order_id, asset)
         except Exception as e:
             logger.error(f"미체결 취소 실패: {order_id} — {e}")
         try:
             # 취소 직전 체결됐을 수 있으므로 최종 상태 재확인.
             # 취소 후 not_found는 체결로 단정할 수 없어 마지막 관측값 유지.
             return self._fill_fraction(
-                self.coinone.get_order_status(order_id), ordered_qty,
+                self.coinone.get_order_status(order_id, asset), ordered_qty,
                 assume_filled_on_not_found=False, default=fraction,
             )
         except Exception:
@@ -129,7 +135,8 @@ class OrderExecutor:
                 if not price or price <= 0:
                     raise ValueError(f"{order.asset} 현재가 조회 실패: {price}")
                 limit = price * (
-                    1 + SLIPPAGE_CAP if order.side == "buy" else 1 - SLIPPAGE_CAP
+                    1 + self.slippage_cap if order.side == "buy"
+                    else 1 - self.slippage_cap
                 )
                 # 코인원 호가 단위 정렬 (오류 310 방지):
                 # 매수는 내림(캡 준수), 매도는 올림(하한 준수)
@@ -148,6 +155,12 @@ class OrderExecutor:
                 )
                 if isinstance(result, dict) and result.get("success"):
                     return True, str(result.get("order_id", "")), qty, ""
+                if isinstance(result, dict) and result.get("ambiguous"):
+                    # 주문이 거래소에 도달했는지 알 수 없는 실패 — 재제출하면
+                    # 이중 주문이 될 수 있다. fail-safe로 즉시 중단.
+                    last_err = (f"주문 접수 불확실 (네트워크 오류) — 이중 주문 "
+                                f"방지 위해 재시도 중단: {result.get('error')}")
+                    return False, "", 0.0, last_err
                 last_err = f"API 오류 응답: {result}"
             except Exception as e:
                 last_err = str(e)

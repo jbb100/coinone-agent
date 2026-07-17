@@ -68,13 +68,26 @@ class MarketDataService:
         return prices
 
     def get_price_change_24h(self, assets: List[str]) -> Dict[str, float]:
+        """현재가 대비 24시간 전 가격 변동률 — 크래시 가드·FOMO 가드 입력.
+
+        일봉 iloc[-2] 방식은 'UTC 자정 이후 변동'이라 09:10 KST(=00:10 UTC)
+        크론에서는 항상 ≈0%가 되어 두 가드가 결코 발동하지 않았다.
+        시간봉으로 진짜 롤링 24시간 창을 계산한다."""
+        from datetime import datetime, timedelta
+
         changes = {}
         for asset in assets:
-            daily = self.binance.get_historical_klines(
-                symbol=f"{asset}USDT", interval="1d", limit=2
+            hourly = self.binance.get_historical_klines(
+                symbol=f"{asset}USDT", interval="1h",
+                start_date=datetime.now() - timedelta(hours=26),
             )
-            if daily is None or len(daily) < 2:
-                raise DataUnavailableError(f"{asset} 일봉 조회 실패")
-            prev, last = float(daily["Close"].iloc[-2]), float(daily["Close"].iloc[-1])
-            changes[asset] = last / prev - 1.0
+            if (hourly is None or len(hourly) < 25
+                    or "Close" not in getattr(hourly, "columns", [])):
+                raise DataUnavailableError(f"{asset} 시간봉 24시간치 조회 실패")
+            # 마지막 행은 진행 중 캔들(현재가), -25번째 종가가 약 24시간 전
+            ref = float(hourly["Close"].iloc[-25])
+            last = float(hourly["Close"].iloc[-1])
+            if ref <= 0:
+                raise DataUnavailableError(f"{asset} 시간봉 가격 이상: {ref}")
+            changes[asset] = last / ref - 1.0
         return changes

@@ -694,3 +694,67 @@ class TestAlertSystemUncoveredLines:
 
         # 실패 결과
         assert isinstance(results, dict)
+
+
+class TestInfoAlertChannelRouting:
+    """운영 회귀 방지: send_info_alert의 alert_type 기본값 'system_info'가
+    alert_levels 조회 키로 그대로 쓰여 config의 info: 채널 설정이 죽어
+    있었다 — error/warning 외 모든 유형은 info 레벨 설정을 따라야 함"""
+
+    def _make(self, alert_levels):
+        config = Mock()
+        config.get_notification_config.return_value = {
+            'email': {'enabled': False},
+            'slack': {'enabled': True, 'webhook_url': 'https://hooks.test/x'},
+            'alert_levels': alert_levels,
+        }
+        coordinator = Mock()
+        coordinator.should_send_alert.return_value = True
+        with patch('src.monitoring.alert_system.get_system_coordinator',
+                   return_value=coordinator):
+            return AlertSystem(config)
+
+    def test_info_class_alert_uses_info_level_channels(self):
+        alerts = self._make({
+            'error': ['slack'], 'warning': ['slack'], 'info': ['email'],
+        })
+        results = alerts.send_info_alert("데일리 브리핑", "본문")
+        # info: ['email'] 설정을 따라야 함 — 'system_info' 키 미스로
+        # ['slack'] 폴백이 되면 안 됨
+        assert 'email' in results
+        assert 'slack' not in results
+
+    def test_error_alert_still_uses_error_channels(self):
+        alerts = self._make({
+            'error': ['slack'], 'warning': ['slack'], 'info': ['email'],
+        })
+        with patch.object(AlertSystem, '_send_slack', return_value=True):
+            results = alerts.send_error_alert("오류", "본문")
+        assert 'slack' in results
+
+
+class TestMentionListNotMutated:
+    """멘션 리스트 in-place 오염 방지 — 에러 알림마다 @here가 설정 리스트에
+    누적되면 같은 프로세스의 두 번째 알림부터 '@here @here …'가 된다"""
+
+    def test_repeated_error_alerts_do_not_accumulate_here(self):
+        config = Mock()
+        default_users = ['U000000']
+        config.get_notification_config.return_value = {
+            'email': {'enabled': False},
+            'slack': {
+                'enabled': True, 'webhook_url': 'https://hooks.test/x',
+                'mentions': {'default_users': default_users},
+            },
+            'alert_levels': {'error': ['slack'], 'warning': ['slack'],
+                             'info': ['slack']},
+        }
+        coordinator = Mock()
+        coordinator.should_send_alert.return_value = True
+        with patch('src.monitoring.alert_system.get_system_coordinator',
+                   return_value=coordinator):
+            alerts = AlertSystem(config)
+        first = alerts._generate_mention_text("error")
+        second = alerts._generate_mention_text("error")
+        assert first == second
+        assert default_users == ['U000000']  # 설정 원본 불변
