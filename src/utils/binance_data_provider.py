@@ -38,47 +38,61 @@ class BinanceDataProvider:
             '1h': Client.KLINE_INTERVAL_1HOUR,
             '4h': Client.KLINE_INTERVAL_4HOUR
         }
+        self.interval_deltas = {
+            '1d': timedelta(days=1),
+            '1w': timedelta(weeks=1),
+            '1h': timedelta(hours=1),
+            '4h': timedelta(hours=4)
+        }
     
     def get_historical_klines(
-        self, 
+        self,
         symbol: str = "BTCUSDT",
         interval: str = "1d",
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-        limit: int = 1500
+        limit: Optional[int] = None
     ) -> pd.DataFrame:
         """
         Binance에서 히스토리컬 캔들 데이터 가져오기
-        
+
         Args:
             symbol: 거래 심볼 (기본: BTCUSDT)
             interval: 시간 간격 ('1d', '1w', '1h', '4h')
             start_date: 시작 날짜
             end_date: 종료 날짜
-            limit: 최대 데이터 개수
-            
+            limit: 지정 시 가장 최근 limit개 캔들만 반환.
+                start_date가 없으면 조회 범위도 limit 기반으로 축소.
+                미지정 시 전체 기간 (start_date 없으면 5년).
+
         Returns:
             OHLCV 데이터프레임
         """
         try:
             # 시간 간격 변환
             kline_interval = self.kline_intervals.get(interval, Client.KLINE_INTERVAL_1DAY)
-            
+
             # 날짜 처리
             if start_date:
                 start_str = str(int(start_date.timestamp() * 1000))
+            elif limit:
+                # limit 기반 조회 범위 — 캔들 경계 정렬 오차 대비 +2개 여유
+                # (5년치를 받아 앞에서 자르면 '14일 벤치마크'가 5년 수익률이 되는 버그 방지)
+                delta = self.interval_deltas.get(interval, timedelta(days=1))
+                start_str = str(int(
+                    (datetime.now() - delta * (limit + 2)).timestamp() * 1000
+                ))
             else:
                 # 기본값: 5년 전
                 start_str = str(int((datetime.now() - timedelta(days=365*5)).timestamp() * 1000))
-            
+
             if end_date:
                 end_str = str(int(end_date.timestamp() * 1000))
             else:
                 end_str = None
-            
+
             logger.info(f"Binance에서 {symbol} 데이터 수집 중... (간격: {interval})")
-            
-            # 데이터 가져오기 - limit 파라미터 제거하여 전체 기간 데이터 가져오기
+
             klines = self.client.get_historical_klines(
                 symbol,
                 kline_interval,
@@ -119,9 +133,13 @@ class BinanceDataProvider:
             
             # 필요한 컬럼만 선택
             df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-            
+
+            # limit 계약: 가장 최근 limit개만 (앞이 아니라 뒤에서)
+            if limit:
+                df = df.tail(limit)
+
             logger.info(f"Binance 데이터 수집 완료: {len(df)}개 캔들")
-            
+
             return df
             
         except BinanceAPIException as e:
@@ -150,12 +168,11 @@ class BinanceDataProvider:
             # 먼저 주간 데이터 시도
             logger.info(f"{weeks_required}주 데이터 수집 시도...")
             
-            # 주간 데이터 가져오기 (Binance는 최대 1000개 제한)
+            # 주간 데이터 가져오기 — 요청 기간 전체 (limit로 자르면 안 됨)
             weekly_data = self.get_historical_klines(
                 symbol="BTCUSDT",
                 interval="1w",
                 start_date=datetime.now() - timedelta(weeks=weeks_required),
-                limit=1000
             )
             
             if len(weekly_data) >= 200:
@@ -166,12 +183,12 @@ class BinanceDataProvider:
             if fallback_to_daily:
                 logger.info("주간 데이터 부족, 일간 데이터로 대체...")
                 
-                # 4년치 일간 데이터 가져오기
+                # 4년치 일간 데이터 가져오기 — 200주MA에 1400일 필요,
+                # limit=1000으로 자르면 부족해진다
                 daily_data = self.get_historical_klines(
                     symbol="BTCUSDT",
                     interval="1d",
                     start_date=datetime.now() - timedelta(days=365*4),
-                    limit=1000
                 )
                 
                 if not daily_data.empty:
