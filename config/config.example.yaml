@@ -36,6 +36,12 @@ strategy:
     max_single_dca_krw: 5000000
     krw_usage_cap: 0.25        # 1회 DCA가 KRW 잔고의 25% 초과 불가
 
+security:
+  # 거래소 노출 상한(KRW): 총평가액이 이를 넘으면 데일리 브리핑에 콜드월렛
+  # 이전 검토 경고. 0 = 비활성. 거래소는 전략이 못 막는 단일 실패점(FTX 교훈)
+  # — 리밸런싱 유동성만 거래소에 두고 초과분은 개인 지갑 보관 권장.
+  exchange_exposure_cap_krw: 0
+
 risk:
   max_single_trade_krw: 10000000   # 단일 거래 상한 (1천만원)
   max_daily_volume_krw: 50000000   # 일일 거래량 상한 (5천만원)

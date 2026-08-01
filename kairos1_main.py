@@ -49,6 +49,9 @@ class SystemConfig:
     # 상대강도 편출: 26주 BTC 대비 열위 알트의 목표 가중치를 연속 감축,
     # 감축분은 BTC로. False면 고정 가중치.
     relative_demotion: bool = True
+    # 거래소 노출 상한(KRW): 총평가액이 이를 넘으면 데일리 브리핑에
+    # 콜드월렛 이전 검토 경고. 0이면 비활성 (수탁 리스크 가시화 — FTX 교훈).
+    exchange_exposure_cap_krw: float = 0.0
 
 
 class KairosSimple:
@@ -131,6 +134,9 @@ class KairosSimple:
             relative_demotion=str(
                 loader.get("strategy.targets.relative_demotion", True)
             ).lower() in ("true", "1", "yes"),
+            exchange_exposure_cap_krw=float(
+                loader.get("security.exchange_exposure_cap_krw", 0)
+            ),
         )
 
     @classmethod
@@ -332,6 +338,7 @@ class KairosSimple:
             market_line=market_line,
             prev_total_krw=self.portfolio.get_previous_total_krw(),
             traded_today_krw=self._daily_traded_krw,
+            exchange_exposure_cap_krw=self.config.exchange_exposure_cap_krw,
         )
         self.alerts.send_info_alert(title, body)
         return {"executed": 0, "rejected": [], "halted": False,
