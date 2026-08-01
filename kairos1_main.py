@@ -11,7 +11,7 @@
   - 일일 밴드 체크: 목표 ±5%p 이탈 시에만 리밸런싱 — 상승 초과분 자동
     익절, 하락 미달분 자동 매집. 24h -10% 급락 자산은 분할 진입(크래시 가드)
   - 상대강도 편출: 26주 BTC 대비 열위 알트의 목표 가중치를 연속 감축
-    (-30%까지 유지, -50%에서 0), 감축분은 BTC로
+    (-50%까지 유지, -70%에서 0 — 구조적 붕괴 전용 보험), 감축분은 BTC로
   - fail-loud: 데이터 이상 시 하드코딩 폴백 없이 거래 중단 + 알림
 
 역할 위계: Mayer(장주기 밸류에이션)가 자산배분 목표를 정하고, F&G(단기
@@ -75,7 +75,7 @@ class KairosSimple:
             ),
             rebalance=RebalanceConfig(
                 crypto_target=0.60, band_pp=0.05, crypto_weights=weights,
-                relative_band=0.20, min_trade_krw=10_000,
+                relative_band=0.30, min_trade_krw=10_000,
             ),
             limits=RiskLimits(
                 max_single_trade_krw=10_000_000, max_daily_volume_krw=50_000_000,
@@ -110,7 +110,7 @@ class KairosSimple:
                 crypto_target=float(loader.get("strategy.targets.crypto", 0.60)),
                 band_pp=float(loader.get("strategy.rebalance.band_pp", 0.05)),
                 crypto_weights=weights,
-                relative_band=float(loader.get("strategy.rebalance.relative_band", 0.20)),
+                relative_band=float(loader.get("strategy.rebalance.relative_band", 0.30)),
                 min_trade_krw=float(loader.get("strategy.rebalance.min_trade_krw", 10_000)),
                 crash_threshold=float(
                     loader.get("strategy.rebalance.crash_threshold_24h", -0.10)

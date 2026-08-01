@@ -109,11 +109,11 @@ def test_daily_check_buys_when_underweight():
 
 
 def test_relative_demotion_rotates_weak_alt_into_btc():
-    """XRP가 26주간 BTC 대비 -40% → 목표 가중치 절반(10%→5%), 빠진 비중은
+    """XRP가 26주간 BTC 대비 -60% → 목표 가중치 절반(10%→5%), 빠진 비중은
     BTC로 → 개별 이탈 리밸런싱이 XRP 매도·BTC 매수를 만든다"""
     sys_, executor, _ = make_system()  # 크립토 정확히 60%, 총비중 밴드 내
     sys_.market.get_relative_returns.return_value = {
-        "ETH": 0.0, "XRP": -0.4, "SOL": 0.0
+        "ETH": 0.0, "XRP": -0.6, "SOL": 0.0
     }
     result = sys_.run_daily_check(dry_run=False)
     orders = {c.args[0].asset: c.args[0] for c in executor.execute.call_args_list}
@@ -143,7 +143,7 @@ def test_weekly_dca_uses_demoted_weights():
     }
     sys_, executor, _ = make_system(holdings=holdings, krw=60_000_000)  # 40%
     sys_.market.get_relative_returns.return_value = {
-        "ETH": 0.0, "XRP": -0.6, "SOL": 0.0
+        "ETH": 0.0, "XRP": -0.8, "SOL": 0.0
     }
     sys_.run_weekly_dca(dry_run=False)
     assets = [c.args[0].asset for c in executor.execute.call_args_list]
