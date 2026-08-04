@@ -35,6 +35,7 @@ from src.strategy.rebalance import (
     plan_rebalance,
 )
 from src.strategy.valuation import (
+    _TILT_MAYER_ANCHORS,
     MarketValuation,
     apply_relative_strength,
     contrarian_crypto_target,
@@ -119,6 +120,10 @@ def run(
     fomo_guard: bool = True,
     fee: float = FEE,
     slippage: float = SLIPPAGE,
+    band_pp: float = 0.05,
+    tilt_offsets: tuple = None,        # 실험용: _TILT_OFFSET_ANCHORS 대체
+    overheat_alt_anchors: tuple = None,  # 실험용: (mayer앵커, 알트유지비율앵커)
+    order_fraction: float = 1.0,       # 부분 리밸런싱 (운영 기본 0.5, 기준선 재현용 1.0)
 ) -> Result:
     weights = weights or DEFAULT_WEIGHTS
     cost = fee + slippage
@@ -138,8 +143,9 @@ def run(
     btc_weekly = btc.resample("W-MON", label="left", closed="left").last().dropna()
 
     reb_base = RebalanceConfig(
-        crypto_target=crypto_target, band_pp=0.05, crypto_weights=weights,
+        crypto_target=crypto_target, band_pp=band_pp, crypto_weights=weights,
         relative_band=relative_band, min_trade_krw=10_000,
+        order_fraction=order_fraction,
     )
     dca_base = DCAConfig(
         base_amount_krw=WEEKLY_BASE_DCA, crypto_weights=weights,
@@ -171,8 +177,14 @@ def run(
                      if len(hist_w) >= 13 else 0.0)
             mult = dca_multiplier(MarketValuation(_fg_proxy(ret12), mayer))
 
-        target = (contrarian_crypto_target(mayer, crypto_target)
-                  if (contrarian_tilt and mayer is not None) else crypto_target)
+        if contrarian_tilt and mayer is not None:
+            if tilt_offsets is not None:
+                offset = float(np.interp(mayer, _TILT_MAYER_ANCHORS, tilt_offsets))
+                target = min(1.0, max(0.0, crypto_target + offset))
+            else:
+                target = contrarian_crypto_target(mayer, crypto_target)
+        else:
+            target = crypto_target
 
         # ---- 상대강도 편출 (26주=182일 상대수익) ----
         w_eff = w_active
@@ -198,6 +210,22 @@ def run(
                     w_eff_age = 0
             if w_eff_cache is not None and set(w_eff_cache) == set(w_active):
                 w_eff = w_eff_cache
+
+        # ---- 실험: 과열 시 알트→BTC 내부 구성 이동 ----
+        if (overheat_alt_anchors is not None and mayer is not None
+                and "BTC" in w_eff and len(w_eff) > 1):
+            m_anchors, f_anchors = overheat_alt_anchors
+            factor = float(np.interp(mayer, m_anchors, f_anchors))
+            if factor < 1.0:
+                shifted = {}
+                freed = 0.0
+                for a, w in w_eff.items():
+                    if a == "BTC":
+                        continue
+                    shifted[a] = w * factor
+                    freed += w * (1.0 - factor)
+                shifted["BTC"] = w_eff["BTC"] + freed
+                w_eff = shifted
 
         # ---- 24h 변동 (크래시/FOMO 가드) ----
         chg24: Dict[str, float] = {}
