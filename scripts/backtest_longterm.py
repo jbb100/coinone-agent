@@ -51,6 +51,8 @@ def run_backtest(
     contrarian_tilt: bool = True,
     enable_dca: bool = True,
     enable_rebalance: bool = True,
+    band_pp: float = 0.05,
+    order_fraction: float = 1.0,
 ) -> BacktestResult:
     """start: 투자 시작 주차 인덱스. 거래·적립은 start부터 시작하되
     200주MA·심리 프록시는 start 이전 데이터까지 활용한다
@@ -64,8 +66,9 @@ def run_backtest(
         min_order_krw=1_000,
     )
     reb_cfg = RebalanceConfig(
-        crypto_target=crypto_target, band_pp=0.05, crypto_weights={"BTC": 1.0},
+        crypto_target=crypto_target, band_pp=band_pp, crypto_weights={"BTC": 1.0},
         relative_band=0.20, min_trade_krw=1_000,
+        order_fraction=order_fraction,
     )
     cost = fee + slippage
 

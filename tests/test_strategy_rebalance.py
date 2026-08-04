@@ -1,4 +1,6 @@
 """src/strategy/rebalance.py 테스트 — 밴드 리밸런싱 (상승 익절·하락 매집)."""
+import dataclasses
+
 import pytest
 
 from src.strategy.rebalance import (
@@ -117,6 +119,44 @@ class TestCrashGuard:
             threshold=-0.10, buy_fraction=0.5, min_trade_krw=10_000,
         )
         assert out == []  # 7,500 < 최소 주문 → 제외
+
+
+class TestOrderFraction:
+    """부분 리밸런싱 — 트리거 시 갭의 일부만 이동, 일일 체크가 수렴시킨다.
+
+    2026-08-04 검증: 63개 윈도우(일봉 32 + 주봉 OOS 31)에서 배수·MDD 관문
+    청정, 비용 4.6%→3.4%/원금. 밴드 안까지만 수렴하고 멈추는
+    rebalance-to-edge와 유사한 효과."""
+
+    def test_orders_scaled_by_fraction(self):
+        cfg = dataclasses.replace(CONFIG, order_fraction=0.5)
+        # 크립토 70% > 65% → 전량이면 10M 매도, 절반이면 5M
+        holdings = {"BTC": 35_000_000, "ETH": 21_000_000,
+                    "XRP": 7_000_000, "SOL": 7_000_000}
+        orders = plan_rebalance(cfg, holdings, krw_balance=30_000_000)
+        sells = [o for o in orders if o.side == "sell"]
+        assert sum(o.amount_krw for o in sells) == pytest.approx(5_000_000)
+
+    def test_default_fraction_is_full_rebalance(self):
+        assert CONFIG.order_fraction == 1.0
+
+    def test_buy_side_also_scaled(self):
+        cfg = dataclasses.replace(CONFIG, order_fraction=0.5)
+        holdings = {"BTC": 25_000_000, "ETH": 15_000_000,
+                    "XRP": 5_000_000, "SOL": 5_000_000}
+        orders = plan_rebalance(cfg, holdings, krw_balance=50_000_000)
+        buys = [o for o in orders if o.side == "buy"]
+        assert sum(o.amount_krw for o in buys) == pytest.approx(5_000_000)
+
+    def test_scaled_below_min_trade_dropped(self):
+        """분할 후 최소 거래 금액 미만이 된 주문은 버린다."""
+        cfg = dataclasses.replace(
+            CONFIG, order_fraction=0.5, crypto_weights={"BTC": 1.0}
+        )
+        # 총 100,000 / 목표 60,000 → BTC 75,000 보유: 갭 15,000
+        # 전량이면 주문 유효(15,000 ≥ 10,000), 절반 7,500 < 10,000 → 드롭
+        orders = plan_rebalance(cfg, {"BTC": 75_000}, krw_balance=25_000)
+        assert orders == []
 
 
 def test_fully_demoted_asset_triggers_own_sell():

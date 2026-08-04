@@ -119,7 +119,8 @@ def test_relative_demotion_rotates_weak_alt_into_btc():
     orders = {c.args[0].asset: c.args[0] for c in executor.execute.call_args_list}
     assert result["executed"] > 0
     assert orders["XRP"].side == "sell"
-    assert orders["XRP"].amount_krw == pytest.approx(3_000_000)  # 6M → 3M
+    # 편출로 XRP 목표 6M→3M: 갭 3M × 부분 리밸런싱 0.5 = 1.5M 매도
+    assert orders["XRP"].amount_krw == pytest.approx(1_500_000)
     assert orders["BTC"].side == "buy"
 
 
@@ -197,8 +198,10 @@ def test_daily_check_crash_guard_halves_crashed_asset_buys():
     sys_.run_daily_check(dry_run=False)
     amounts = {c.args[0].asset: c.args[0].amount_krw
                for c in executor.execute.call_args_list}
-    assert amounts["BTC"] == pytest.approx(5_000_000)   # 10M 계획 → 절반
-    assert amounts["ETH"] == pytest.approx(6_000_000)   # -3%는 급락 아님 → 전량
+    # 갭 BTC 10M × 부분 0.5 = 5M 계획 → 크래시 가드가 다시 절반
+    assert amounts["BTC"] == pytest.approx(2_500_000)
+    # ETH 갭 6M × 부분 0.5 = 3M, -3%는 급락 아님 → 가드 미적용
+    assert amounts["ETH"] == pytest.approx(3_000_000)
 
 
 def test_daily_volume_limit_includes_prior_process_trades():
@@ -456,6 +459,7 @@ def test_config_from_loader_parses_yaml_values():
         "strategy.targets.crypto": 0.7,
         "strategy.rebalance.band_pp": 0.03,
         "strategy.rebalance.relative_band": 0.15,
+        "strategy.rebalance.order_fraction": 0.7,
         "strategy.rebalance.min_trade_krw": 20_000,
         "strategy.dca.base_amount_krw": 2_000_000,
         "strategy.dca.max_single_dca_krw": 8_000_000,
@@ -470,6 +474,7 @@ def test_config_from_loader_parses_yaml_values():
     config = KairosSimple.config_from_loader(loader)
     assert config.rebalance.crypto_target == 0.7
     assert config.rebalance.band_pp == 0.03
+    assert config.rebalance.order_fraction == 0.7
     assert config.dca.base_amount_krw == 2_000_000
     assert config.dca.crypto_weights == {"BTC": 0.6, "ETH": 0.4}
     assert config.limits.max_single_trade_krw == 15_000_000
@@ -482,6 +487,8 @@ def test_config_from_loader_defaults():
     config = KairosSimple.config_from_loader(loader)
     assert config.rebalance.crypto_target == 0.60
     assert config.limits.min_krw_ratio == 0.10
+    # 부분 리밸런싱 0.5가 검증된 운영 기본값 (2026-08-04 감사 2라운드)
+    assert config.rebalance.order_fraction == 0.5
 
 
 def test_record_trade_failure_does_not_abort_remaining_orders():
@@ -538,14 +545,15 @@ def test_min_krw_floor_enforced_across_batch():
     executor.execute.side_effect = lambda req: MagicMock(
         success=True, filled_krw=req.amount_krw
     )
-    # 하한 45% → 매수 여력은 60M-45M=15M뿐인데 밴드 복귀 계획은 20M 매수
+    # 하한 55% → 매수 여력은 60M-55M=5M뿐인데 밴드 복귀 계획은
+    # 갭 20M × 부분 리밸런싱 0.5 = 10M 매수
     sys_.guard = RiskGuard(RiskLimits(
         max_single_trade_krw=10_000_000, max_daily_volume_krw=50_000_000,
-        min_krw_ratio=0.45, fomo_surge_threshold=0.15,
+        min_krw_ratio=0.55, fomo_surge_threshold=0.15,
     ))
     result = sys_.run_daily_check(dry_run=False)
     bought = sum(c.args[0].amount_krw for c in executor.execute.call_args_list)
-    assert bought <= 15_000_000 + 1
+    assert bought <= 5_000_000 + 1
     assert result["rejected"]  # 하한에 걸린 잔여 매수는 거부로 기록
 
 

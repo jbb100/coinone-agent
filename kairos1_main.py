@@ -83,6 +83,7 @@ class KairosSimple:
             rebalance=RebalanceConfig(
                 crypto_target=0.60, band_pp=0.05, crypto_weights=weights,
                 relative_band=0.30, min_trade_krw=10_000,
+                order_fraction=0.5,
             ),
             limits=RiskLimits(
                 max_single_trade_krw=10_000_000, max_daily_volume_krw=50_000_000,
@@ -124,6 +125,9 @@ class KairosSimple:
                 ),
                 crash_buy_fraction=float(
                     loader.get("strategy.rebalance.crash_buy_fraction", 0.5)
+                ),
+                order_fraction=float(
+                    loader.get("strategy.rebalance.order_fraction", 0.5)
                 ),
             ),
             limits=RiskLimits(
