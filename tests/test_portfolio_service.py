@@ -146,3 +146,64 @@ def test_previous_total_none_without_history():
     svc, db = make_service(balances={}, prices={})
     db.get_portfolio_history.return_value = []
     assert svc.get_previous_total_krw() is None
+
+
+def test_get_twr_separates_deposits_from_gains():
+    """TWR: 입금 500만원은 수익이 아니다 — 시장 수익 +10%만 반영"""
+    import json
+    svc, db = make_service(balances={}, prices={})
+    db.get_portfolio_history.return_value = [
+        {"snapshot_date": "2026-07-01 09:10:00", "total_value_krw": 10_000_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 4_000_000.0}})},
+        {"snapshot_date": "2026-07-02 09:10:00", "total_value_krw": 11_000_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 4_000_000.0}})},
+        {"snapshot_date": "2026-07-03 09:10:00", "total_value_krw": 16_000_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 9_000_000.0}})},
+    ]
+    db.get_daily_trade_sums.return_value = []
+    result = svc.get_twr(days=30)
+    assert result is not None
+    twr, window_days = result
+    assert twr == pytest.approx(0.10)
+    assert window_days == 2
+
+
+def test_get_twr_uses_trade_sums_for_flow_inference():
+    """매수로 KRW가 줄어든 날을 출금으로 오인하면 안 된다"""
+    import json
+    svc, db = make_service(balances={}, prices={})
+    db.get_portfolio_history.return_value = [
+        {"snapshot_date": "2026-07-01 09:10:00", "total_value_krw": 10_000_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 4_000_000.0}})},
+        {"snapshot_date": "2026-07-02 09:10:00", "total_value_krw": 10_500_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 3_000_000.0}})},
+    ]
+    db.get_daily_trade_sums.return_value = [
+        {"date": "2026-07-02", "buys_krw": 1_000_000.0, "sells_krw": 0.0},
+    ]
+    twr, _ = svc.get_twr(days=30)
+    assert twr == pytest.approx(0.05)
+
+
+def test_get_twr_dedupes_same_day_keeping_last():
+    """하루 여러 스냅샷이면 마지막 것만 사용 (dry-run 오염 방지와 별개의 안전망)"""
+    import json
+    svc, db = make_service(balances={}, prices={})
+    db.get_portfolio_history.return_value = [
+        {"snapshot_date": "2026-07-01 09:10:00", "total_value_krw": 10_000_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 0.0}})},
+        {"snapshot_date": "2026-07-01 21:00:00", "total_value_krw": 10_200_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 0.0}})},
+        {"snapshot_date": "2026-07-02 09:10:00", "total_value_krw": 11_220_000.0,
+         "portfolio_detail": json.dumps({"assets": {"KRW": 0.0}})},
+    ]
+    db.get_daily_trade_sums.return_value = []
+    twr, _ = svc.get_twr(days=30)
+    assert twr == pytest.approx(0.10)
+
+
+def test_get_twr_none_without_enough_snapshots():
+    svc, db = make_service(balances={}, prices={})
+    db.get_portfolio_history.return_value = []
+    db.get_daily_trade_sums.return_value = []
+    assert svc.get_twr(days=30) is None

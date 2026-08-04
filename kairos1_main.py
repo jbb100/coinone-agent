@@ -352,13 +352,21 @@ class KairosSimple:
 
         snap = self.portfolio.get_snapshot()
         reporter = Reporter(self.binance, self.alerts)
-        # 일일 스냅샷 이력 기반 30일 총자산 변화율 (입출금 포함 단순 변화)
+        # 1순위: TWR (입출금 분리 — 전략 성과만 측정)
+        twr = self.portfolio.get_twr(days=30)
+        if twr is not None:
+            twr_return, window_days = twr
+            return reporter.monthly_report(
+                twr_return, snap.total_value_krw, snap.crypto_ratio,
+                window_days=window_days, method="TWR",
+            )
+        # 폴백: 총자산 단순 변화 (입출금 포함 — 과도기용)
         change = self.portfolio.get_value_change_30d(snap.total_value_krw)
         if change is not None:
             portfolio_return, window_days = change
             return reporter.monthly_report(
                 portfolio_return, snap.total_value_krw, snap.crypto_ratio,
-                window_days=window_days,
+                window_days=window_days, method="단순",
             )
         benchmark = reporter.btc_benchmark_return(days=30)
         report = {

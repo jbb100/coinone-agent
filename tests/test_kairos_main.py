@@ -273,8 +273,26 @@ def test_daily_check_records_snapshot_even_without_trades():
     sys_.portfolio.record_snapshot.assert_called_once()
 
 
+def test_monthly_report_prefers_twr_when_available():
+    """TWR(입출금 분리)이 계산 가능하면 단순 변화율 대신 사용해야 함"""
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_twr.return_value = (0.05, 28)
+    sys_.portfolio.get_value_change_30d.return_value = (0.99, 30)  # 입금 오염값
+    sys_.binance = MagicMock()
+    import pandas as pd
+    sys_.binance.get_historical_klines.return_value = pd.DataFrame(
+        {"Close": [100.0] * 28 + [105.0]}
+    )
+    report = sys_.run_monthly_report()
+    assert report["portfolio_return"] == pytest.approx(0.05)
+    assert report["method"] == "TWR"
+    _, body = alerts.send_info_alert.call_args.args
+    assert "TWR" in body
+
+
 def test_monthly_report_uses_portfolio_return_when_history_exists():
     sys_, _, alerts = make_system()
+    sys_.portfolio.get_twr.return_value = None
     sys_.portfolio.get_value_change_30d.return_value = (0.08, 30)
     sys_.binance = MagicMock()
     import pandas as pd
@@ -290,6 +308,7 @@ def test_monthly_report_uses_portfolio_return_when_history_exists():
 
 def test_monthly_report_without_history_notes_accumulating():
     sys_, _, alerts = make_system()
+    sys_.portfolio.get_twr.return_value = None
     sys_.portfolio.get_value_change_30d.return_value = None
     sys_.binance = MagicMock()
     import pandas as pd

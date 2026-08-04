@@ -1,7 +1,10 @@
 """포트폴리오 스냅샷(KRW 평가)과 거래 기록."""
+import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
+
+from src.report.performance import DailyPoint, compute_twr
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,37 @@ class PortfolioService:
             datetime.now() - datetime.strptime(date_str, "%Y-%m-%d")
         ).days
         return current_total_krw / value - 1.0, max(window_days, 1)
+
+    def get_twr(self, days: int = 30) -> Optional[Tuple[float, int]]:
+        """시간가중수익률 (TWR, 관측 창 일수) — 입출금을 수익에서 분리.
+
+        스냅샷 이력 + 일별 거래 합계로 외부 KRW 흐름을 역산한다.
+        유효 스냅샷 2개 미만이면 None. 코인 외부 이체는 구분 불가
+        (performance.py 참고).
+        """
+        points: Dict[str, DailyPoint] = {}
+        for row in self.db.get_portfolio_history(days):
+            date = str(row.get("snapshot_date", ""))[:10]
+            total = float(row.get("total_value_krw") or 0)
+            if not date or total <= 0:
+                continue
+            try:
+                detail = json.loads(row.get("portfolio_detail") or "{}")
+                krw = float(detail.get("assets", {}).get("KRW", 0.0))
+            except (ValueError, TypeError):
+                krw = 0.0
+            # 같은 날 여러 스냅샷이면 마지막 것으로 덮어쓴다
+            points[date] = DailyPoint(
+                date=date, total_value_krw=total, krw_balance=krw
+            )
+        trades = {
+            str(row["date"]): (
+                float(row.get("buys_krw") or 0), float(row.get("sells_krw") or 0)
+            )
+            for row in self.db.get_daily_trade_sums(days)
+        }
+        ordered = [points[d] for d in sorted(points)]
+        return compute_twr(ordered, trades)
 
     def get_previous_total_krw(self):
         """오늘 이전 가장 최근 스냅샷의 총자산 — 데일리 브리핑 전일 대비용.
