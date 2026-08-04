@@ -652,3 +652,27 @@ def test_dry_run_does_not_record_snapshot():
     sys_, _, _ = make_system()
     sys_.run_daily_check(dry_run=True)
     sys_.portfolio.record_snapshot.assert_not_called()
+
+
+def test_thesis_tripwire_warns_at_historic_extreme_mayer():
+    """Mayer < 0.5 = 역사상 전례 없는 수준 — 사이클 가정 점검 경보.
+
+    자동 대응은 없다(역발상 철학 유지). 사람이 구조적 붕괴 여부를
+    판단하라는 신호만 보낸다 (감사 허점 4의 최소 조치)."""
+    sys_, _, alerts = make_system(mayer=0.45)
+    sys_.run_daily_check(dry_run=False)
+    warning_bodies = [
+        " ".join(str(a) for a in c.args)
+        for c in alerts.send_warning_alert.call_args_list
+    ]
+    assert any("트립와이어" in b for b in warning_bodies)
+
+
+def test_thesis_tripwire_silent_in_normal_range():
+    sys_, _, alerts = make_system(mayer=0.55)
+    sys_.run_daily_check(dry_run=False)
+    warning_bodies = [
+        " ".join(str(a) for a in c.args)
+        for c in alerts.send_warning_alert.call_args_list
+    ]
+    assert not any("트립와이어" in b for b in warning_bodies)

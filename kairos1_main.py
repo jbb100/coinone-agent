@@ -52,6 +52,10 @@ class SystemConfig:
     # 거래소 노출 상한(KRW): 총평가액이 이를 넘으면 데일리 브리핑에
     # 콜드월렛 이전 검토 경고. 0이면 비활성 (수탁 리스크 가시화 — FTX 교훈).
     exchange_exposure_cap_krw: float = 0.0
+    # 테제 점검 트립와이어: Mayer가 이 값 아래로 내려가면(역사상 전례 없는
+    # 수준 — 2015 바닥 ~0.45) 경보만 발송. 자동 대응 없음 — "어디까지가
+    # 사이클이고 어디부터가 구조적 붕괴인가"는 사람이 판단한다. 0이면 비활성.
+    thesis_tripwire_mayer: float = 0.5
 
 
 class KairosSimple:
@@ -136,6 +140,9 @@ class KairosSimple:
             ).lower() in ("true", "1", "yes"),
             exchange_exposure_cap_krw=float(
                 loader.get("security.exchange_exposure_cap_krw", 0)
+            ),
+            thesis_tripwire_mayer=float(
+                loader.get("risk.thesis_tripwire_mayer", 0.5)
             ),
         )
 
@@ -268,6 +275,18 @@ class KairosSimple:
         reb_cfg = self.config.rebalance
         if self.config.contrarian_tilt:
             mayer = self.market.get_mayer_ratio()
+            tripwire = self.config.thesis_tripwire_mayer
+            if 0 < tripwire and mayer < tripwire:
+                # 역발상 매집은 "크립토는 사이클을 그리며 생존한다"는 테제
+                # 위에 서 있다. 이 수준은 그 테제의 사각지대 — 경보만 보내고
+                # 매집은 계속한다 (자동 매수 동결은 철학과 충돌, 사람이 결정).
+                self.alerts.send_warning_alert(
+                    "테제 점검 트립와이어",
+                    f"Mayer {mayer:.2f} < {tripwire} — 역사상 전례 없는 수준"
+                    f"(2015 바닥 ~0.45). 사이클 하락인지 구조적 붕괴인지 점검"
+                    f" 필요. 시스템은 계속 매집 중 — 중단하려면 config에서"
+                    f" contrarian_tilt/DCA를 수동 조정.",
+                )
             target = self._tilted_target(mayer)
             if target != reb_cfg.crypto_target:
                 msg = (f"역발상 틸트: Mayer={mayer:.2f} → 목표 "

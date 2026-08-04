@@ -47,6 +47,8 @@ risk:
   max_daily_volume_krw: 50000000   # 일일 거래량 상한 (5천만원)
   min_krw_ratio: 0.10              # 최소 KRW 비중 (전량 몰빵 방지)
   fomo_surge_threshold: 0.15       # 24h +15% 급등 자산은 DCA 외 매수 금지
+  thesis_tripwire_mayer: 0.5       # Mayer가 이 값 미만이면 테제 점검 경보만
+                                   # (역사상 전례 없는 수준 — 자동 대응 없음, 0=off)
 
 execution:
   twap_slice_krw: 5000000   # 이 금액 초과 주문은 TWAP 분할
