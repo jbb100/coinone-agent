@@ -474,6 +474,32 @@ class DatabaseManager:
             logger.error(f"오늘 거래액 조회 실패: {e}")
             raise
 
+    def get_daily_trade_sums(self, days: int = 35) -> List[Dict]:
+        """일별 매수/매도 합계 (KRW) — TWR의 외부 흐름 역산 입력.
+
+        trade_date는 str(datetime)으로 저장되므로 앞 10자가 YYYY-MM-DD.
+        반환: [{"date": "YYYY-MM-DD", "buys_krw": float, "sells_krw": float}]
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+                cursor.execute("""
+                    SELECT substr(trade_date, 1, 10) AS date,
+                           COALESCE(SUM(CASE WHEN side = 'buy'
+                                             THEN amount_krw ELSE 0 END), 0) AS buys_krw,
+                           COALESCE(SUM(CASE WHEN side = 'sell'
+                                             THEN amount_krw ELSE 0 END), 0) AS sells_krw
+                    FROM trade_history
+                    WHERE substr(trade_date, 1, 10) >= ?
+                    GROUP BY substr(trade_date, 1, 10)
+                    ORDER BY date ASC
+                """, (cutoff,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"일별 거래 합계 조회 실패: {e}")
+            raise
+
     def save_portfolio_snapshot(self, portfolio_data: Dict) -> int:
         """
         포트폴리오 스냅샷 저장

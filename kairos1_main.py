@@ -11,7 +11,7 @@
   - 일일 밴드 체크: 목표 ±5%p 이탈 시에만 리밸런싱 — 상승 초과분 자동
     익절, 하락 미달분 자동 매집. 24h -10% 급락 자산은 분할 진입(크래시 가드)
   - 상대강도 편출: 26주 BTC 대비 열위 알트의 목표 가중치를 연속 감축
-    (-30%까지 유지, -50%에서 0), 감축분은 BTC로
+    (-50%까지 유지, -70%에서 0 — 구조적 붕괴 전용 보험), 감축분은 BTC로
   - fail-loud: 데이터 이상 시 하드코딩 폴백 없이 거래 중단 + 알림
 
 역할 위계: Mayer(장주기 밸류에이션)가 자산배분 목표를 정하고, F&G(단기
@@ -49,6 +49,13 @@ class SystemConfig:
     # 상대강도 편출: 26주 BTC 대비 열위 알트의 목표 가중치를 연속 감축,
     # 감축분은 BTC로. False면 고정 가중치.
     relative_demotion: bool = True
+    # 거래소 노출 상한(KRW): 총평가액이 이를 넘으면 데일리 브리핑에
+    # 콜드월렛 이전 검토 경고. 0이면 비활성 (수탁 리스크 가시화 — FTX 교훈).
+    exchange_exposure_cap_krw: float = 0.0
+    # 테제 점검 트립와이어: Mayer가 이 값 아래로 내려가면(역사상 전례 없는
+    # 수준 — 2015 바닥 ~0.45) 경보만 발송. 자동 대응 없음 — "어디까지가
+    # 사이클이고 어디부터가 구조적 붕괴인가"는 사람이 판단한다. 0이면 비활성.
+    thesis_tripwire_mayer: float = 0.5
 
 
 class KairosSimple:
@@ -75,7 +82,7 @@ class KairosSimple:
             ),
             rebalance=RebalanceConfig(
                 crypto_target=0.60, band_pp=0.05, crypto_weights=weights,
-                relative_band=0.20, min_trade_krw=10_000,
+                relative_band=0.30, min_trade_krw=10_000,
             ),
             limits=RiskLimits(
                 max_single_trade_krw=10_000_000, max_daily_volume_krw=50_000_000,
@@ -110,7 +117,7 @@ class KairosSimple:
                 crypto_target=float(loader.get("strategy.targets.crypto", 0.60)),
                 band_pp=float(loader.get("strategy.rebalance.band_pp", 0.05)),
                 crypto_weights=weights,
-                relative_band=float(loader.get("strategy.rebalance.relative_band", 0.20)),
+                relative_band=float(loader.get("strategy.rebalance.relative_band", 0.30)),
                 min_trade_krw=float(loader.get("strategy.rebalance.min_trade_krw", 10_000)),
                 crash_threshold=float(
                     loader.get("strategy.rebalance.crash_threshold_24h", -0.10)
@@ -131,6 +138,12 @@ class KairosSimple:
             relative_demotion=str(
                 loader.get("strategy.targets.relative_demotion", True)
             ).lower() in ("true", "1", "yes"),
+            exchange_exposure_cap_krw=float(
+                loader.get("security.exchange_exposure_cap_krw", 0)
+            ),
+            thesis_tripwire_mayer=float(
+                loader.get("risk.thesis_tripwire_mayer", 0.5)
+            ),
         )
 
     @classmethod
@@ -262,6 +275,18 @@ class KairosSimple:
         reb_cfg = self.config.rebalance
         if self.config.contrarian_tilt:
             mayer = self.market.get_mayer_ratio()
+            tripwire = self.config.thesis_tripwire_mayer
+            if 0 < tripwire and mayer < tripwire:
+                # 역발상 매집은 "크립토는 사이클을 그리며 생존한다"는 테제
+                # 위에 서 있다. 이 수준은 그 테제의 사각지대 — 경보만 보내고
+                # 매집은 계속한다 (자동 매수 동결은 철학과 충돌, 사람이 결정).
+                self.alerts.send_warning_alert(
+                    "테제 점검 트립와이어",
+                    f"Mayer {mayer:.2f} < {tripwire} — 역사상 전례 없는 수준"
+                    f"(2015 바닥 ~0.45). 사이클 하락인지 구조적 붕괴인지 점검"
+                    f" 필요. 시스템은 계속 매집 중 — 중단하려면 config에서"
+                    f" contrarian_tilt/DCA를 수동 조정.",
+                )
             target = self._tilted_target(mayer)
             if target != reb_cfg.crypto_target:
                 msg = (f"역발상 틸트: Mayer={mayer:.2f} → 목표 "
@@ -332,6 +357,7 @@ class KairosSimple:
             market_line=market_line,
             prev_total_krw=self.portfolio.get_previous_total_krw(),
             traded_today_krw=self._daily_traded_krw,
+            exchange_exposure_cap_krw=self.config.exchange_exposure_cap_krw,
         )
         self.alerts.send_info_alert(title, body)
         return {"executed": 0, "rejected": [], "halted": False,
@@ -345,13 +371,21 @@ class KairosSimple:
 
         snap = self.portfolio.get_snapshot()
         reporter = Reporter(self.binance, self.alerts)
-        # 일일 스냅샷 이력 기반 30일 총자산 변화율 (입출금 포함 단순 변화)
+        # 1순위: TWR (입출금 분리 — 전략 성과만 측정)
+        twr = self.portfolio.get_twr(days=30)
+        if twr is not None:
+            twr_return, window_days = twr
+            return reporter.monthly_report(
+                twr_return, snap.total_value_krw, snap.crypto_ratio,
+                window_days=window_days, method="TWR",
+            )
+        # 폴백: 총자산 단순 변화 (입출금 포함 — 과도기용)
         change = self.portfolio.get_value_change_30d(snap.total_value_krw)
         if change is not None:
             portfolio_return, window_days = change
             return reporter.monthly_report(
                 portfolio_return, snap.total_value_krw, snap.crypto_ratio,
-                window_days=window_days,
+                window_days=window_days, method="단순",
             )
         benchmark = reporter.btc_benchmark_return(days=30)
         report = {

@@ -109,11 +109,11 @@ def test_daily_check_buys_when_underweight():
 
 
 def test_relative_demotion_rotates_weak_alt_into_btc():
-    """XRP가 26주간 BTC 대비 -40% → 목표 가중치 절반(10%→5%), 빠진 비중은
+    """XRP가 26주간 BTC 대비 -60% → 목표 가중치 절반(10%→5%), 빠진 비중은
     BTC로 → 개별 이탈 리밸런싱이 XRP 매도·BTC 매수를 만든다"""
     sys_, executor, _ = make_system()  # 크립토 정확히 60%, 총비중 밴드 내
     sys_.market.get_relative_returns.return_value = {
-        "ETH": 0.0, "XRP": -0.4, "SOL": 0.0
+        "ETH": 0.0, "XRP": -0.6, "SOL": 0.0
     }
     result = sys_.run_daily_check(dry_run=False)
     orders = {c.args[0].asset: c.args[0] for c in executor.execute.call_args_list}
@@ -143,7 +143,7 @@ def test_weekly_dca_uses_demoted_weights():
     }
     sys_, executor, _ = make_system(holdings=holdings, krw=60_000_000)  # 40%
     sys_.market.get_relative_returns.return_value = {
-        "ETH": 0.0, "XRP": -0.6, "SOL": 0.0
+        "ETH": 0.0, "XRP": -0.8, "SOL": 0.0
     }
     sys_.run_weekly_dca(dry_run=False)
     assets = [c.args[0].asset for c in executor.execute.call_args_list]
@@ -273,8 +273,26 @@ def test_daily_check_records_snapshot_even_without_trades():
     sys_.portfolio.record_snapshot.assert_called_once()
 
 
+def test_monthly_report_prefers_twr_when_available():
+    """TWR(입출금 분리)이 계산 가능하면 단순 변화율 대신 사용해야 함"""
+    sys_, _, alerts = make_system()
+    sys_.portfolio.get_twr.return_value = (0.05, 28)
+    sys_.portfolio.get_value_change_30d.return_value = (0.99, 30)  # 입금 오염값
+    sys_.binance = MagicMock()
+    import pandas as pd
+    sys_.binance.get_historical_klines.return_value = pd.DataFrame(
+        {"Close": [100.0] * 28 + [105.0]}
+    )
+    report = sys_.run_monthly_report()
+    assert report["portfolio_return"] == pytest.approx(0.05)
+    assert report["method"] == "TWR"
+    _, body = alerts.send_info_alert.call_args.args
+    assert "TWR" in body
+
+
 def test_monthly_report_uses_portfolio_return_when_history_exists():
     sys_, _, alerts = make_system()
+    sys_.portfolio.get_twr.return_value = None
     sys_.portfolio.get_value_change_30d.return_value = (0.08, 30)
     sys_.binance = MagicMock()
     import pandas as pd
@@ -290,6 +308,7 @@ def test_monthly_report_uses_portfolio_return_when_history_exists():
 
 def test_monthly_report_without_history_notes_accumulating():
     sys_, _, alerts = make_system()
+    sys_.portfolio.get_twr.return_value = None
     sys_.portfolio.get_value_change_30d.return_value = None
     sys_.binance = MagicMock()
     import pandas as pd
@@ -633,3 +652,27 @@ def test_dry_run_does_not_record_snapshot():
     sys_, _, _ = make_system()
     sys_.run_daily_check(dry_run=True)
     sys_.portfolio.record_snapshot.assert_not_called()
+
+
+def test_thesis_tripwire_warns_at_historic_extreme_mayer():
+    """Mayer < 0.5 = 역사상 전례 없는 수준 — 사이클 가정 점검 경보.
+
+    자동 대응은 없다(역발상 철학 유지). 사람이 구조적 붕괴 여부를
+    판단하라는 신호만 보낸다 (감사 허점 4의 최소 조치)."""
+    sys_, _, alerts = make_system(mayer=0.45)
+    sys_.run_daily_check(dry_run=False)
+    warning_bodies = [
+        " ".join(str(a) for a in c.args)
+        for c in alerts.send_warning_alert.call_args_list
+    ]
+    assert any("트립와이어" in b for b in warning_bodies)
+
+
+def test_thesis_tripwire_silent_in_normal_range():
+    sys_, _, alerts = make_system(mayer=0.55)
+    sys_.run_daily_check(dry_run=False)
+    warning_bodies = [
+        " ".join(str(a) for a in c.args)
+        for c in alerts.send_warning_alert.call_args_list
+    ]
+    assert not any("트립와이어" in b for b in warning_bodies)

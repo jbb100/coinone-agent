@@ -118,15 +118,18 @@ class TestContrarianCryptoTarget:
 
 
 class TestRelativeWeightFactor:
-    """상대강도 편출 — 26주 BTC 대비 성과가 나쁠수록 알트 목표 가중치 감축.
+    """상대강도 편출 — 진짜 붕괴에만 반응하는 재해 보험.
 
-    구간 선형(틸트와 동일 방식): -30%까지는 유지, -50%에서 0, 사이는 보간.
-    연속 함수라 경계 노이즈가 급격한 편출입 매매를 만들지 않는다."""
+    구간 선형(틸트와 동일 방식): -50%까지는 유지, -70%에서 0, 사이는 보간.
+    2026-08-01 멀티자산 일봉 백테스트에서 기존 -30%~-50% 트리거가 정상
+    알트 사이클에도 상시 발동해 회전율 2배·수익 -0.16x를 유발함을 확인,
+    트리거를 심화해 LUNA형 구조적 붕괴 전용으로 재조정 (backtest-validation.md)."""
 
     @pytest.mark.parametrize("rel,factor", [
-        (0.5, 1.0), (0.0, 1.0), (-0.3, 1.0),   # BTC 대비 -30%까지 유지
-        (-0.4, 0.5),                            # 전이 구간
-        (-0.5, 0.0), (-0.8, 0.0),               # -50% 이하 완전 편출
+        (0.5, 1.0), (0.0, 1.0), (-0.3, 1.0),    # 정상 알트 사이클: 미발동
+        (-0.5, 1.0),                             # 구 완전편출 지점 → 이제 유지
+        (-0.6, 0.5),                             # 전이 구간
+        (-0.7, 0.0), (-0.9, 0.0),                # -70% 이하 완전 편출
     ])
     def test_piecewise_linear(self, rel, factor):
         assert relative_weight_factor(rel) == pytest.approx(factor)
@@ -136,9 +139,9 @@ class TestApplyRelativeStrength:
     WEIGHTS = {"BTC": 0.5, "ETH": 0.3, "XRP": 0.1, "SOL": 0.1}
 
     def test_underperformer_weight_moves_to_btc(self):
-        # XRP가 BTC 대비 -40% → 가중치 절반(0.05), 빠진 0.05는 BTC로
+        # XRP가 BTC 대비 -60% → 가중치 절반(0.05), 빠진 0.05는 BTC로
         out = apply_relative_strength(
-            self.WEIGHTS, {"ETH": 0.0, "XRP": -0.4, "SOL": 0.0}
+            self.WEIGHTS, {"ETH": 0.0, "XRP": -0.6, "SOL": 0.0}
         )
         assert out["XRP"] == pytest.approx(0.05)
         assert out["BTC"] == pytest.approx(0.55)
@@ -146,14 +149,15 @@ class TestApplyRelativeStrength:
         assert sum(out.values()) == pytest.approx(1.0)
 
     def test_no_underperformance_keeps_weights(self):
+        # -50%까지의 열위는 정상 알트 사이클 범위 — 편출하지 않는다
         out = apply_relative_strength(
-            self.WEIGHTS, {"ETH": 0.1, "XRP": 0.0, "SOL": -0.2}
+            self.WEIGHTS, {"ETH": 0.1, "XRP": -0.5, "SOL": -0.2}
         )
         assert out == pytest.approx(self.WEIGHTS)
 
     def test_full_demotion_zeroes_weight(self):
         out = apply_relative_strength(
-            self.WEIGHTS, {"ETH": 0.0, "XRP": -0.6, "SOL": 0.0}
+            self.WEIGHTS, {"ETH": 0.0, "XRP": -0.8, "SOL": 0.0}
         )
         assert out["XRP"] == pytest.approx(0.0)
         assert out["BTC"] == pytest.approx(0.60)
@@ -165,7 +169,7 @@ class TestApplyRelativeStrength:
     def test_missing_relative_return_raises(self):
         # fail-loud: 데이터 누락 시 조용히 1.0 취급 금지
         with pytest.raises(ValueError):
-            apply_relative_strength(self.WEIGHTS, {"ETH": 0.0, "XRP": -0.4})
+            apply_relative_strength(self.WEIGHTS, {"ETH": 0.0, "XRP": -0.6})
 
 
 class TestMa200w:

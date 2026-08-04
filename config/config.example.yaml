@@ -24,7 +24,9 @@ strategy:
 
   rebalance:
     band_pp: 0.05         # 총 크립토 비중 ±5%p 이탈 시에만 거래 (수수료 대비 충분히 넓게)
-    relative_band: 0.20   # 개별 코인 크립토 내 목표 대비 상대 ±20%
+    relative_band: 0.30   # 개별 코인 크립토 내 목표 대비 상대 ±30%
+                          # (2026-08 멀티자산 백테스트: 0.20은 알트 노이즈로
+                          #  과다 회전 — 0.30/0.40 성과 동일, 넓은 쪽 채택)
     min_trade_krw: 10000
     crash_threshold_24h: -0.10   # 24h 이만큼 급락한 자산의 매수는 분할 진입
     crash_buy_fraction: 0.5      # 급락 자산 매수 집행 비율 (잔여분은 다음날)
@@ -34,11 +36,19 @@ strategy:
     max_single_dca_krw: 5000000
     krw_usage_cap: 0.25        # 1회 DCA가 KRW 잔고의 25% 초과 불가
 
+security:
+  # 거래소 노출 상한(KRW): 총평가액이 이를 넘으면 데일리 브리핑에 콜드월렛
+  # 이전 검토 경고. 0 = 비활성. 거래소는 전략이 못 막는 단일 실패점(FTX 교훈)
+  # — 리밸런싱 유동성만 거래소에 두고 초과분은 개인 지갑 보관 권장.
+  exchange_exposure_cap_krw: 0
+
 risk:
   max_single_trade_krw: 10000000   # 단일 거래 상한 (1천만원)
   max_daily_volume_krw: 50000000   # 일일 거래량 상한 (5천만원)
   min_krw_ratio: 0.10              # 최소 KRW 비중 (전량 몰빵 방지)
   fomo_surge_threshold: 0.15       # 24h +15% 급등 자산은 DCA 외 매수 금지
+  thesis_tripwire_mayer: 0.5       # Mayer가 이 값 미만이면 테제 점검 경보만
+                                   # (역사상 전례 없는 수준 — 자동 대응 없음, 0=off)
 
 execution:
   twap_slice_krw: 5000000   # 이 금액 초과 주문은 TWAP 분할

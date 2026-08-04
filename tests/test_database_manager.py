@@ -1964,3 +1964,33 @@ class TestLatentQueryColumnMismatches:
         results = db_manager.get_active_twap_executions()
         assert len(results) == 1
         assert results[0]["execution_plan"] == [{"asset": "BTC"}]
+
+
+@pytest.mark.database
+class TestDailyTradeSums:
+    """TWR 외부 흐름 역산용 일별 매수/매도 합계"""
+
+    @pytest.fixture
+    def db_manager(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+        config = Mock()
+        config.get = Mock(return_value=db_path)
+        return DatabaseManager(config)
+
+    def test_groups_by_date_and_side(self, db_manager):
+        db_manager.save_trade({"asset": "BTC", "side": "buy",
+                               "amount_krw": 1_000_000,
+                               "trade_date": "2026-07-01 09:00:00"})
+        db_manager.save_trade({"asset": "ETH", "side": "buy",
+                               "amount_krw": 500_000,
+                               "trade_date": "2026-07-01 09:05:00"})
+        db_manager.save_trade({"asset": "BTC", "side": "sell",
+                               "amount_krw": 700_000,
+                               "trade_date": "2026-07-01 09:10:00"})
+        rows = db_manager.get_daily_trade_sums(days=36500)
+        by_date = {r["date"]: r for r in rows}
+        assert by_date["2026-07-01"]["buys_krw"] == pytest.approx(1_500_000)
+        assert by_date["2026-07-01"]["sells_krw"] == pytest.approx(700_000)
+
+    def test_empty_history_returns_empty_list(self, db_manager):
+        assert db_manager.get_daily_trade_sums(days=30) == []

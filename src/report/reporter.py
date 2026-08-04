@@ -23,25 +23,34 @@ class Reporter:
 
     def monthly_report(
         self, portfolio_return: float, total_value_krw: float,
-        crypto_ratio: float, window_days: int = 30,
+        crypto_ratio: float, window_days: int = 30, method: str = "단순",
     ) -> Dict:
         """window_days: 포트폴리오 수익률의 실제 관측 창 — 벤치마크도 같은
         창으로 계산해야 초과수익 비교가 성립한다 (배포 초기 5일치 수익률을
-        30일 BTC와 비교하는 오류 방지)."""
+        30일 BTC와 비교하는 오류 방지).
+
+        method: 수익률 산출 방식 라벨 ("TWR" = 입출금 분리, "단순" = 총자산
+        변화). 드리프트 기준선(60% BTC + 40% KRW 무리밸런싱) 대비 지속적
+        대폭 열위는 구현·체결 문제의 조기 신호다."""
         benchmark = self.btc_benchmark_return(days=window_days)
+        static_6040 = 0.6 * benchmark   # KRW 수익률 0 가정
         report = {
             "portfolio_return": portfolio_return,
             "btc_benchmark_return": benchmark,
             "excess_return": portfolio_return - benchmark,
+            "static_6040_return": static_6040,
+            "drift_vs_6040": portfolio_return - static_6040,
             "total_value_krw": total_value_krw,
             "crypto_ratio": crypto_ratio,
             "window_days": window_days,
+            "method": method,
         }
         self.alerts.send_info_alert(
             "월간 성과 리포트",
-            f"수익률({window_days}일) {portfolio_return:+.1%} / "
-            f"BTC {benchmark:+.1%} "
-            f"(초과 {report['excess_return']:+.1%}) | "
+            f"수익률({window_days}일, {method}) {portfolio_return:+.1%} | "
+            f"BTC {benchmark:+.1%} (초과 {report['excess_return']:+.1%}) | "
+            f"60/40 기준선 {static_6040:+.1%} "
+            f"(드리프트 {report['drift_vs_6040']:+.1%}) | "
             f"총자산 {total_value_krw:,.0f} KRW | 크립토 {crypto_ratio:.0%}",
         )
         return report

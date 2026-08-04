@@ -90,3 +90,35 @@ def test_briefing_negative_daily_change():
         prev_total_krw=104_000_000, traded_today_krw=0.0,
     )
     assert "-3.8%" in body
+
+
+def test_briefing_warns_when_exchange_exposure_exceeds_cap():
+    """거래소 총평가액이 콜드월렛 기준을 넘으면 초과분 이전 검토 경고"""
+    snap = make_snapshot()  # 총자산 100M (전부 거래소)
+    _, body = compose_briefing(
+        snap, target_ratio=0.60, band_pp=0.05, market_line="-",
+        prev_total_krw=None, traded_today_krw=0.0,
+        exchange_exposure_cap_krw=80_000_000,
+    )
+    assert "콜드월렛" in body
+    assert "20,000,000" in body  # 초과분
+
+
+def test_briefing_silent_when_exposure_under_cap():
+    snap = make_snapshot()
+    _, body = compose_briefing(
+        snap, target_ratio=0.60, band_pp=0.05, market_line="-",
+        prev_total_krw=None, traded_today_krw=0.0,
+        exchange_exposure_cap_krw=200_000_000,
+    )
+    assert "콜드월렛" not in body
+
+
+def test_briefing_no_exposure_check_when_cap_unset():
+    """기준 미설정(None/0) 시 경고 없음 — 기능 옵트인"""
+    snap = make_snapshot()
+    _, body = compose_briefing(
+        snap, target_ratio=0.60, band_pp=0.05, market_line="-",
+        prev_total_krw=None, traded_today_krw=0.0,
+    )
+    assert "콜드월렛" not in body
